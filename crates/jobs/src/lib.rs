@@ -20,6 +20,8 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobKind {
     ScanLibrary,
+    FetchMetadata,
+    DownloadArtwork,
     ExtractSubtitles,
     DownloadSubtitles,
     GenerateArtwork,
@@ -30,6 +32,8 @@ impl JobKind {
     pub fn as_str(&self) -> &'static str {
         match self {
             JobKind::ScanLibrary => "scan_library",
+            JobKind::FetchMetadata => "fetch_metadata",
+            JobKind::DownloadArtwork => "download_artwork",
             JobKind::ExtractSubtitles => "extract_subtitles",
             JobKind::DownloadSubtitles => "download_subtitles",
             JobKind::GenerateArtwork => "generate_artwork",
@@ -49,6 +53,7 @@ pub struct Job {
     pub progress_done: i32,
     pub progress_total: i32,
     pub errors: serde_json::Value,
+    pub result: Option<serde_json::Value>,
     pub created_at: DateTime<Utc>,
     pub started_at: Option<DateTime<Utc>>,
     pub finished_at: Option<DateTime<Utc>>,
@@ -102,7 +107,7 @@ pub async fn claim_next(
              LIMIT 1
          )
          RETURNING id, kind, library_id, payload, status, progress_done,
-                   progress_total, errors, created_at, started_at, finished_at",
+                   progress_total, errors, result, created_at, started_at, finished_at",
     )
     .bind(kind.as_str())
     .fetch_optional(pool)
@@ -152,6 +157,20 @@ pub async fn complete(pool: &parlour_db::PgPool, id: Uuid) -> Result<(), sqlx::E
     Ok(())
 }
 
+/// Record a finished job's JSON summary (counts an admin can read).
+pub async fn set_result(
+    pool: &parlour_db::PgPool,
+    id: Uuid,
+    result: serde_json::Value,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE jobs SET result = $2 WHERE id = $1")
+        .bind(id)
+        .bind(result)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 pub async fn fail(pool: &parlour_db::PgPool, id: Uuid, message: &str) -> Result<(), sqlx::Error> {
     add_error(pool, id, None, message).await?;
     sqlx::query("UPDATE jobs SET status = 'failed', finished_at = now() WHERE id = $1")
@@ -164,7 +183,7 @@ pub async fn fail(pool: &parlour_db::PgPool, id: Uuid, message: &str) -> Result<
 pub async fn get(pool: &parlour_db::PgPool, id: Uuid) -> Result<Option<Job>, sqlx::Error> {
     sqlx::query_as::<_, Job>(
         "SELECT id, kind, library_id, payload, status, progress_done, progress_total,
-                errors, created_at, started_at, finished_at
+                errors, result, created_at, started_at, finished_at
          FROM jobs WHERE id = $1",
     )
     .bind(id)
@@ -179,7 +198,7 @@ pub async fn list_recent(
 ) -> Result<Vec<Job>, sqlx::Error> {
     sqlx::query_as::<_, Job>(
         "SELECT id, kind, library_id, payload, status, progress_done, progress_total,
-                errors, created_at, started_at, finished_at
+                errors, result, created_at, started_at, finished_at
          FROM jobs
          WHERE ($1::uuid IS NULL OR library_id = $1)
          ORDER BY created_at DESC

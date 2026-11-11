@@ -137,16 +137,16 @@ press play, resume where you left off, subtitles on.
   nothing (idempotent).
 
 ### Milestone 1.4 — Metadata (`metadata`, `catalog`)
-- [ ] MD1 (M) TMDB client (API key from env/DB settings): search,
+- [x] MD1 (M) TMDB client (API key from env/DB settings): search,
   movie + TV details, artwork URLs, provider ids stored on items
-- [ ] MD2 (M) Matcher: TMDB/TVDB id in folder/file name wins;
+- [x] MD2 (M) Matcher: TMDB/TVDB id in folder/file name wins;
   else normalised title + year; low-confidence matches queue for
   manual fix, never silently guess
-- [ ] MD3 (S) Artwork download job: poster/backdrop/logo cached
+- [x] MD3 (S) Artwork download job: poster/backdrop/logo cached
   locally at two sizes; items without art get a generated tile
-- [ ] MD4 (S) Manual fix-match UI/API: search TMDB, pick the right
+- [x] MD4 (S) Manual fix-match UI/API: search TMDB, pick the right
   one, re-fetch that item only
-- [ ] MD5 (S) TheTVDB client for episode ordering/metadata where
+- [x] MD5 (S) TheTVDB client for episode ordering/metadata where
   TMDB is thin (second provider behind the same trait)
 - **Done when:** ≥95% of the real library matches correctly with
   no hand-holding, and every miss is fixable from the UI.

@@ -29,10 +29,16 @@ services:
       PARLOUR_ADMIN_USER: ${PARLOUR_ADMIN_USER:-}
       PARLOUR_ADMIN_PASSWORD: ${PARLOUR_ADMIN_PASSWORD:-}
       PARLOUR_COOKIE_SECURE: ${PARLOUR_COOKIE_SECURE:-false}
+      # Metadata (Milestone 1.4): TMDB key comes from .env as
+      # TMDB_API_KEY (the name already in use on the servers).
+      PARLOUR_TMDB_API_KEY: ${TMDB_API_KEY:-${PARLOUR_TMDB_API_KEY:-}}
+      PARLOUR_TVDB_API_KEY: ${PARLOUR_TVDB_API_KEY:-}
+      PARLOUR_ARTWORK_DIR: /artwork
     ports:
       - "${PARLOUR_PORT:-8585}:${PARLOUR_PORT:-8585}"
     volumes:
       - ${PARLOUR_MEDIA_PATH:-./media}:/media:ro
+      - parlour-artwork:/artwork
     # GPU transcoding (Phase 2) — enable ONE block for your host:
     # NVIDIA: also add the nvidia runtime / device reservation.
     # devices:
@@ -40,3 +46,4 @@ services:
 
 volumes:
   parlour-db:
+  parlour-artwork:

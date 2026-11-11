@@ -53,6 +53,10 @@ pub struct ItemDto {
     pub episode_number: Option<i32>,
     pub overview: Option<String>,
     pub content_rating: Option<String>,
+    pub genres: Vec<String>,
+    pub vote_average: Option<f64>,
+    pub metadata_status: String,
+    pub metadata_provider: Option<String>,
     pub available: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -78,7 +82,7 @@ async fn list_items(
     let rows = sqlx::query_as::<_, ItemDto>(
         "SELECT i.id, i.library_id, i.parent_id, i.kind, i.title, i.sort_title,
                 i.year, i.season_number, i.episode_number, i.overview, i.content_rating,
-                i.available, i.created_at, i.updated_at
+                i.available, i.genres, i.vote_average, i.metadata_status, i.metadata_provider, i.created_at, i.updated_at
          FROM media_items i
          JOIN library_access a ON a.library_id = i.library_id AND a.profile_id = $2
          WHERE i.library_id = $1 AND i.parent_id IS NULL
@@ -139,12 +143,21 @@ struct FileDto {
     subtitles: Vec<SubtitleDto>,
 }
 
+#[derive(Debug, Serialize, FromRow)]
+struct ImageDto {
+    kind: String,
+    variant: String,
+    path: String,
+    source_url: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 struct ItemDetailDto {
     #[serde(flatten)]
     item: ItemDto,
     children: Vec<ItemDto>,
     files: Vec<FileDto>,
+    images: Vec<ImageDto>,
 }
 
 async fn get_item(
@@ -159,7 +172,7 @@ async fn get_item(
     let item = sqlx::query_as::<_, ItemDto>(
         "SELECT i.id, i.library_id, i.parent_id, i.kind, i.title, i.sort_title,
                 i.year, i.season_number, i.episode_number, i.overview, i.content_rating,
-                i.available, i.created_at, i.updated_at
+                i.available, i.genres, i.vote_average, i.metadata_status, i.metadata_provider, i.created_at, i.updated_at
          FROM media_items i
          JOIN library_access a ON a.library_id = i.library_id AND a.profile_id = $2
          WHERE i.id = $1",
@@ -174,7 +187,7 @@ async fn get_item(
     let children = sqlx::query_as::<_, ItemDto>(
         "SELECT i.id, i.library_id, i.parent_id, i.kind, i.title, i.sort_title,
                 i.year, i.season_number, i.episode_number, i.overview, i.content_rating,
-                i.available, i.created_at, i.updated_at
+                i.available, i.genres, i.vote_average, i.metadata_status, i.metadata_provider, i.created_at, i.updated_at
          FROM media_items i
          WHERE i.parent_id = $1
          ORDER BY i.season_number NULLS LAST, i.episode_number NULLS LAST, i.sort_title",
@@ -215,10 +228,20 @@ async fn get_item(
         .map_err(AppError::from)?;
     }
 
+    let images = sqlx::query_as::<_, ImageDto>(
+        "SELECT kind, variant, path, source_url FROM images
+         WHERE item_id = $1 ORDER BY kind, variant",
+    )
+    .bind(item_id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(AppError::from)?;
+
     Ok(Json(ItemDetailDto {
         item,
         children,
         files,
+        images,
     }))
 }
 
@@ -376,20 +399,42 @@ async fn enqueue_scan(
 /// Start the background worker, watcher, and nightly scan.
 /// Called once from `main`; deliberately not part of the router so
 /// integration tests control scanning explicitly.
-pub fn spawn_background(pool: parlour_db::PgPool) {
-    // Worker: claim queued scan jobs (covers restarts + watcher
-    // and nightly enqueues) every few seconds.
+pub fn spawn_background(pool: parlour_db::PgPool, metadata: crate::metadata::MetadataSettings) {
+    // Worker: claim queued jobs (covers restarts + watcher and
+    // nightly enqueues) every few seconds.
     {
         let pool = pool.clone();
+        let metadata = metadata.clone();
         tokio::spawn(async move {
             loop {
-                match parlour_jobs::claim_next(&pool, parlour_jobs::JobKind::ScanLibrary).await {
-                    Ok(Some(job)) => run_scan_job_claimed(pool.clone(), job).await,
-                    Ok(None) => tokio::time::sleep(Duration::from_secs(3)).await,
-                    Err(e) => {
-                        tracing::warn!(error = %e, "job claim failed");
-                        tokio::time::sleep(Duration::from_secs(10)).await;
+                let mut claimed = None;
+                for kind in [
+                    parlour_jobs::JobKind::ScanLibrary,
+                    parlour_jobs::JobKind::FetchMetadata,
+                    parlour_jobs::JobKind::DownloadArtwork,
+                ] {
+                    match parlour_jobs::claim_next(&pool, kind).await {
+                        Ok(Some(job)) => {
+                            claimed = Some(job);
+                            break;
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            tracing::warn!(error = %e, "job claim failed");
+                            tokio::time::sleep(Duration::from_secs(10)).await;
+                        }
                     }
+                }
+                match claimed {
+                    Some(job) if job.kind == "fetch_metadata" => {
+                        crate::metadata::run_metadata_job_claimed(pool.clone(), job, &metadata)
+                            .await
+                    }
+                    Some(job) if job.kind == "download_artwork" => {
+                        crate::metadata::run_artwork_job_claimed(pool.clone(), job, &metadata).await
+                    }
+                    Some(job) => run_scan_job_claimed(pool.clone(), job).await,
+                    None => tokio::time::sleep(Duration::from_secs(3)).await,
                 }
             }
         });

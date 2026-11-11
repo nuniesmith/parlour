@@ -1140,9 +1140,14 @@ dependencies = [
  "parlour-core",
  "parlour-db",
  "parlour-jobs",
+ "parlour-metadata",
+ "reqwest",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "sqlx",
+ "thiserror",
+ "tokio",
  "tracing",
  "uuid",
 ]
@@ -1184,6 +1189,14 @@ dependencies = [
 [[package]]
 name = "parlour-metadata"
 version = "0.1.0"
+dependencies = [
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "parlour-playback"
@@ -1206,6 +1219,7 @@ dependencies = [
  "parlour-core",
  "parlour-db",
  "parlour-jobs",
+ "parlour-metadata",
  "rand 0.8.8",
  "reqwest",
  "rust-embed",
