@@ -72,22 +72,22 @@ Goal: **replace Emby at home for movies + TV** — log in, browse,
 press play, resume where you left off, subtitles on.
 
 ### Milestone 1.1 — Foundations (`server`, `db`, `core`)
-- [ ] F1 (M) Config loading: env + `.env`, typed `Config` struct,
+- [x] F1 (M) Config loading: env + `.env`, typed `Config` struct,
   fail-fast with a clear message on bad config
-- [ ] F2 (S) Bump workspace deps to current (axum 0.8.9, sqlx 0.9 —
+- [x] F2 (S) Bump workspace deps to current (axum 0.8.9, sqlx 0.9 —
   see D6); remember axum 0.8 path syntax is `/{id}`, not `/:id`
-- [ ] F3 (M) Tracing/logging setup (`tracing` + env filter),
+- [x] F3 (M) Tracing/logging setup (`tracing` + env filter),
   request-id per request, no secrets in logs — ever
-- [ ] F4 (M) DB pool in `db` crate + `sqlx::migrate!()` at startup;
+- [x] F4 (M) DB pool in `db` crate + `sqlx::migrate!()` at startup;
   `/healthz` endpoint that actually checks the DB (a green check
   that lies is worse than none)
-- [ ] F5 (M) First real migration: `users`, `profiles`, `sessions`,
+- [x] F5 (M) First real migration: `users`, `profiles`, `sessions`,
   `libraries`, `library_access` tables
-- [ ] F6 (S) Error type → HTTP mapping (JSON errors, no stack
+- [x] F6 (S) Error type → HTTP mapping (JSON errors, no stack
   traces to clients); unknown routes return JSON 404, not HTML
-- [ ] F7 (M) Embed the built web UI in the binary (rust-embed) with
+- [x] F7 (M) Embed the built web UI in the binary (rust-embed) with
   SPA fallback; dev mode serves from disk instead
-- [ ] F8 (S) `docker compose up` runs the whole thing locally,
+- [x] F8 (S) `docker compose up` runs the whole thing locally,
   healthcheck green, empty home page loads
 - **Done when:** a fresh clone + `.env` boots, migrates, and serves
   the placeholder UI with a real DB behind `/healthz`.
