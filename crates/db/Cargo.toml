@@ -9,3 +9,5 @@ repository.workspace = true
 
 [dependencies]
 parlour-core = { path = "../core" }
+sqlx.workspace = true
+tracing.workspace = true

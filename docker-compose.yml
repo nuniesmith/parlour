@@ -23,7 +23,7 @@ services:
       db:
         condition: service_healthy
     environment:
-      PARLOUR_DATABASE_URL: ${PARLOUR_DATABASE_URL:-postgres://parlour:change-me@db:5432/parlour}
+      PARLOUR_DATABASE_URL: ${PARLOUR_DATABASE_URL:-postgres://parlour:change-me@db:5432/parlour?sslmode=disable}
       PARLOUR_PORT: ${PARLOUR_PORT:-8585}
       PARLOUR_LOG_LEVEL: ${PARLOUR_LOG_LEVEL:-info}
     ports:
