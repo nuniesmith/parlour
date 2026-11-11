@@ -59,6 +59,9 @@ async fn main() {
 
     let mut state = AppState::new(pool, config.web_dir.clone(), config.cookie_secure);
     state.metadata = metadata;
+    std::sync::Arc::get_mut(&mut state.playback)
+        .expect("fresh playback state")
+        .configure(config.cache_dir.clone(), config.stream_secret.clone());
     let app = parlour_server::http::router(state);
     let addr = config.bind_addr;
     tracing::info!(%addr, version = env!("CARGO_PKG_VERSION"), "parlour listening");

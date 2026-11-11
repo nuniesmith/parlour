@@ -34,6 +34,9 @@ pub struct AppState {
     /// Milestone 1.4 provider settings (keys, artwork cache).
     /// Defaults to unconfigured; `main` fills it from `Config`.
     pub metadata: crate::metadata::MetadataSettings,
+    /// Milestone 1.6 playback state (stream tokens, sessions,
+    /// remux cache). `main` configures dir/secret from Config.
+    pub playback: std::sync::Arc<crate::playback::PlaybackState>,
 }
 
 impl AppState {
@@ -44,6 +47,7 @@ impl AppState {
             limiter: std::sync::Arc::new(crate::limiter::LoginLimiter::new()),
             cookie_secure,
             metadata: crate::metadata::MetadataSettings::default(),
+            playback: std::sync::Arc::new(crate::playback::PlaybackState::new()),
         }
     }
 }
@@ -67,6 +71,7 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::catalog::routes())
         .merge(crate::metadata::routes())
         .merge(crate::discover::routes())
+        .merge(crate::playback::routes())
         .fallback(fallback)
         .layer(PropagateRequestIdLayer::x_request_id())
         .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))

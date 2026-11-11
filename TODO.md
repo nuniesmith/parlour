@@ -160,7 +160,7 @@ press play, resume where you left off, subtitles on.
   genre, unwatched), alphabet jump for big libraries
 - [x] W4 (M) Item pages: movie detail; series → season → episode
   lists; cast row; "more like this" can wait
-- [ ] W5 (L) Player page: native `<video>` + HLS fallback, subtitle
+- [x] W5 (L) Player page: native `<video>` + HLS fallback, subtitle
   track picker (shows forced/default/SDH), audio track picker,
   resume prompt, keyboard shortcuts, progress reporting (1.6)
 - [x] W6 (M) Search: Postgres FTS over titles/people to start;
@@ -173,25 +173,25 @@ press play, resume where you left off, subtitles on.
   asking how anything works.
 
 ### Milestone 1.6 — Playback: direct play + remux (`playback`, `subtitles`)
-- [ ] P1 (M) Playback-info endpoint: given item + client profile +
+- [x] P1 (M) Playback-info endpoint: given item + client profile +
   network kind, return the plan from `core`'s decision types
   (Phase 1 only ever answers DirectPlay or Remux, with reasons)
-- [ ] P2 (M) File streaming with HTTP Range (206, seeking works),
+- [x] P2 (M) File streaming with HTTP Range (206, seeking works),
   correct content types, stream tokens (short-lived, signed) so
   media URLs aren't open to the world
-- [ ] P3 (M) Remux path: `ffmpeg -c copy` to HLS/fMP4 for
+- [x] P3 (M) Remux path: `ffmpeg -c copy` to HLS/fMP4 for
   containers the web player rejects (MKV → fMP4), segments cleaned
   up with the session
-- [ ] P4 (M) Playback reporting, same shape the big servers use:
+- [x] P4 (M) Playback reporting, same shape the big servers use:
   start / progress heartbeat (~10 s) / stopped → `watch_state`
   (position, played at ≥90%, play count, last played)
-- [ ] P5 (S) Mark played/unplayed + favourite endpoints + UI
-- [ ] P6 (M) Subtitles v1: sidecar + embedded **text** tracks
+- [x] P5 (S) Mark played/unplayed + favourite endpoints + UI
+- [x] P6 (M) Subtitles v1: sidecar + embedded **text** tracks
   extracted to WebVTT and served as tracks; forced-track
   auto-pick per profile language rules
-- [ ] P7 (S) Continue Watching + Next Up queries (resume items,
+- [x] P7 (S) Continue Watching + Next Up queries (resume items,
   next episode after a finished one)
-- [ ] P8 (S) Concurrent-session registry (who is watching what —
+- [x] P8 (S) Concurrent-session registry (who is watching what —
   admin view; needed later for transcode caps)
 - **Done when:** a full movie and a full episode play start to
   finish in the browser with subtitles, survive a seek, and resume

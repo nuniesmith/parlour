@@ -33,6 +33,7 @@ struct ContinueDto {
 struct HomeDto {
     continue_watching: Vec<ContinueDto>,
     recently_added: Vec<ItemDto>,
+    next_up: Vec<ItemDto>,
 }
 
 async fn home(State(state): State<AppState>, user: AuthUser) -> Result<Json<HomeDto>, AppError> {
@@ -76,9 +77,58 @@ async fn home(State(state): State<AppState>, user: AuthUser) -> Result<Json<Home
     .await
     .map_err(AppError::from)?;
 
+    // P7 Next Up: for each series with a played episode, the
+    // first unwatched episode after the latest played one.
+    let next_up_rows = sqlx::query_as::<_, ItemDto>(
+        "SELECT i.id, i.library_id, i.parent_id, i.kind, i.title, i.sort_title,
+                i.year, i.season_number, i.episode_number, i.overview, i.content_rating,
+                i.available, i.genres, i.vote_average, i.metadata_status, i.metadata_provider,
+                EXISTS (SELECT 1 FROM images im WHERE im.item_id = i.id AND im.kind = 'poster'
+                        AND im.path <> '' AND im.path NOT LIKE 'pending:%') AS has_poster,
+                i.created_at, i.updated_at
+         FROM media_items i
+         JOIN library_access a ON a.library_id = i.library_id AND a.profile_id = $1
+         WHERE i.kind = 'episode'
+           AND EXISTS (
+             SELECT 1 FROM user_data pu
+             JOIN media_items pe ON pe.id = pu.item_id AND pe.kind = 'episode'
+             JOIN media_items psn ON psn.id = pe.parent_id
+             JOIN media_items isn ON isn.id = i.parent_id
+             WHERE pu.profile_id = $1 AND pu.played
+               AND isn.parent_id = psn.parent_id
+               AND (pe.season_number, pe.episode_number) < (i.season_number, i.episode_number)
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM user_data u2
+             WHERE u2.profile_id = $1 AND u2.item_id = i.id AND u2.played
+           )
+         ORDER BY i.season_number, i.episode_number
+         LIMIT 48",
+    )
+    .bind(profile_id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(AppError::from)?;
+    // First candidate per season is that season's next episode;
+    // one row per series would need the grandparent, so dedupe
+    // by season (parent) — good enough for a rail.
+    let mut seen = std::collections::HashSet::new();
+    let mut next_up: Vec<ItemDto> = Vec::new();
+    for row in next_up_rows {
+        if let Some(parent) = row.parent_id {
+            if seen.insert(parent) {
+                next_up.push(row);
+            }
+        }
+        if next_up.len() >= 12 {
+            break;
+        }
+    }
+
     Ok(Json(HomeDto {
         continue_watching,
         recently_added,
+        next_up,
     }))
 }
 

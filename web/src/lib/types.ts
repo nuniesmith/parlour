@@ -113,6 +113,7 @@ export interface ItemDetail extends Item {
   images: ImageInfo[];
   cast: CastMember[];
   similar: Item[];
+  user_state: UserState | null;
 }
 
 export interface ContinueItem extends Item {
@@ -123,6 +124,48 @@ export interface ContinueItem extends Item {
 export interface HomeData {
   continue_watching: ContinueItem[];
   recently_added: Item[];
+  next_up: Item[];
+}
+
+export interface UserState {
+  played: boolean;
+  is_favorite: boolean;
+  position_ms: number;
+  play_count: number;
+}
+
+export interface SubtitleTrackInfo {
+  id: string;
+  language: string | null;
+  title: string | null;
+  is_forced: boolean;
+  is_default: boolean;
+  is_sdh: boolean;
+  source: string;
+  text: boolean;
+  url: string | null;
+}
+
+export interface AudioStreamInfo {
+  stream_index: number;
+  codec: string | null;
+  language: string | null;
+  is_default: boolean;
+}
+
+export interface PlaybackInfo {
+  item_id: string;
+  file_id: string;
+  action: string;
+  reason: string;
+  stream_kind: string;
+  stream_url: string;
+  resume_position_ms: number;
+  played: boolean;
+  subtitles: SubtitleTrackInfo[];
+  default_subtitle_id: string | null;
+  audio_streams: AudioStreamInfo[];
+  warnings: string[];
 }
 
 export interface Job {

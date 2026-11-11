@@ -10,11 +10,21 @@
     formatDurationMs,
     type Item,
     type ItemDetail,
+    type UserState,
   } from '$lib/types';
 
   let detail = $state<ItemDetail | null>(null);
   let error = $state<string | null>(null);
   let seasons = $state<Record<string, Item[]>>({});
+
+  async function mark(body: { played?: boolean; favorite?: boolean }) {
+    if (!detail) return;
+    const { data } = await api<UserState>(`/api/v1/items/${detail.id}/mark`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+    if (data && detail) detail = { ...detail, user_state: data };
+  }
   let openSeason = $state<string | null>(null);
 
   async function load(id: string) {
@@ -78,8 +88,21 @@
         {/if}
         {#if detail.overview}<p class="overview">{detail.overview}</p>{/if}
         {#if detail.files.length > 0}
-          <p>
+          <p class="actions">
             <a class="btn primary big" href={`/watch/${detail.id}`}>▶ Play</a>
+            <button
+              class="btn"
+              onclick={() => mark({ played: !(detail?.user_state?.played ?? false) })}
+            >
+              {detail.user_state?.played ? 'Mark unplayed' : 'Mark played'}
+            </button>
+            <button
+              class="btn"
+              aria-pressed={detail.user_state?.is_favorite ?? false}
+              onclick={() => mark({ favorite: !(detail?.user_state?.is_favorite ?? false) })}
+            >
+              {detail.user_state?.is_favorite ? '★ Favourite' : '☆ Favourite'}
+            </button>
           </p>
         {:else if detail.kind === 'series'}
           <p class="dim">Pick an episode below to play.</p>
@@ -214,6 +237,12 @@
   .big {
     font-size: 1.1rem;
     padding: 0.7rem 1.6rem;
+  }
+  .actions {
+    display: flex;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+    align-items: center;
   }
   .cast {
     display: grid;

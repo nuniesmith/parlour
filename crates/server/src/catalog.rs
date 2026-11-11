@@ -188,6 +188,7 @@ struct ItemDetailDto {
     images: Vec<ImageDto>,
     cast: Vec<CastDto>,
     similar: Vec<ItemDto>,
+    user_state: Option<crate::playback::UserStateDto>,
 }
 
 async fn get_item(
@@ -293,6 +294,8 @@ async fn get_item(
     .await
     .map_err(AppError::from)?;
 
+    let user_state = crate::playback::load_user_state(&state.pool, profile_id, item_id).await?;
+
     Ok(Json(ItemDetailDto {
         item,
         children,
@@ -300,6 +303,7 @@ async fn get_item(
         images,
         cast,
         similar,
+        user_state,
     }))
 }
 

@@ -34,11 +34,13 @@ services:
       PARLOUR_TMDB_API_KEY: ${TMDB_API_KEY:-${PARLOUR_TMDB_API_KEY:-}}
       PARLOUR_TVDB_API_KEY: ${PARLOUR_TVDB_API_KEY:-}
       PARLOUR_ARTWORK_DIR: /artwork
+      PARLOUR_CACHE_DIR: /cache
     ports:
       - "${PARLOUR_PORT:-8585}:${PARLOUR_PORT:-8585}"
     volumes:
       - ${PARLOUR_MEDIA_PATH:-./media}:/media:ro
       - parlour-artwork:/artwork
+      - parlour-cache:/cache
     # GPU transcoding (Phase 2) — enable ONE block for your host:
     # NVIDIA: also add the nvidia runtime / device reservation.
     # devices:
@@ -47,3 +49,4 @@ services:
 volumes:
   parlour-db:
   parlour-artwork:
+  parlour-cache:
