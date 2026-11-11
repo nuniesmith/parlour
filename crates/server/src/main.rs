@@ -1,78 +1,79 @@
-//! Parlour server.
-//!
-//! Startup order: load config (fail fast on a bad one) -> init
-//! logging -> connect to Postgres (with retries, so `docker
-//! compose up` races are not fatal) -> run migrations -> serve.
-//! The router itself lives in `http.rs`; compatibility routers
-//! (Jellyfin / Audiobookshelf) arrive in later phases as views
-//! over the same catalog — they own no data.
+use std::net::SocketAddr;
 
-mod config;
-mod error;
-mod http;
-
-use std::process::ExitCode;
-use std::time::Duration;
-
-use config::Config;
+use parlour_server::config::Config;
+use parlour_server::http::AppState;
+use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
-async fn main() -> ExitCode {
-    match run().await {
-        Ok(()) => ExitCode::SUCCESS,
+async fn main() {
+    let config = match Config::load() {
+        Ok(c) => c,
         Err(e) => {
-            eprintln!("parlour: {e}");
-            ExitCode::FAILURE
+            eprintln!("configuration error: {e}");
+            std::process::exit(2);
         }
-    }
-}
-
-async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let config = Config::load()?;
-
-    let filter = tracing_subscriber::EnvFilter::try_new(&config.log_level)
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
-    tracing_subscriber::fmt().with_env_filter(filter).init();
-
-    tracing::info!(version = env!("CARGO_PKG_VERSION"), "starting parlour");
-
-    let pool = connect_with_retry(&config.database_url).await?;
-    parlour_db::migrate(&pool).await?;
-
-    let state = http::AppState {
-        pool,
-        web_dir: config.web_dir.clone(),
     };
-    let app = http::router(state);
 
-    let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
-    tracing::info!(addr = %config.bind_addr, "listening");
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
-    Ok(())
-}
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&config.log_level)),
+        )
+        .init();
 
-/// The database may still be starting when the server does (the
-/// compose healthcheck normally prevents this, but a bare binary
-/// run should not be flaky either). 15 tries, 1 s apart, then fail
-/// with the last error so the operator sees the real cause.
-async fn connect_with_retry(database_url: &str) -> Result<parlour_db::PgPool, parlour_db::DbError> {
-    let mut last_err = None;
-    for attempt in 1..=15 {
-        match parlour_db::connect(database_url).await {
-            Ok(pool) => return Ok(pool),
-            Err(e) => {
-                tracing::warn!(attempt, "database not ready yet: {e}");
-                last_err = Some(e);
-                tokio::time::sleep(Duration::from_secs(1)).await;
+    // Compose starts the app and the DB together; wait for Postgres
+    // instead of crashing on the first connection attempt.
+    let pool = {
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            match parlour_db::connect(&config.database_url).await {
+                Ok(pool) => break pool,
+                Err(e) if attempt < 15 => {
+                    tracing::warn!(attempt, error = %e, "database not ready, retrying");
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "could not connect to the database");
+                    std::process::exit(1);
+                }
             }
         }
-    }
-    Err(last_err.expect("at least one attempt ran"))
-}
+    };
 
-async fn shutdown_signal() {
-    let _ = tokio::signal::ctrl_c().await;
-    tracing::info!("shutting down");
+    if let Err(e) = parlour_db::migrate(&pool).await {
+        tracing::error!(error = %e, "database migration failed");
+        std::process::exit(1);
+    }
+
+    // A3: one-time first-admin bootstrap from the environment.
+    if let Err(e) = parlour_server::auth::bootstrap_admin(&pool, &config).await {
+        tracing::error!(error = %e, "admin bootstrap failed");
+        std::process::exit(1);
+    }
+
+    let state = AppState::new(pool, config.web_dir.clone(), config.cookie_secure);
+    let app = parlour_server::http::router(state);
+    let addr = config.bind_addr;
+    tracing::info!(%addr, version = env!("CARGO_PKG_VERSION"), "parlour listening");
+
+    let listener = match tokio::net::TcpListener::bind(addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::error!(error = %e, %addr, "could not bind");
+            std::process::exit(1);
+        }
+    };
+
+    if let Err(e) = axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(async {
+        let _ = tokio::signal::ctrl_c().await;
+    })
+    .await
+    {
+        tracing::error!(error = %e, "server error");
+        std::process::exit(1);
+    }
 }

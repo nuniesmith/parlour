@@ -22,6 +22,15 @@ pub struct Config {
     /// Serve the web UI from this directory instead of the embedded
     /// copy (`PARLOUR_WEB_DIR`, development only).
     pub web_dir: Option<PathBuf>,
+    /// A3: first-admin bootstrap (`PARLOUR_ADMIN_USER` /
+    /// `PARLOUR_ADMIN_PASSWORD`). When BOTH are set and no users
+    /// exist yet, that account is created as admin, once; later
+    /// boots ignore them.
+    pub admin_user: Option<String>,
+    pub admin_password: Option<String>,
+    /// Set the Secure flag on the session cookie
+    /// (`PARLOUR_COOKIE_SECURE`) — on behind the HTTPS proxy.
+    pub cookie_secure: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -86,11 +95,27 @@ impl Config {
             .filter(|s| !s.trim().is_empty())
             .map(PathBuf::from);
 
+        let admin_user = vars
+            .get("PARLOUR_ADMIN_USER")
+            .filter(|s| !s.trim().is_empty())
+            .cloned();
+        let admin_password = vars
+            .get("PARLOUR_ADMIN_PASSWORD")
+            .filter(|s| !s.trim().is_empty())
+            .cloned();
+        let cookie_secure = vars
+            .get("PARLOUR_COOKIE_SECURE")
+            .map(|s| matches!(s.as_str(), "true" | "1" | "TRUE"))
+            .unwrap_or(false);
+
         Ok(Self {
             bind_addr,
             database_url,
             log_level,
             web_dir,
+            admin_user,
+            admin_password,
+            cookie_secure,
         })
     }
 }
@@ -116,6 +141,8 @@ mod tests {
         assert_eq!(cfg.bind_addr.to_string(), "0.0.0.0:8585");
         assert_eq!(cfg.log_level, "info");
         assert_eq!(cfg.web_dir, None);
+        assert_eq!(cfg.admin_user, None);
+        assert!(!cfg.cookie_secure);
     }
 
     #[test]
