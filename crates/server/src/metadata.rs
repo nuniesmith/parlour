@@ -432,10 +432,16 @@ async fn apply_endpoint(
 }
 
 /// Serve a cached artwork file for an item the profile can access.
+#[derive(Deserialize)]
+struct ArtworkQuery {
+    v: Option<String>,
+}
+
 async fn serve_artwork(
     State(state): State<AppState>,
     user: AuthUser,
     Path((id, kind)): Path<(String, String)>,
+    Query(q): Query<ArtworkQuery>,
 ) -> Result<Response, AppError> {
     let Some(profile_id) = user.active_profile_id else {
         return Err(AppError::BadRequest("select a profile first".into()));
@@ -444,17 +450,19 @@ async fn serve_artwork(
         return Err(AppError::NotFound("no such artwork kind".into()));
     }
     let item_id = parse_id(&id)?;
+    let preferred = q.v.as_deref().unwrap_or("original");
     let row: Option<(String,)> = sqlx::query_as(
         "SELECT img.path FROM images img
          JOIN media_items i ON i.id = img.item_id
          JOIN library_access a ON a.library_id = i.library_id AND a.profile_id = $2
          WHERE img.item_id = $1 AND img.kind = $3 AND img.path <> '' AND img.path NOT LIKE 'pending:%'
-         ORDER BY (img.variant = 'original') DESC, img.variant
+         ORDER BY CASE img.variant WHEN $4 THEN 0 WHEN 'original' THEN 1 ELSE 2 END
          LIMIT 1",
     )
     .bind(item_id)
     .bind(profile_id)
     .bind(&kind)
+    .bind(preferred)
     .fetch_optional(&state.pool)
     .await
     .map_err(AppError::from)?;
