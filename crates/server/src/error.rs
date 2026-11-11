@@ -12,14 +12,16 @@ use serde_json::json;
 pub enum AppError {
     #[error("not found: {0}")]
     NotFound(String),
-    // Part of the error vocabulary from day one; first constructed
-    // by the input-validating routes in Milestone 1.2.
-    #[allow(dead_code)]
     #[error("bad request: {0}")]
     BadRequest(String),
+    #[error("unauthorized: {0}")]
+    Unauthorized(String),
+    #[error("conflict: {0}")]
+    Conflict(String),
+    #[error("rate limited, retry in {0}s")]
+    RateLimited(u64),
     #[error("database error")]
     Db(#[from] parlour_db::DbError),
-    #[allow(dead_code)]
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -29,6 +31,13 @@ impl AppError {
         match self {
             AppError::NotFound(what) => (StatusCode::NOT_FOUND, "not_found", what.clone()),
             AppError::BadRequest(why) => (StatusCode::BAD_REQUEST, "bad_request", why.clone()),
+            AppError::Unauthorized(why) => (StatusCode::UNAUTHORIZED, "unauthorized", why.clone()),
+            AppError::Conflict(why) => (StatusCode::CONFLICT, "conflict", why.clone()),
+            AppError::RateLimited(secs) => (
+                StatusCode::TOO_MANY_REQUESTS,
+                "rate_limited",
+                format!("too many failed attempts — retry in {secs} seconds"),
+            ),
             AppError::Db(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "database_error",

@@ -93,20 +93,20 @@ press play, resume where you left off, subtitles on.
   the placeholder UI with a real DB behind `/healthz`.
 
 ### Milestone 1.2 — Users, profiles, invites (`server`, `db`)
-- [ ] A1 (M) Password hashing with `argon2`; login endpoint with
+- [x] A1 (M) Password hashing with `argon2`; login endpoint with
   rate limiting (per-IP + per-account backoff)
-- [ ] A2 (M) DB-backed sessions per D7: HttpOnly + SameSite cookie,
+- [x] A2 (M) DB-backed sessions per D7: HttpOnly + SameSite cookie,
   token hash at rest, logout/revoke, session list per user
-- [ ] A3 (S) First-admin bootstrap: `PARLOUR_ADMIN_USER/PASSWORD`
+- [x] A3 (S) First-admin bootstrap: `PARLOUR_ADMIN_USER/PASSWORD`
   env used once if no users exist, then ignored
-- [ ] A4 (M) Invite-only sign-up: admin creates an invite link,
+- [x] A4 (M) Invite-only sign-up: admin creates an invite link,
   invitee sets name + password; no open registration route exists
-- [ ] A5 (M) Profiles under a user: CRUD, optional PIN, avatar
+- [x] A5 (M) Profiles under a user: CRUD, optional PIN, avatar
   colour/initial; per-profile defaults (audio lang, subtitle
   lang/mode, remote bitrate cap)
-- [ ] A6 (M) Library access + rating limits enforced in SQL on
+- [x] A6 (M) Library access + rating limits enforced in SQL on
   every item query (someone else's library = 404, never 403)
-- [ ] A7 (S) Admin-only route guard; admin surfaces never render
+- [x] A7 (S) Admin-only route guard; admin surfaces never render
   for normal users
 - **Done when:** Jordan + Kayla + one invited friend can each log
   in with separate profiles, and the friend cannot see a private

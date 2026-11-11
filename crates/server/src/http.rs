@@ -26,6 +26,22 @@ use crate::error::{AppError, AppResult};
 pub struct AppState {
     pub pool: parlour_db::PgPool,
     pub web_dir: Option<PathBuf>,
+    /// A1 login rate limiting (per-IP + per-account backoff).
+    pub limiter: std::sync::Arc<crate::limiter::LoginLimiter>,
+    /// Set the Secure flag on session cookies (production, behind
+    /// the HTTPS reverse proxy).
+    pub cookie_secure: bool,
+}
+
+impl AppState {
+    pub fn new(pool: parlour_db::PgPool, web_dir: Option<PathBuf>, cookie_secure: bool) -> Self {
+        Self {
+            pool,
+            web_dir,
+            limiter: std::sync::Arc::new(crate::limiter::LoginLimiter::new()),
+            cookie_secure,
+        }
+    }
 }
 
 /// The web UI as embedded in the binary. The Docker build copies
@@ -40,6 +56,10 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", axum::routing::get(healthz))
         .route("/api/v1/version", axum::routing::get(version))
+        .merge(crate::auth::routes())
+        .merge(crate::profiles::routes())
+        .merge(crate::invites::routes())
+        .merge(crate::libraries::routes())
         .fallback(fallback)
         .layer(PropagateRequestIdLayer::x_request_id())
         .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
@@ -129,10 +149,7 @@ mod tests {
         // health check must honestly report the DB as down.
         let pool = parlour_db::connect_lazy("postgres://parlour:parlour@127.0.0.1:1/parlour")
             .expect("lazy pool builds without connecting");
-        router(AppState {
-            pool,
-            web_dir: None,
-        })
+        router(AppState::new(pool, None, false))
     }
 
     async fn get(app: Router, path: &str) -> (StatusCode, String) {
@@ -173,6 +190,31 @@ mod tests {
         let (status, body) = get(test_router(), "/").await;
         assert_eq!(status, StatusCode::OK);
         assert!(body.contains("Parlour"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn protected_routes_reject_anonymous_requests() {
+        // No cookie: the auth extractor answers 401 before any DB
+        // work, so these hold even against the dead test pool.
+        for path in [
+            "/api/v1/auth/me",
+            "/api/v1/profiles",
+            "/api/v1/auth/sessions",
+            "/api/v1/libraries",
+        ] {
+            let (status, _) = get(test_router(), path).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{path}");
+        }
+        let app = test_router();
+        let res = app
+            .oneshot(
+                Request::post("/api/v1/admin/invites")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]

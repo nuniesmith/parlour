@@ -26,6 +26,9 @@ services:
       PARLOUR_DATABASE_URL: ${PARLOUR_DATABASE_URL:-postgres://parlour:change-me@db:5432/parlour?sslmode=disable}
       PARLOUR_PORT: ${PARLOUR_PORT:-8585}
       PARLOUR_LOG_LEVEL: ${PARLOUR_LOG_LEVEL:-info}
+      PARLOUR_ADMIN_USER: ${PARLOUR_ADMIN_USER:-}
+      PARLOUR_ADMIN_PASSWORD: ${PARLOUR_ADMIN_PASSWORD:-}
+      PARLOUR_COOKIE_SECURE: ${PARLOUR_COOKIE_SECURE:-false}
     ports:
       - "${PARLOUR_PORT:-8585}:${PARLOUR_PORT:-8585}"
     volumes:
