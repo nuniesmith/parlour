@@ -11,15 +11,20 @@
 //!   idempotently, as a background job (C6), and marks vanished
 //!   files unavailable instead of deleting anything (C8).
 //!
-//! Matching files to TMDB/TVDB metadata is Milestone 1.4
-//! (`parlour-metadata`); the Emby importer (watched state matched
+//! Matching files to TMDB/TVDB metadata is `metadata_sync`
+//! (Milestone 1.4, providers in `parlour-metadata`); artwork
+//! caching is `artwork`. The Emby importer (watched state matched
 //! by ProviderIds, never titles) is Milestone 1.7.
 
+pub mod artwork;
+pub mod metadata_sync;
 pub mod parse;
 pub mod probe;
 pub mod scan;
 pub mod walk;
 
+pub use artwork::{download_item_artwork, download_library_artwork, ArtworkReport};
+pub use metadata_sync::{apply_manual, match_item, match_library, MatchError, MatchOutcome};
 pub use parse::{parse_file_name, ParsedName};
 pub use probe::{probe_file, ProbeResult};
 pub use scan::{scan_library, ScanReport};

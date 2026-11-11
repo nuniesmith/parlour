@@ -11,9 +11,14 @@ repository.workspace = true
 parlour-core = { path = "../core" }
 parlour-db = { path = "../db" }
 parlour-jobs = { path = "../jobs" }
+parlour-metadata = { path = "../metadata" }
 sqlx.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
 uuid.workspace = true
 tracing.workspace = true
+reqwest.workspace = true
+tokio.workspace = true
+sha2.workspace = true
+thiserror.workspace = true

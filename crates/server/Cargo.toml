@@ -16,6 +16,8 @@ parlour-core = { path = "../core" }
 parlour-db = { path = "../db" }
 parlour-catalog = { path = "../catalog" }
 parlour-jobs = { path = "../jobs" }
+parlour-metadata = { path = "../metadata" }
+reqwest.workspace = true
 notify.workspace = true
 tokio.workspace = true
 axum.workspace = true

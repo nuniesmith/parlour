@@ -31,6 +31,9 @@ pub struct AppState {
     /// Set the Secure flag on session cookies (production, behind
     /// the HTTPS reverse proxy).
     pub cookie_secure: bool,
+    /// Milestone 1.4 provider settings (keys, artwork cache).
+    /// Defaults to unconfigured; `main` fills it from `Config`.
+    pub metadata: crate::metadata::MetadataSettings,
 }
 
 impl AppState {
@@ -40,6 +43,7 @@ impl AppState {
             web_dir,
             limiter: std::sync::Arc::new(crate::limiter::LoginLimiter::new()),
             cookie_secure,
+            metadata: crate::metadata::MetadataSettings::default(),
         }
     }
 }
@@ -61,6 +65,7 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::invites::routes())
         .merge(crate::libraries::routes())
         .merge(crate::catalog::routes())
+        .merge(crate::metadata::routes())
         .fallback(fallback)
         .layer(PropagateRequestIdLayer::x_request_id())
         .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))

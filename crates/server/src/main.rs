@@ -54,9 +54,11 @@ async fn main() {
     // C6/C7: background scan worker, filesystem watcher, and the
     // nightly full-scan safety net. Clone the pool before it moves
     // into the app state.
-    parlour_server::catalog::spawn_background(pool.clone());
+    let metadata = parlour_server::metadata::MetadataSettings::from_config(&config);
+    parlour_server::catalog::spawn_background(pool.clone(), metadata.clone());
 
-    let state = AppState::new(pool, config.web_dir.clone(), config.cookie_secure);
+    let mut state = AppState::new(pool, config.web_dir.clone(), config.cookie_secure);
+    state.metadata = metadata;
     let app = parlour_server::http::router(state);
     let addr = config.bind_addr;
     tracing::info!(%addr, version = env!("CARGO_PKG_VERSION"), "parlour listening");

@@ -31,6 +31,16 @@ pub struct Config {
     /// Set the Secure flag on the session cookie
     /// (`PARLOUR_COOKIE_SECURE`) — on behind the HTTPS proxy.
     pub cookie_secure: bool,
+    /// TMDB API key (Milestone 1.4): `PARLOUR_TMDB_API_KEY`, or
+    /// `TMDB_API_KEY` (the name Jordan's .env already uses).
+    pub tmdb_api_key: Option<String>,
+    /// TheTVDB API key (MD5): `PARLOUR_TVDB_API_KEY` / `TVDB_API_KEY`.
+    pub tvdb_api_key: Option<String>,
+    /// Provider base-URL overrides (tests point these at a stub).
+    pub tmdb_base: Option<String>,
+    pub tvdb_base: Option<String>,
+    /// Local artwork cache directory (`PARLOUR_ARTWORK_DIR`).
+    pub artwork_dir: PathBuf,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -108,6 +118,30 @@ impl Config {
             .map(|s| matches!(s.as_str(), "true" | "1" | "TRUE"))
             .unwrap_or(false);
 
+        let tmdb_api_key = vars
+            .get("PARLOUR_TMDB_API_KEY")
+            .or_else(|| vars.get("TMDB_API_KEY"))
+            .filter(|s| !s.trim().is_empty())
+            .cloned();
+        let tvdb_api_key = vars
+            .get("PARLOUR_TVDB_API_KEY")
+            .or_else(|| vars.get("TVDB_API_KEY"))
+            .filter(|s| !s.trim().is_empty())
+            .cloned();
+        let tmdb_base = vars
+            .get("PARLOUR_TMDB_BASE")
+            .filter(|s| !s.trim().is_empty())
+            .cloned();
+        let tvdb_base = vars
+            .get("PARLOUR_TVDB_BASE")
+            .filter(|s| !s.trim().is_empty())
+            .cloned();
+        let artwork_dir = vars
+            .get("PARLOUR_ARTWORK_DIR")
+            .filter(|s| !s.trim().is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("artwork"));
+
         Ok(Self {
             bind_addr,
             database_url,
@@ -116,6 +150,11 @@ impl Config {
             admin_user,
             admin_password,
             cookie_secure,
+            tmdb_api_key,
+            tvdb_api_key,
+            tmdb_base,
+            tvdb_base,
+            artwork_dir,
         })
     }
 }
