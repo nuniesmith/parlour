@@ -5,7 +5,13 @@
 # database (see tests/auth_flow.rs) — they are fixtures, not
 # secrets, and flagging them is noise. Everything outside that
 # directory is scanned normally.
+#
+# Both the current (v2, nested) and legacy (v1, top-level) key
+# spellings are given, because the GitHub integration and
+# ggshield read different generations of this file.
 version: 2
 secret:
   ignored_paths:
     - 'crates/server/tests/**/*'
+paths_ignore:
+  - 'crates/server/tests/**/*'
