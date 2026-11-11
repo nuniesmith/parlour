@@ -35,6 +35,8 @@ services:
       PARLOUR_TVDB_API_KEY: ${PARLOUR_TVDB_API_KEY:-}
       PARLOUR_ARTWORK_DIR: /artwork
       PARLOUR_CACHE_DIR: /cache
+      PARLOUR_EMBY_URL: ${PARLOUR_EMBY_URL:-}
+      PARLOUR_EMBY_API_KEY: ${PARLOUR_EMBY_API_KEY:-}
     ports:
       - "${PARLOUR_PORT:-8585}:${PARLOUR_PORT:-8585}"
     volumes:

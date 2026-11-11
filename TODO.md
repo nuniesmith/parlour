@@ -205,12 +205,12 @@ state lives on items' `UserData` (`Played`,
 `IsFavorite`); **match by `ProviderIds` (TMDB/TVDB), never by
 title**; note Emby keys watch state by provider id, so duplicates
 of one film share state — import by title, not by file.
-- [ ] E1 (M) Read-only Emby client in `catalog`: list users,
+- [x] E1 (M) Read-only Emby client in `catalog`: list users,
   page items with `ProviderIds` + `UserData`
-- [ ] E2 (M) Importer job: map Emby user → Parlour profile (manual
+- [x] E2 (M) Importer job: map Emby user → Parlour profile (manual
   mapping screen), apply played/position/favourites by provider
   id; dry-run mode prints the counts first
-- [ ] E3 (S) Import report: matched / unmatched / ambiguous counts;
+- [x] E3 (S) Import report: matched / unmatched / ambiguous counts;
   unmatched items listed so nothing is silently lost
 - [ ] E4 (S) Cutover checklist run: Parlour on 8585 beside Emby for
   a week of real use → fix the top pains → D1 port swap

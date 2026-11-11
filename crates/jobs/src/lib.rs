@@ -26,6 +26,7 @@ pub enum JobKind {
     DownloadSubtitles,
     GenerateArtwork,
     ReconcileRequests,
+    ImportEmby,
 }
 
 impl JobKind {
@@ -38,6 +39,7 @@ impl JobKind {
             JobKind::DownloadSubtitles => "download_subtitles",
             JobKind::GenerateArtwork => "generate_artwork",
             JobKind::ReconcileRequests => "reconcile_requests",
+            JobKind::ImportEmby => "import_emby",
         }
     }
 }

@@ -55,10 +55,15 @@ async fn main() {
     // nightly full-scan safety net. Clone the pool before it moves
     // into the app state.
     let metadata = parlour_server::metadata::MetadataSettings::from_config(&config);
-    parlour_server::catalog::spawn_background(pool.clone(), metadata.clone());
+    let emby = parlour_catalog::EmbySettings {
+        base_url: config.emby_url.clone(),
+        api_key: config.emby_api_key.clone(),
+    };
+    parlour_server::catalog::spawn_background(pool.clone(), metadata.clone(), emby.clone());
 
     let mut state = AppState::new(pool, config.web_dir.clone(), config.cookie_secure);
     state.metadata = metadata;
+    state.emby = emby;
     std::sync::Arc::get_mut(&mut state.playback)
         .expect("fresh playback state")
         .configure(config.cache_dir.clone(), config.stream_secret.clone());
