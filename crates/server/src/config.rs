@@ -41,6 +41,8 @@ pub struct Config {
     pub tvdb_base: Option<String>,
     /// Local artwork cache directory (`PARLOUR_ARTWORK_DIR`).
     pub artwork_dir: PathBuf,
+    pub emby_url: Option<String>,
+    pub emby_api_key: Option<String>,
     pub cache_dir: PathBuf,
     pub stream_secret: Option<String>,
 }
@@ -138,6 +140,24 @@ impl Config {
             .get("PARLOUR_TVDB_BASE")
             .filter(|s| !s.trim().is_empty())
             .cloned();
+        let emby_url = vars
+            .get("PARLOUR_EMBY_URL")
+            .filter(|s| !s.trim().is_empty())
+            .cloned()
+            .or_else(|| {
+                vars.get("EMBY_URL")
+                    .filter(|s| !s.trim().is_empty())
+                    .cloned()
+            });
+        let emby_api_key = vars
+            .get("PARLOUR_EMBY_API_KEY")
+            .filter(|s| !s.trim().is_empty())
+            .cloned()
+            .or_else(|| {
+                vars.get("EMBY_API_KEY")
+                    .filter(|s| !s.trim().is_empty())
+                    .cloned()
+            });
         let cache_dir = vars
             .get("PARLOUR_CACHE_DIR")
             .filter(|s| !s.trim().is_empty())
@@ -166,6 +186,8 @@ impl Config {
             tmdb_base,
             tvdb_base,
             artwork_dir,
+            emby_url,
+            emby_api_key,
             cache_dir,
             stream_secret,
         })

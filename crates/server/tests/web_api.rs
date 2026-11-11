@@ -203,6 +203,7 @@ async fn web_api_flow() {
     parlour_server::catalog::spawn_background(
         pool.clone(),
         parlour_server::metadata::MetadataSettings::default(),
+        parlour_catalog::EmbySettings::default(),
     );
     wait_for_job(&app, &job_id).await;
 

@@ -461,12 +461,17 @@ async fn enqueue_scan(
 /// Start the background worker, watcher, and nightly scan.
 /// Called once from `main`; deliberately not part of the router so
 /// integration tests control scanning explicitly.
-pub fn spawn_background(pool: parlour_db::PgPool, metadata: crate::metadata::MetadataSettings) {
+pub fn spawn_background(
+    pool: parlour_db::PgPool,
+    metadata: crate::metadata::MetadataSettings,
+    emby: parlour_catalog::EmbySettings,
+) {
     // Worker: claim queued jobs (covers restarts + watcher and
     // nightly enqueues) every few seconds.
     {
         let pool = pool.clone();
         let metadata = metadata.clone();
+        let emby = emby.clone();
         tokio::spawn(async move {
             loop {
                 let mut claimed = None;
@@ -474,6 +479,7 @@ pub fn spawn_background(pool: parlour_db::PgPool, metadata: crate::metadata::Met
                     parlour_jobs::JobKind::ScanLibrary,
                     parlour_jobs::JobKind::FetchMetadata,
                     parlour_jobs::JobKind::DownloadArtwork,
+                    parlour_jobs::JobKind::ImportEmby,
                 ] {
                     match parlour_jobs::claim_next(&pool, kind).await {
                         Ok(Some(job)) => {
@@ -494,6 +500,9 @@ pub fn spawn_background(pool: parlour_db::PgPool, metadata: crate::metadata::Met
                     }
                     Some(job) if job.kind == "download_artwork" => {
                         crate::metadata::run_artwork_job_claimed(pool.clone(), job, &metadata).await
+                    }
+                    Some(job) if job.kind == "import_emby" => {
+                        crate::emby_admin::run_emby_job_claimed(pool.clone(), job, &emby).await
                     }
                     Some(job) => run_scan_job_claimed(pool.clone(), job).await,
                     None => tokio::time::sleep(Duration::from_secs(3)).await,

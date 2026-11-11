@@ -17,6 +17,7 @@
 //! by ProviderIds, never titles) is Milestone 1.7.
 
 pub mod artwork;
+pub mod emby;
 pub mod metadata_sync;
 pub mod parse;
 pub mod probe;
@@ -24,6 +25,7 @@ pub mod scan;
 pub mod walk;
 
 pub use artwork::{download_item_artwork, download_library_artwork, ArtworkReport};
+pub use emby::{run_import, EmbyClient, EmbyError, EmbySettings, ImportReport};
 pub use metadata_sync::{apply_manual, match_item, match_library, MatchError, MatchOutcome};
 pub use parse::{parse_file_name, ParsedName};
 pub use probe::{probe_file, ProbeResult};
