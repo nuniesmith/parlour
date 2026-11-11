@@ -3,6 +3,7 @@
 //! integration tests can drive the real router.
 
 pub mod auth;
+pub mod catalog;
 pub mod config;
 pub mod error;
 pub mod http;
