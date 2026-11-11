@@ -9,3 +9,11 @@ repository.workspace = true
 
 [dependencies]
 parlour-core = { path = "../core" }
+parlour-db = { path = "../db" }
+parlour-jobs = { path = "../jobs" }
+sqlx.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+tracing.workspace = true

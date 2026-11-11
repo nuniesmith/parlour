@@ -113,24 +113,24 @@ press play, resume where you left off, subtitles on.
   library even by guessing URLs.
 
 ### Milestone 1.3 — Catalog + scanner (`catalog`, `jobs`, `db`)
-- [ ] C1 (M) Second migration: `media_items`, `media_files`,
+- [x] C1 (M) Second migration: `media_items`, `media_files`,
   `media_streams`, `subtitle_tracks`, `people`, `item_people`,
   `images` (paths/hashes only — image bytes stay on disk)
-- [ ] C2 (M) Library CRUD API (admin): name, kind, root paths
-- [ ] C3 (L) Folder walker: *arr/TRaSH naming conventions, video
+- [x] C2 (M) Library CRUD API (admin): name, kind, root paths
+- [x] C3 (L) Folder walker: *arr/TRaSH naming conventions, video
   extensions allowlist, skip samples/extras by rule; fingerprint
   (path, size, mtime) skip for unchanged files
-- [ ] C4 (M) ffprobe runner: parse container, duration, codecs,
+- [x] C4 (M) ffprobe runner: parse container, duration, codecs,
   resolution/HDR flags, audio + subtitle streams into
   `media_streams` / `subtitle_tracks`
-- [ ] C5 (M) TV structure: series → seasons → episodes from
+- [x] C5 (M) TV structure: series → seasons → episodes from
   `SxxExx` naming; movies standalone; multi-file items supported
-- [ ] C6 (M) Scan as a **job** (`jobs` crate): manual trigger,
+- [x] C6 (M) Scan as a **job** (`jobs` crate): manual trigger,
   per-library, progress + errors visible in admin; idempotent
   re-runs (stable content ids)
-- [ ] C7 (M) Filesystem watcher (`notify`) → debounce → targeted
+- [x] C7 (M) Filesystem watcher (`notify`) → debounce → targeted
   rescan job; plus a nightly full-scan job as the safety net
-- [ ] C8 (S) Missing-file handling: vanished files mark the item
+- [x] C8 (S) Missing-file handling: vanished files mark the item
   unavailable, never delete watch state
 - **Done when:** pointing Parlour at the real movies + TV folders
   produces a correct, browsable catalog, and re-scanning changes

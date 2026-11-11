@@ -60,6 +60,7 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::profiles::routes())
         .merge(crate::invites::routes())
         .merge(crate::libraries::routes())
+        .merge(crate::catalog::routes())
         .fallback(fallback)
         .layer(PropagateRequestIdLayer::x_request_id())
         .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))

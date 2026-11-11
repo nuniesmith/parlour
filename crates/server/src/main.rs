@@ -51,6 +51,11 @@ async fn main() {
         std::process::exit(1);
     }
 
+    // C6/C7: background scan worker, filesystem watcher, and the
+    // nightly full-scan safety net. Clone the pool before it moves
+    // into the app state.
+    parlour_server::catalog::spawn_background(pool.clone());
+
     let state = AppState::new(pool, config.web_dir.clone(), config.cookie_secure);
     let app = parlour_server::http::router(state);
     let addr = config.bind_addr;
