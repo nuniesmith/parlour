@@ -41,6 +41,8 @@ pub struct Config {
     pub tvdb_base: Option<String>,
     /// Local artwork cache directory (`PARLOUR_ARTWORK_DIR`).
     pub artwork_dir: PathBuf,
+    pub cache_dir: PathBuf,
+    pub stream_secret: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -136,6 +138,15 @@ impl Config {
             .get("PARLOUR_TVDB_BASE")
             .filter(|s| !s.trim().is_empty())
             .cloned();
+        let cache_dir = vars
+            .get("PARLOUR_CACHE_DIR")
+            .filter(|s| !s.trim().is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("cache"));
+        let stream_secret = vars
+            .get("PARLOUR_STREAM_SECRET")
+            .filter(|s| !s.trim().is_empty())
+            .cloned();
         let artwork_dir = vars
             .get("PARLOUR_ARTWORK_DIR")
             .filter(|s| !s.trim().is_empty())
@@ -155,6 +166,8 @@ impl Config {
             tmdb_base,
             tvdb_base,
             artwork_dir,
+            cache_dir,
+            stream_secret,
         })
     }
 }

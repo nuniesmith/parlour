@@ -17,6 +17,7 @@ parlour-db = { path = "../db" }
 parlour-catalog = { path = "../catalog" }
 parlour-jobs = { path = "../jobs" }
 parlour-metadata = { path = "../metadata" }
+parlour-playback = { path = "../playback" }
 reqwest.workspace = true
 notify.workspace = true
 tokio.workspace = true
@@ -34,6 +35,9 @@ dotenvy.workspace = true
 sqlx.workspace = true
 argon2.workspace = true
 sha2.workspace = true
+hmac.workspace = true
+base64.workspace = true
+tokio-util.workspace = true
 rand.workspace = true
 chrono.workspace = true
 

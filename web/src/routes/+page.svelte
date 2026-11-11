@@ -38,6 +38,7 @@
     items={home.continue_watching as ContinueItem[]}
     {progressFor}
   />
+  <Rail title="Next up" items={home.next_up} />
   <Rail title="Recently added" items={home.recently_added} />
   {#each session.libraries as lib (lib.id)}
     <p><a class="browse-link" href={`/library/${lib.id}`}>Browse {lib.name} →</a></p>
