@@ -33,6 +33,24 @@ the code.
   reverse proxy. Deliberately NOT Emby/Jellyfin's 8096 or Silo's
   8090. Nothing else on the media host uses 8585/8586.
 
+## 2026-11-10 — Deployment, naming, sessions (D2–D7, defaults accepted)
+
+- **D2 Public TLS:** a reverse proxy on sullivan (Caddy)
+  terminates HTTPS and forwards to Parlour on localhost:8585.
+  Parlour does not serve TLS itself; port 8586 stays reserved.
+- **D3 Names:** `parlour.7gram.xyz` is the tailnet/LAN name
+  (7gram names are tailnet-only in practice). The public route
+  is IP/DDNS straight to the sullivan proxy — the same pattern
+  the truck uses to reach Emby today.
+- **D4 Host:** sullivan is the production host.
+- **D5 TMDB key:** created by Jordan when the metadata
+  milestone (1.4) starts; lives in the server `.env`, never
+  in the repo.
+- **D6 Versions:** workspace deps bumped to current (axum
+  0.8.9, sqlx 0.9) as task F2, before Phase 1 code uses them.
+- **D7 Sessions:** hand-rolled, DB-backed; cookie carries a
+  random token, the DB stores only its hash.
+
 ## 2026-11-10 — Stack
 
 - Rust, Axum + sqlx on PostgreSQL, single binary.

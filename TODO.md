@@ -11,7 +11,7 @@ Everything below Phase 1 is unchecked.
 
 ---
 
-## Decisions Jordan still owes (defaults in brackets — say the word)
+## Decisions (D1–D7 — all decided 2026-11-10)
 
 - [x] **D1 — Ports. DECIDED 2026-11-10:** Parlour uses its own
   ports, not Emby/Jellyfin's — **8585 HTTP** (the one listener;
@@ -19,25 +19,28 @@ Everything below Phase 1 is unchecked.
   direct-TLS listener if the reverse proxy doesn't terminate it).
   Nothing else on sullivan uses them (checked against its service
   list: 7878/8080/8686/8989/9696/32400/8096).
-- [ ] **D2 — Public path.** Parlour behind a reverse proxy with a
-  real cert (e.g. Caddy on sullivan), or Parlour serving TLS
-  itself? [Reverse proxy — simpler cert renewal.]
-- [ ] **D3 — Public name.** `parlour.7gram.xyz` for the public /
-  DDNS route? [Yes, name reserved for the truck Fire TV.]
-- [ ] **D4 — Where it runs.** sullivan (current media host, has the
-  library + the RTX/GPU path) confirmed as the production host?
-  [Yes.]
-- [ ] **D5 — TMDB API key.** Needed for metadata matching in
-  Phase 1. Jordan creates a free TMDB account key and puts it in
-  the server `.env` (never in the repo).
-- [ ] **D6 — sqlx 0.9 bump.** Research note (2026-11-10): axum is
-  at 0.8.9 and sqlx has a 0.9 line out, while the workspace still
-  declares sqlx 0.8 (unused by any code yet). Bump the declared
-  versions **before** Phase 1 code lands — free now, painful
-  later. [Do it as task F2.]
-- [ ] **D7 — Sessions.** Hand-rolled DB-backed sessions (cookie =
-  random token, hash stored in DB) vs a sessions crate.
-  [Hand-rolled — the invite flow is custom anyway, fewer deps.]
+- [x] **D2 — Public TLS. DECIDED:** a reverse proxy on sullivan
+  (Caddy) terminates HTTPS and forwards to Parlour on
+  localhost:8585. Cert renewal stays out of the Rust code; the
+  8586 direct-TLS reservation stays unused unless this changes.
+- [x] **D3 — Names. DECIDED:** `parlour.7gram.xyz` is the
+  tailnet/LAN name (7gram names only resolve/work on the
+  tailnet). The public route stays IP/DDNS-based straight to
+  the sullivan proxy, exactly how the truck reaches Emby today.
+- [x] **D4 — Host. DECIDED:** sullivan is the production host —
+  the library, Emby, and the *arr stack already live there.
+- [x] **D5 — TMDB API key. DECIDED (procedure):** Jordan creates
+  a free TMDB account key when Milestone 1.4 starts and puts it
+  in the server `.env` — never in the repo. Nothing needed
+  before then.
+- [x] **D6 — Versions. DECIDED:** bump the declared versions
+  before Phase 1 code lands (research note 2026-11-10: axum is
+  at 0.8.9, sqlx has a 0.9 line out, and the workspace's sqlx
+  0.8 declaration is still unused by any code). Done as task
+  F2 in Milestone 1.1.
+- [x] **D7 — Sessions. DECIDED:** hand-rolled DB-backed sessions
+  (cookie = random token, only its hash stored in the DB). The
+  invite flow is custom anyway; one less dependency to trust.
 
 ---
 
