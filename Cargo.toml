@@ -17,7 +17,7 @@ members = [
 [workspace.package]
 edition = "2021"
 rust-version = "1.75"
-license = "LicenseRef-Proprietary" # placeholder until the licence decision (see docs/DECISIONS.md)
+license = "MIT"
 repository = "https://github.com/nuniesmith/parlour"
 
 # Versions the implementation phases will use. Declared here so every

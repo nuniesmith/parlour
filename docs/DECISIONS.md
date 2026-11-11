@@ -21,9 +21,9 @@ the code.
   Parlour an AGPL derivative, and "Silo" is trademarked.
 - Replaces the owner's current Emby install. Fire Sticks are the
   primary TV client today and stay first-class.
-- Licence: undecided. Decide before any public binary / store
-  release. (Cargo metadata carries a proprietary placeholder so
-  nothing is accidentally published under a wrong licence.)
+- Licence: **MIT** (decided 2026-11-10, after the scaffold first
+  carried a proprietary placeholder). `LICENSE` is in the repo
+  root and the Cargo metadata says `MIT`.
 
 ## 2026-11-10 — Stack
 

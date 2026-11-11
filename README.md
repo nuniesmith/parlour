@@ -76,4 +76,4 @@ See `docs/ARCHITECTURE.md` for the code layout and the subsystem designs.
 
 ## Licence
 
-To be decided before the first public release of binaries / store apps.
+MIT — see `LICENSE`.
