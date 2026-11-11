@@ -1,0 +1,20 @@
+# Rust
+/target
+**/*.rs.bk
+Cargo.lock.orig
+
+# Web (SvelteKit)
+/web/node_modules
+/web/.svelte-kit
+/web/build
+
+# Env / secrets
+.env
+*.env
+!.env.example
+
+# Local data / media / scratch
+/data
+/media
+*.log
+.DS_Store

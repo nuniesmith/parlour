@@ -1,0 +1,11 @@
+[package]
+name = "parlour-playback"
+version = "0.1.0"
+description = "Parlour playback: decision engine, sessions, HLS, watch state."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+parlour-core = { path = "../core" }

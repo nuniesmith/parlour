@@ -1,0 +1,10 @@
+[package]
+name = "parlour-discord"
+version = "0.1.0"
+description = "Parlour optional Discord bot (poise on serenity), feature-flagged in the server."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]

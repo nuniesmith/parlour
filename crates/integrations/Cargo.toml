@@ -1,0 +1,10 @@
+[package]
+name = "parlour-integrations"
+version = "0.1.0"
+description = "Parlour integrations: Sonarr/Radarr/Lidarr, Prowlarr, qBittorrent, and the request flow."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]

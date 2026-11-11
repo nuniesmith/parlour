@@ -1,0 +1,10 @@
+[package]
+name = "parlour-jobs"
+version = "0.1.0"
+description = "Parlour background jobs on Postgres (FOR UPDATE SKIP LOCKED). No Redis."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]

@@ -1,0 +1,10 @@
+[package]
+name = "parlour-core"
+version = "0.1.0"
+description = "Parlour shared types. No I/O: ids, client profiles, playback plans, errors."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]

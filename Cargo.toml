@@ -1,0 +1,38 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/server",
+    "crates/core",
+    "crates/db",
+    "crates/catalog",
+    "crates/playback",
+    "crates/transcode",
+    "crates/subtitles",
+    "crates/metadata",
+    "crates/integrations",
+    "crates/jobs",
+    "crates/discord",
+]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.75"
+license = "LicenseRef-Proprietary" # placeholder until the licence decision (see docs/DECISIONS.md)
+repository = "https://github.com/nuniesmith/parlour"
+
+# Versions the implementation phases will use. Declared here so every
+# crate inherits the same ones; members opt in as they grow past stubs.
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+axum = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "migrate"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror = "2"
+uuid = { version = "1", features = ["v4"] }
+time = { version = "0.3", features = ["serde"] }
+
+[profile.release]
+lto = "thin"

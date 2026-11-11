@@ -1,0 +1,9 @@
+-- Parlour initial migration (placeholder, 2026-11-10).
+--
+-- Intentionally creates no tables yet. The first real migration
+-- will add, per docs/ARCHITECTURE.md:
+--   users, profiles, libraries, library_access,
+--   media_items, media_files, media_streams, subtitle_tracks,
+--   watch_state, jobs, requests, settings, integration_secrets
+-- in its own timestamped file. This file stays as the marker of
+-- where the schema history begins.

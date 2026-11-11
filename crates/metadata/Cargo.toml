@@ -1,0 +1,10 @@
+[package]
+name = "parlour-metadata"
+version = "0.1.0"
+description = "Parlour metadata providers: TMDB, TheTVDB, and later MusicBrainz/Audnexus/OpenLibrary."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]

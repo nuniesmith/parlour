@@ -1,0 +1,39 @@
+# Parlour + Postgres for local development.
+# Usage: cp .env.example .env, adjust, then `docker compose up --build`.
+# Media is mounted read-only; point PARLOUR_MEDIA_PATH at your library.
+
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-parlour}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      POSTGRES_DB: ${POSTGRES_DB:-parlour}
+    volumes:
+      - parlour-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-parlour}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  parlour:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PARLOUR_DATABASE_URL: ${PARLOUR_DATABASE_URL:-postgres://parlour:change-me@db:5432/parlour}
+      PARLOUR_PORT: ${PARLOUR_PORT:-8090}
+      PARLOUR_LOG_LEVEL: ${PARLOUR_LOG_LEVEL:-info}
+    ports:
+      - "${PARLOUR_PORT:-8090}:${PARLOUR_PORT:-8090}"
+    volumes:
+      - ${PARLOUR_MEDIA_PATH:-./media}:/media:ro
+    # GPU transcoding (Phase 2) — enable ONE block for your host:
+    # NVIDIA: also add the nvidia runtime / device reservation.
+    # devices:
+    #   - /dev/dri:/dev/dri   # Intel Quick Sync / AMD VAAPI
+
+volumes:
+  parlour-db:

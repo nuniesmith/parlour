@@ -1,0 +1,10 @@
+[package]
+name = "parlour-subtitles"
+version = "0.1.0"
+description = "Parlour subtitles: indexing, extraction, conversion, forced-track logic."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
