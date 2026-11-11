@@ -1,0 +1,11 @@
+# GitGuardian configuration.
+#
+# The integration tests under crates/server/tests/ use invented,
+# throwaway credentials for fake accounts against a throwaway
+# database (see tests/auth_flow.rs) — they are fixtures, not
+# secrets, and flagging them is noise. Everything outside that
+# directory is scanned normally.
+version: 2
+secret:
+  ignored_paths:
+    - 'crates/server/tests/**/*'
