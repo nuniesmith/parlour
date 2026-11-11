@@ -57,6 +57,7 @@ pub struct ItemDto {
     pub vote_average: Option<f64>,
     pub metadata_status: String,
     pub metadata_provider: Option<String>,
+    pub has_poster: bool,
     pub available: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -65,6 +66,11 @@ pub struct ItemDto {
 #[derive(Deserialize)]
 struct ItemsQuery {
     kind: Option<String>,
+    genre: Option<String>,
+    year: Option<i32>,
+    rating: Option<String>,
+    unwatched: Option<bool>,
+    sort: Option<String>,
 }
 
 /// Top-level items (movies, series) of a library the session's
@@ -82,16 +88,31 @@ async fn list_items(
     let rows = sqlx::query_as::<_, ItemDto>(
         "SELECT i.id, i.library_id, i.parent_id, i.kind, i.title, i.sort_title,
                 i.year, i.season_number, i.episode_number, i.overview, i.content_rating,
-                i.available, i.genres, i.vote_average, i.metadata_status, i.metadata_provider, i.created_at, i.updated_at
+                i.available, i.genres, i.vote_average, i.metadata_status, i.metadata_provider, EXISTS (SELECT 1 FROM images im WHERE im.item_id = i.id AND im.kind = 'poster' AND im.path <> '' AND im.path NOT LIKE 'pending:%') AS has_poster, i.created_at, i.updated_at
          FROM media_items i
          JOIN library_access a ON a.library_id = i.library_id AND a.profile_id = $2
          WHERE i.library_id = $1 AND i.parent_id IS NULL
            AND ($3::text IS NULL OR i.kind = $3)
-         ORDER BY i.sort_title",
+           AND ($4::text IS NULL OR $4 = ANY(i.genres))
+           AND ($5::integer IS NULL OR i.year = $5)
+           AND ($6::text IS NULL OR i.content_rating = $6)
+           AND (NOT $7::boolean OR NOT EXISTS (
+               SELECT 1 FROM user_data u
+               WHERE u.profile_id = $2 AND u.item_id = i.id AND u.played))
+         ORDER BY
+           CASE WHEN $8::text = 'added' THEN i.created_at END DESC,
+           CASE WHEN $8::text = 'year' THEN i.year END DESC NULLS LAST,
+           CASE WHEN $8::text = 'rating' THEN i.vote_average END DESC NULLS LAST,
+           i.sort_title",
     )
     .bind(library_id)
     .bind(profile_id)
     .bind(&q.kind)
+    .bind(&q.genre)
+    .bind(q.year)
+    .bind(&q.rating)
+    .bind(q.unwatched.unwrap_or(false))
+    .bind(&q.sort)
     .fetch_all(&state.pool)
     .await
     .map_err(AppError::from)?;
@@ -144,6 +165,13 @@ struct FileDto {
 }
 
 #[derive(Debug, Serialize, FromRow)]
+struct CastDto {
+    name: String,
+    character_name: Option<String>,
+    sort_order: i32,
+}
+
+#[derive(Debug, Serialize, FromRow)]
 struct ImageDto {
     kind: String,
     variant: String,
@@ -158,6 +186,8 @@ struct ItemDetailDto {
     children: Vec<ItemDto>,
     files: Vec<FileDto>,
     images: Vec<ImageDto>,
+    cast: Vec<CastDto>,
+    similar: Vec<ItemDto>,
 }
 
 async fn get_item(
@@ -172,7 +202,7 @@ async fn get_item(
     let item = sqlx::query_as::<_, ItemDto>(
         "SELECT i.id, i.library_id, i.parent_id, i.kind, i.title, i.sort_title,
                 i.year, i.season_number, i.episode_number, i.overview, i.content_rating,
-                i.available, i.genres, i.vote_average, i.metadata_status, i.metadata_provider, i.created_at, i.updated_at
+                i.available, i.genres, i.vote_average, i.metadata_status, i.metadata_provider, EXISTS (SELECT 1 FROM images im WHERE im.item_id = i.id AND im.kind = 'poster' AND im.path <> '' AND im.path NOT LIKE 'pending:%') AS has_poster, i.created_at, i.updated_at
          FROM media_items i
          JOIN library_access a ON a.library_id = i.library_id AND a.profile_id = $2
          WHERE i.id = $1",
@@ -187,7 +217,7 @@ async fn get_item(
     let children = sqlx::query_as::<_, ItemDto>(
         "SELECT i.id, i.library_id, i.parent_id, i.kind, i.title, i.sort_title,
                 i.year, i.season_number, i.episode_number, i.overview, i.content_rating,
-                i.available, i.genres, i.vote_average, i.metadata_status, i.metadata_provider, i.created_at, i.updated_at
+                i.available, i.genres, i.vote_average, i.metadata_status, i.metadata_provider, EXISTS (SELECT 1 FROM images im WHERE im.item_id = i.id AND im.kind = 'poster' AND im.path <> '' AND im.path NOT LIKE 'pending:%') AS has_poster, i.created_at, i.updated_at
          FROM media_items i
          WHERE i.parent_id = $1
          ORDER BY i.season_number NULLS LAST, i.episode_number NULLS LAST, i.sort_title",
@@ -237,11 +267,39 @@ async fn get_item(
     .await
     .map_err(AppError::from)?;
 
+    let cast = sqlx::query_as::<_, CastDto>(
+        "SELECT p.name, ip.character_name, ip.sort_order
+         FROM item_people ip JOIN people p ON p.id = ip.person_id
+         WHERE ip.item_id = $1 ORDER BY ip.sort_order, p.name",
+    )
+    .bind(item_id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(AppError::from)?;
+
+    let similar = sqlx::query_as::<_, ItemDto>(
+        "SELECT i.id, i.library_id, i.parent_id, i.kind, i.title, i.sort_title,
+                i.year, i.season_number, i.episode_number, i.overview, i.content_rating,
+                i.available, i.genres, i.vote_average, i.metadata_status, i.metadata_provider, EXISTS (SELECT 1 FROM images im WHERE im.item_id = i.id AND im.kind = 'poster' AND im.path <> '' AND im.path NOT LIKE 'pending:%') AS has_poster, i.created_at, i.updated_at
+         FROM media_items i
+         WHERE i.library_id = $1 AND i.parent_id IS NULL AND i.id <> $2
+           AND i.genres && (SELECT g.genres FROM media_items g WHERE g.id = $2)
+         ORDER BY i.vote_average DESC NULLS LAST, i.sort_title
+         LIMIT 12",
+    )
+    .bind(item.library_id)
+    .bind(item_id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(AppError::from)?;
+
     Ok(Json(ItemDetailDto {
         item,
         children,
         files,
         images,
+        cast,
+        similar,
     }))
 }
 

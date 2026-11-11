@@ -1,137 +1,51 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { goto } from '$app/navigation';
   import { api } from '$lib/api';
+  import Rail from '$lib/Rail.svelte';
+  import { session } from '$lib/session.svelte';
+  import type { ContinueItem, HomeData, Item } from '$lib/types';
 
-  interface Profile {
-    id: string;
-    name: string;
-    has_pin: boolean;
-    avatar_color: string;
-    initial: string;
+  let home = $state<HomeData | null>(null);
+  let error = $state<string | null>(null);
+
+  onMount(async () => {
+    const { data, error: err } = await api<HomeData>('/api/v1/home');
+    if (data) home = data;
+    else error = err ?? 'Could not load home.';
+  });
+
+  function progressFor(item: Item): number | null {
+    const c = home?.continue_watching.find((x) => x.id === item.id);
+    if (!c || !c.duration_ms) return null;
+    return Math.min(1, c.position_ms / c.duration_ms);
   }
-  interface Me {
-    user: { username: string; is_admin: boolean };
-    active_profile: Profile | null;
-  }
-
-  let me: Me | null = null;
-  let profiles: Profile[] = [];
-  let error: string | null = null;
-
-  async function refresh() {
-    const mine = await api<Me>('/api/v1/auth/me');
-    if (mine.status === 401) {
-      await goto('/login');
-      return;
-    }
-    me = mine.data;
-    const list = await api<Profile[]>('/api/v1/profiles');
-    profiles = list.data ?? [];
-  }
-
-  async function select(profile: Profile) {
-    let pin: string | undefined;
-    if (profile.has_pin) {
-      pin = prompt(`PIN for ${profile.name}`) ?? undefined;
-      if (pin === undefined) return;
-    }
-    const { status, error: err } = await api(`/api/v1/profiles/${profile.id}/select`, {
-      method: 'POST',
-      body: JSON.stringify({ pin }),
-    });
-    if (status === 200) await refresh();
-    else error = err ?? 'Could not select that profile.';
-  }
-
-  async function logout() {
-    await api('/api/v1/auth/logout', { method: 'POST' });
-    await goto('/login');
-  }
-
-  onMount(refresh);
 </script>
 
-<main>
-  <h1>Parlour</h1>
-  {#if me}
-    <p>
-      Signed in as <strong>{me.user.username}</strong>{#if me.user.is_admin}
-        (admin){/if}
-      <button class="link" onclick={logout}>Sign out</button>
+{#if error}
+  <p class="error" role="alert">{error}</p>
+{:else if !home}
+  <p class="dim">Loading…</p>
+{:else}
+  {#if home.continue_watching.length === 0 && home.recently_added.length === 0}
+    <h1>Welcome to Parlour</h1>
+    <p class="dim">
+      Nothing here yet. Once an admin adds a library and scans it, your movies and shows will show
+      up here.
     </p>
-    <h2>Who's watching?</h2>
-    {#if error}<p class="error">{error}</p>{/if}
-    <div class="profiles">
-      {#each profiles as profile (profile.id)}
-        <button
-          class="profile"
-          class:active={me.active_profile?.id === profile.id}
-          onclick={() => select(profile)}
-        >
-          <span class="avatar" style="background: {profile.avatar_color}"
-            >{profile.initial}</span
-          >
-          <span>{profile.name}{#if profile.has_pin} 🔒{/if}</span>
-        </button>
-      {/each}
-    </div>
-    <p class="hint">
-      The full browsing UI arrives with the catalog (Milestone 1.5). Libraries,
-      sign-in and profiles are live underneath.
-    </p>
-  {:else}
-    <p>Loading…</p>
   {/if}
-</main>
+  <Rail
+    title="Continue watching"
+    items={home.continue_watching as ContinueItem[]}
+    {progressFor}
+  />
+  <Rail title="Recently added" items={home.recently_added} />
+  {#each session.libraries as lib (lib.id)}
+    <p><a class="browse-link" href={`/library/${lib.id}`}>Browse {lib.name} →</a></p>
+  {/each}
+{/if}
 
 <style>
-  main {
-    font-family: system-ui, sans-serif;
-    margin: 3rem auto;
-    max-width: 40rem;
-    padding: 0 1rem;
-  }
-  .profiles {
-    display: flex;
-    gap: 1rem;
-    flex-wrap: wrap;
-  }
-  .profile {
-    display: grid;
-    justify-items: center;
-    gap: 0.4rem;
-    background: none;
-    border: 2px solid transparent;
-    border-radius: 0.75rem;
-    padding: 0.6rem;
-    cursor: pointer;
-    font-size: 1rem;
-  }
-  .profile.active {
-    border-color: #7c5cbf;
-  }
-  .avatar {
-    width: 4rem;
-    height: 4rem;
-    border-radius: 50%;
-    display: grid;
-    place-items: center;
-    color: white;
-    font-size: 1.6rem;
-  }
-  .link {
-    background: none;
-    border: 0;
-    color: #7c5cbf;
-    cursor: pointer;
-    font-size: 1rem;
-  }
-  .hint {
-    color: #888;
-    font-size: 0.85rem;
-  }
-  .error {
-    color: #b3261e;
+  .browse-link {
+    color: var(--accent);
   }
 </style>

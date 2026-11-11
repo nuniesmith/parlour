@@ -5,6 +5,7 @@
 pub mod auth;
 pub mod catalog;
 pub mod config;
+pub mod discover;
 pub mod error;
 pub mod http;
 pub mod invites;

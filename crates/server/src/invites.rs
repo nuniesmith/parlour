@@ -187,6 +187,31 @@ async fn accept_invite(
     ))
 }
 
+#[derive(Serialize, FromRow)]
+struct AdminUserDto {
+    id: Uuid,
+    username: String,
+    is_admin: bool,
+    created_at: DateTime<Utc>,
+    profile_count: i64,
+}
+
+/// Admin: every account with its profile count (W7 user admin).
+async fn list_users(
+    State(state): State<AppState>,
+    _admin: AdminUser,
+) -> Result<Json<Vec<AdminUserDto>>, AppError> {
+    let rows = sqlx::query_as::<_, AdminUserDto>(
+        "SELECT u.id, u.username, u.is_admin, u.created_at,
+                (SELECT count(*) FROM profiles p WHERE p.user_id = u.id) AS profile_count
+         FROM users u ORDER BY u.created_at",
+    )
+    .fetch_all(&state.pool)
+    .await
+    .map_err(AppError::from)?;
+    Ok(Json(rows))
+}
+
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route(
@@ -194,6 +219,7 @@ pub fn routes() -> Router<AppState> {
             post(create_invite).get(list_invites),
         )
         .route("/api/v1/admin/invites/{id}", delete(revoke_invite))
+        .route("/api/v1/admin/users", get(list_users))
         .route("/api/v1/invites/{token}", get(invite_status))
         .route("/api/v1/invites/accept", post(accept_invite))
 }

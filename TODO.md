@@ -152,22 +152,22 @@ press play, resume where you left off, subtitles on.
   no hand-holding, and every miss is fixable from the UI.
 
 ### Milestone 1.5 — Web UI (`web/`)
-- [ ] W1 (M) API client + auth screens: login, profile picker
+- [x] W1 (M) API client + auth screens: login, profile picker
   (+PIN), invite acceptance page
-- [ ] W2 (M) Home: Continue Watching row, Recently Added,
+- [x] W2 (M) Home: Continue Watching row, Recently Added,
   libraries row (data from 1.6 endpoints; shell can land first)
-- [ ] W3 (M) Library browse: poster grid, sort/filter (year,
+- [x] W3 (M) Library browse: poster grid, sort/filter (year,
   genre, unwatched), alphabet jump for big libraries
-- [ ] W4 (M) Item pages: movie detail; series → season → episode
+- [x] W4 (M) Item pages: movie detail; series → season → episode
   lists; cast row; "more like this" can wait
 - [ ] W5 (L) Player page: native `<video>` + HLS fallback, subtitle
   track picker (shows forced/default/SDH), audio track picker,
   resume prompt, keyboard shortcuts, progress reporting (1.6)
-- [ ] W6 (M) Search: Postgres FTS over titles/people to start;
+- [x] W6 (M) Search: Postgres FTS over titles/people to start;
   search-as-you-type with debounce
-- [ ] W7 (M) Settings: my profile/preferences; admin section —
+- [x] W7 (M) Settings: my profile/preferences; admin section —
   users + invites, libraries + scan buttons + job status
-- [ ] W8 (S) Empty/error states everywhere (no library yet, scan
+- [x] W8 (S) Empty/error states everywhere (no library yet, scan
   running, server unreachable) — a blank page is a bug
 - **Done when:** Kayla can use it on the TV-browser/laptop without
   asking how anything works.
