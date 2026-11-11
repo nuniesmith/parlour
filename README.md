@@ -35,6 +35,8 @@ browse, and play.
 ## Status
 
 Design phase. Repo created 2026-11-10. Nothing here runs yet.
+The working checklist — phases, milestones, and open decisions —
+lives in `TODO.md`.
 
 Roadmap, in order:
 
