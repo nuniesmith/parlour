@@ -24,10 +24,10 @@ services:
         condition: service_healthy
     environment:
       PARLOUR_DATABASE_URL: ${PARLOUR_DATABASE_URL:-postgres://parlour:change-me@db:5432/parlour}
-      PARLOUR_PORT: ${PARLOUR_PORT:-8090}
+      PARLOUR_PORT: ${PARLOUR_PORT:-8585}
       PARLOUR_LOG_LEVEL: ${PARLOUR_LOG_LEVEL:-info}
     ports:
-      - "${PARLOUR_PORT:-8090}:${PARLOUR_PORT:-8090}"
+      - "${PARLOUR_PORT:-8585}:${PARLOUR_PORT:-8585}"
     volumes:
       - ${PARLOUR_MEDIA_PATH:-./media}:/media:ro
     # GPU transcoding (Phase 2) — enable ONE block for your host:

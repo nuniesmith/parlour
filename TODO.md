@@ -13,8 +13,12 @@ Everything below Phase 1 is unchecked.
 
 ## Decisions Jordan still owes (defaults in brackets — say the word)
 
-- [ ] **D1 — Production port.** Dev runs on 8090 beside Emby.
-  At cutover, does Parlour take over **8096**? [Yes — Emby retires.]
+- [x] **D1 — Ports. DECIDED 2026-11-10:** Parlour uses its own
+  ports, not Emby/Jellyfin's — **8585 HTTP** (the one listener;
+  web UI + API + streams) and **8586 HTTPS** (reserved for a
+  direct-TLS listener if the reverse proxy doesn't terminate it).
+  Nothing else on sullivan uses them (checked against its service
+  list: 7878/8080/8686/8989/9696/32400/8096).
 - [ ] **D2 — Public path.** Parlour behind a reverse proxy with a
   real cert (e.g. Caddy on sullivan), or Parlour serving TLS
   itself? [Reverse proxy — simpler cert renewal.]
@@ -205,7 +209,7 @@ of one film share state — import by title, not by file.
   id; dry-run mode prints the counts first
 - [ ] E3 (S) Import report: matched / unmatched / ambiguous counts;
   unmatched items listed so nothing is silently lost
-- [ ] E4 (S) Cutover checklist run: Parlour on 8090 beside Emby for
+- [ ] E4 (S) Cutover checklist run: Parlour on 8585 beside Emby for
   a week of real use → fix the top pains → D1 port swap
 - **Done when:** Continue Watching looks the same in Parlour as it
   did in Emby, for both Jordan and Kayla.

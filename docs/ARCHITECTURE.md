@@ -43,7 +43,9 @@ Clients store several addresses for a server and try in order:
    ACLs), not the whole tailnet.
 3. Public address (DDNS/IP + port) — fallback where Tailscale is not
    practical, e.g. a Fire TV in a truck. This replaces the owner's
-   current Emby pattern (public IP, port 8096 open).
+   current Emby pattern (public IP, port 8096 open for Emby) — but
+   on Parlour's own ports, decided 2026-11-10: **8585 HTTP** (the
+   one listener) and **8586 HTTPS** (reserved).
 
 Rules for the public route: HTTPS (Parlour-served TLS or reverse
 proxy), rate-limited auth, short-lived stream tokens, admin routes

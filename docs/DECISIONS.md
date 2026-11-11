@@ -25,6 +25,14 @@ the code.
   carried a proprietary placeholder). `LICENSE` is in the repo
   root and the Cargo metadata says `MIT`.
 
+## 2026-11-10 — Ports
+
+- Parlour uses **its own ports**: **8585** for HTTP (the single
+  listener: web UI, API, streaming) and **8586** reserved for
+  HTTPS if Parlour ever serves TLS directly instead of behind a
+  reverse proxy. Deliberately NOT Emby/Jellyfin's 8096 or Silo's
+  8090. Nothing else on the media host uses 8585/8586.
+
 ## 2026-11-10 — Stack
 
 - Rust, Axum + sqlx on PostgreSQL, single binary.
