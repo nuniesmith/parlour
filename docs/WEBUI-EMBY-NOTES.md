@@ -164,6 +164,20 @@ should show the same anatomy with *its* reasons
   come back — the payload's `actions` flags are both false
   and the page points at the host instead. Notices banner +
   Alerts rail are UI5.
+  *Shipped (UI5):* `notices` + `notice_dismissals` tables
+  (migration `20261112010000_notices.sql`).
+  `crates/server/src/notices.rs` **reconciles** once a
+  minute rather than being pushed to: failed jobs from the
+  last 7 days, the metadata-review backlog (one rolling
+  notice), and free space for the cache and artwork folders
+  (D16) each raise a notice; a condition that clears
+  resolves its notice. `GET /api/v1/admin/notices` lists
+  what this admin has not dismissed;
+  `POST /api/v1/admin/notices/{id}/dismiss` hides one for
+  that admin only, until it resolves or its severity
+  changes. The Dashboard shows errors and a pending restart
+  in a banner and everything in the Alerts list — a right
+  rail from 1280 px, under the server card below that.
 - **Now Playing (UI3)**: session cards with §1.4's anatomy
   fed by the existing registry, extended server-side to
   carry the playback plan (container/codecs → mode +

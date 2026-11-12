@@ -249,6 +249,16 @@ export interface ActivityPage {
   next_before: string | null;
 }
 
+export interface Notice {
+  id: string;
+  kind: string;
+  severity: 'info' | 'warning' | 'error';
+  summary: string;
+  detail: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ServerInfo {
   name: string;
   version: string;

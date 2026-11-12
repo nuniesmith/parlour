@@ -4,14 +4,21 @@
   // addresses are displayed as configured, never guessed.
   import { onMount } from 'svelte';
   import ActivityFeed from '$lib/ActivityFeed.svelte';
+  import AlertsRail from '$lib/AlertsRail.svelte';
   import { api } from '$lib/api';
   import NowPlaying from '$lib/NowPlaying.svelte';
-  import type { Job, ServerInfo } from '$lib/types';
+  import type { Job, Notice, ServerInfo } from '$lib/types';
 
   const REFRESH_MS = 15_000;
 
   let info = $state<ServerInfo | null>(null);
   let jobs = $state<Job[]>([]);
+  let notices = $state<Notice[] | null>(null);
+  // The banner is for what should not wait: problems, and a
+  // pending restart. Everything is also listed in the Alerts rail.
+  const urgent = $derived(
+    (notices ?? []).filter((n) => n.severity === 'error' || n.kind === 'restart_required'),
+  );
   let error = $state<string | null>(null);
   let copied = $state<string | null>(null);
   let copyTimer: ReturnType<typeof setTimeout> | null = null;
@@ -37,10 +44,12 @@
   );
 
   async function load() {
-    const [s, j] = await Promise.all([
+    const [s, j, n] = await Promise.all([
       api<ServerInfo>('/api/v1/admin/server'),
       api<Job[]>('/api/v1/admin/jobs?limit=5'),
+      api<Notice[]>('/api/v1/admin/notices'),
     ]);
+    if (n.data) notices = n.data;
     if (s.data) {
       info = s.data;
       error = null;
@@ -48,6 +57,18 @@
       error = s.error ?? 'Could not load server information.';
     }
     if (j.data) jobs = j.data;
+  }
+
+  async function dismiss(notice: Notice) {
+    // Hide it at once; the next refresh confirms.
+    notices = (notices ?? []).filter((n) => n.id !== notice.id);
+    const { status, error: err } = await api(`/api/v1/admin/notices/${notice.id}/dismiss`, {
+      method: 'POST',
+    });
+    if (status !== 204 && status !== 404) {
+      error = err ?? 'Could not dismiss that alert.';
+      await load();
+    }
   }
 
   async function copy(key: string, url: string) {
@@ -77,10 +98,19 @@
 {#if !info}
   {#if !error}<p class="dim">Loading…</p>{/if}
 {:else}
+  <div class="dash">
   <div class="head">
     <h2>{info.name}</h2>
     <button class="btn small" onclick={load}>Refresh</button>
   </div>
+
+  {#if urgent.length}
+    <div class="banner" role="status">
+      {#each urgent as n (n.id)}
+        <p>{n.summary}</p>
+      {/each}
+    </div>
+  {/if}
 
   <section class="card" aria-label="Server">
     <dl>
@@ -130,6 +160,8 @@
     {/if}
   </section>
 
+  <AlertsRail {notices} ondismiss={dismiss} />
+
   <NowPlaying />
 
   <ActivityFeed compact />
@@ -166,9 +198,49 @@
       {/each}
     </ul>
   {/if}
+  </div>
 {/if}
 
 <style>
+  /* One column, Alerts after the server card; from 1280 px the
+     Alerts become a right rail beside everything else. */
+  .dash {
+    display: block;
+  }
+  .dash > :global(.rail) {
+    max-width: 52rem;
+    margin-top: 1.4rem;
+  }
+  @media (min-width: 1280px) {
+    .dash {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 19rem;
+      column-gap: 1.6rem;
+      align-items: start;
+    }
+    .dash > :global(*) {
+      grid-column: 1;
+    }
+    .dash > :global(.rail) {
+      grid-column: 2;
+      grid-row: 1 / span 40;
+      margin-top: 0;
+    }
+  }
+  .banner {
+    max-width: 52rem;
+    margin-bottom: 0.9rem;
+    padding: 0.7rem 1rem;
+    border: 1px solid var(--danger);
+    border-left-width: 0.3rem;
+    border-radius: var(--radius);
+    background: var(--bg-raise);
+    display: grid;
+    gap: 0.3rem;
+  }
+  .banner p {
+    margin: 0;
+  }
   .head {
     display: flex;
     align-items: center;

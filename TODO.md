@@ -123,6 +123,14 @@ change-password PR (A8) is in flight separately.
   player offers Skip (button or auto, per profile). Next
   episode autoplays behind a countdown card, per-profile
   toggle, riding the existing playback reporting.
+- [x] **D16 — Notices: disk check scope + restart notice.
+  DECIDED 2026-11-12:** the disk-space check covers only the
+  folders Parlour writes to (cache, artwork) — a nearly full
+  media drive is normal and raises nothing — warning below
+  5 GB free, error below 1 GB. The "restart to apply" notice
+  is supported by the model and the Dashboard banner but has
+  no trigger until a setting can change at runtime (config is
+  environment-only today).
 
 ---
 
@@ -592,7 +600,7 @@ does NOT depend on Phase 2 transcoding.
   login, playback start/stop, scan/import completion, user/
   invite admin actions; Dashboard feed + full page; 90-day
   retention job.
-- [ ] UI5 (M) **Notices / Alerts**: server notices model fed
+- [x] UI5 (M) **Notices / Alerts**: server notices model fed
   by failed jobs, metadata-review backlog, disk-space check,
   config-changed-restart flag; Dashboard banner + right-rail
   Alerts list with icons + timestamps; dismiss per admin.

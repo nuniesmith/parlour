@@ -187,3 +187,22 @@ directions, 2026-11-11 evening.
   start/progress/stopped reporting so Continue Watching
   and the recommendation affinity stay truthful.
   Tasks: TODO Phase 9.
+
+## 2026-11-12 — Notices (UI5)
+
+Asked of the owner while building UI5, answered the same day.
+
+- **D16 Disk check scope and the restart notice:** the
+  Dashboard's low-disk notice looks only at the folders
+  Parlour itself writes to — the cache and artwork
+  directories. Media drives are deliberately not checked: a
+  nearly full media drive is the normal state of a library
+  and would be a permanent false alarm. Thresholds are fixed
+  sizes, not percentages: **warning below 5 GB free, error
+  below 1 GB**. The "restart the server to apply changes"
+  notice exists in the model and is shown in the Dashboard
+  banner, but nothing raises it yet — all configuration is
+  read from the environment at startup, so a running server
+  cannot know it changed. The first runtime-editable setting
+  (UI6 General) is what will raise it; it clears itself at
+  the next start.

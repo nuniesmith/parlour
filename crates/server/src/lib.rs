@@ -15,5 +15,6 @@ pub mod invites;
 pub mod libraries;
 pub mod limiter;
 pub mod metadata;
+pub mod notices;
 pub mod playback;
 pub mod profiles;
