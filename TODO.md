@@ -6,8 +6,14 @@ Check boxes off in the same PR that does the work. Sizes are
 T-shirt estimates (S = hours, M = a day or two, L = most of a week)
 for one developer with AI assistance, not promises.
 
-**Current position:** Phase 0 (skeleton) ✅ done 2026-11-10.
-Everything below Phase 1 is unchecked.
+**Current position:** Phase 0 ✅ and Phase 1 **code** ✅ done
+2026-11-10 (M1.1–M1.7 merged, PRs #1–#7). The only Phase 1 item
+left is E4, the operational cutover week. Phase 2 was expanded
+2026-11-11 with the ABR / segment-cache plan (D8–D9, T10–T18),
+Phase 4 with recommendations (D10, REC1–REC5) and a detailed
+*arr request lifecycle (D11), and the client phases re-sequenced
+per D12 (web is the ABR test vehicle; Android phone next; TV
+deferred pending the OS check R7; iOS after that).
 
 ---
 
@@ -41,6 +47,43 @@ Everything below Phase 1 is unchecked.
 - [x] **D7 — Sessions. DECIDED:** hand-rolled DB-backed sessions
   (cookie = random token, only its hash stored in the DB). The
   invite flow is custom anyway; one less dependency to trust.
+- [x] **D8 — Adaptive streaming, no manual bitrate picker.
+  DECIDED 2026-11-11:** remote playback is Netflix-style ABR —
+  the server offers an HLS bitrate ladder, the *client* measures
+  throughput + buffer and switches rungs per segment, starting
+  low and ramping up. No bitrate menu anywhere; the only user
+  control is the per-profile remote cap that already exists.
+  HLS-only for v1 (iOS AVPlayer has no DASH; a DASH manifest
+  over the same CMAF segments is a later add-on, not a
+  re-encode). Research: 2026-11-11 ABR report §1.
+- [x] **D9 — No Redis. DECIDED 2026-11-11:** video segments are
+  never cached in Redis/Memcached (wrong tool: large immutable
+  files; Memcached's default item limit is 1 MB). Segments live
+  in a filesystem/SSD cache (T13); jobs and sessions stay in
+  Postgres. Revisit Redis only if Parlour ever goes multi-node
+  or a measured Postgres bottleneck appears. Research §2.
+- [x] **D10 — Recommendations are content-based. DECIDED
+  2026-11-11:** no collaborative filtering and no ML in v1
+  (2–10 users make CF meaningless). V1 is watch-history affinity
+  + catalog content (genres/people/keywords) + TMDB's own
+  recommendations/similar edges, scored in SQL, per profile,
+  every personalised row labelled with its seed. Research §3.
+- [x] **D11 — Requests are native, *arr are downstream. DECIDED
+  2026-11-11:** the request lifecycle (Seerr-shaped) lives in
+  Parlour with Parlour auth/profiles/quotas. Parlour calls
+  Sonarr/Radarr directly; it **never calls Prowlarr to place or
+  track a request** (Prowlarr has no library/queue — it only
+  syncs indexers into the *arr apps; read-only health at most).
+  Lidarr is `/api/v1` + MusicBrainz, not `/api/v3`. Research §4.
+- [x] **D12 — Client sequence. DECIDED 2026-11-11:** web client
+  is the primary ABR test vehicle (including on the TV's
+  browser); Android **phone** next; TV native deferred behind
+  the OS check (R7) — Amazon's device table lists the owner's
+  new Ember Artline TV as Fire OS 8 (Android 11), *not* Vega
+  OS, so the TV build is probably the cheap Android TV flavour
+  after all; Vega/Kepler is a separate parked track that starts
+  only if a Vega device is actually owned. iOS after Android.
+  Research §5.
 
 ---
 
@@ -60,8 +103,9 @@ Everything below Phase 1 is unchecked.
 | `crates/integrations` | *arr, Prowlarr, qBittorrent, requests | 4 |
 | `crates/discord` | Optional in-binary Discord bot | 4 |
 | `web/` | SvelteKit UI — the first client | 1 |
-| `clients/android` | Kotlin/Media3 phone + Fire TV | 3 |
+| `clients/android` | Kotlin/Media3 phone first; TV flavour later (D12) | 3 |
 | `clients/ios` | Swift/AVPlayer | 6 |
+| — (parked) | Vega/Kepler TV app (React Native, `.vpkg`) — only if a Vega device is owned | — |
 | `migrations/` | Schema, timestamped + append-only | 1 (grows) |
 
 ---
@@ -231,9 +275,13 @@ go back to Emby for X" moments.
 - [ ] T2 (L) Decision engine v2: full plan matrix (client × codec ×
   network × per-user remote cap × subtitle choice) — pure
   function, table-driven tests for every row
-- [ ] T3 (L) Transcode sessions: keyframe-aligned HLS/fMP4 (6 s),
-  seek = restart FFmpeg at the keyframe, throttle to a buffer
-  ahead, scratch on SSD/tmpfs with reaping
+- [ ] T3 (L) Transcode sessions: **one FFmpeg process per
+  session with multiple outputs** (decode once, `split` to the
+  ladder rungs, `-var_stream_map` + master playlist), never one
+  process per rung; keyframe-aligned HLS/fMP4 — **6 s segments,
+  2 s GOP** (`-g`/`-keyint_min` = fps×2, `-sc_threshold 0`,
+  segment must start on an IDR at identical timestamps on every
+  rung); seek = restart FFmpeg at the keyframe
 - [ ] T4 (M) HDR→SDR tone mapping order: libplacebo → vendor
   filters → CPU last resort; logged per session
 - [ ] T5 (M) Subtitle burn-in path for picture subs on clients that
@@ -241,23 +289,118 @@ go back to Emby for X" moments.
   it's transcoding
 - [ ] T6 (M) Caps: max concurrent transcodes (GPU-bound), per-user
   remote bitrate cap enforced in the plan; queue/wait behaviour
-- [ ] T7 (S) Truck test: Fire TV + browser from the truck on the
-  public route, bandwidth-limited stream starts < 5 s
+- [ ] T7 (S) Truck test: **web client** from the truck on the
+  public route (the D12 test vehicle), bandwidth-limited stream
+  starts < 5 s, ramps up without a manual quality choice
 - [ ] T8 (S) Admin playback dashboard: live sessions, backend in
   use, FFmpeg command per session (Jellyfin's good habit)
 - [ ] T9 (M) Public-listener hardening (with D2/D3): HTTPS only,
   auth rate limits already in A1, no admin routes without auth,
   security headers; tailnet/LAN unchanged
 
-## Phase 3 — Android + Fire TV (`clients/android`)
+### Milestone 2.1 — ABR ladder + segment cache (D8/D9, research §1–§2)
+- [ ] T10 (S) Ladder config in `core`: data-driven rendition
+  table, H.264 v1 — 360p 0.4–0.8 M, 480p 1.2–1.5 M, 540p 2 M
+  (default start), 720p 3–4.5 M, 1080p 6–8 M, **one shared AAC
+  stereo track (128k) across all rungs**; prune rungs above the
+  source's resolution/bitrate, never upscale; 2160p only as
+  DirectPlay/pre-transcode. Depends on: nothing. Blocks T11.
+- [ ] T11 (M) GPU session budget + admission control: probe the
+  backend's real budget (GeForce NVENC cap is **12 sessions per
+  system** — a 5-rung ladder × 3 viewers = 15 and *fails*;
+  QSV/VAAPI have no session cap, only throughput). Count
+  sessions as Σ rungs per active session; when a new session
+  would exceed budget − headroom, degrade it (fewer rungs,
+  Remux, or DirectPlay) and say so in the UI — never spawn
+  FFmpeg until it errors. Depends on: T1, T10.
+- [ ] T12 (M) JIT ahead-window: transcode only **~120 s ahead**
+  of the playhead (20 × 6 s segments), pause/kill-and-resume at
+  a segment offset when the window is full, reap idle sessions.
+  The server window is deliberately separate from the client's
+  buffer target. Depends on: T3, T13.
+- [ ] T13 (L) Filesystem segment cache (**the** cache — D9, no
+  Redis): layout `cache/<file_id>/<rendition>/seg-*.m4s` +
+  playlists; keyed by (file, source mtime/hash,
+  rendition-params hash incl. encoder-settings version);
+  atomic writes (temp → rename, never serve partial output);
+  Postgres cache index (size, last-accessed) with an LRU
+  sweeper under a configurable size cap, TTL for never-finished
+  JIT cache, **pinning for partially-watched items**;
+  single-flight lock per (file, rendition) so two viewers never
+  spawn duplicate ladders; cache-aware start — resume encoding
+  at the first missing segment, not from 0. Depends on: T3.
+  Blocks T12, T14.
+- [ ] T14 (M) Pre-transcode jobs: Postgres-queued background
+  full-ladder encodes for popular / recently-added /
+  partially-watched items, off-peak; output lands in the T13
+  cache so playback is then pure file serving. Depends on:
+  T11, T13.
+- [ ] T15 (M) Web player ABR profile — **the primary test
+  vehicle (D12)**: hls.js `maxBufferLength 90`,
+  `maxMaxBufferLength 120`, `maxBufferSize` **250 MB** (the
+  60 MB default silently caps a 90 s buffer at high rungs),
+  `backBufferLength 30`, EWMA VoD defaults (fast 3.0 / slow
+  9.0 — do not copy blog values), `abrEwmaDefaultEstimate`
+  ~2 Mbps on Wi-Fi / ~730 kbps on cellular, fragment retry 6,
+  fatal-error recovery (`NETWORK_ERROR → startLoad`,
+  `MEDIA_ERROR → recoverMediaError`); QoE logging (startup ms,
+  rebuffers, rung switches, buffer health) posted with the P4
+  stopped report. Pin the hls.js version and re-check defaults
+  against *its* docs (R9). Depends on: T10 (ladder to play).
+- [ ] T16 (M) Web on the TV browser: spatial/D-pad navigation +
+  visible focus in the SvelteKit UI, 10-foot layout/large type,
+  small `backBufferLength` + byte caps for TV-class memory;
+  test on the actual Ember TV's built-in browser and record
+  whether MSE/hls.js are viable there — that result, not a
+  guess, gates the native TV timeline. Depends on: T15.
+- [ ] T17 (S) HEVC as an *additional* ladder for clients that
+  report hardware HEVC (Apple/TV) — never the only ladder
+  (browser support is hardware-fragmented; an HEVC-only web
+  ladder black-screens some clients). AV1 is an offline
+  pre-transcode experiment only — live AV1 JIT is oversold.
+  Parked behind T10–T15 working.
+- **Done when (2.1):** on a throttled connection the web player
+  starts at a low rung in ~1 s, ramps to the best rung the
+  connection sustains, drops a rung instead of rebuffering when
+  the connection dips, and a resumed title plays from cache
+  with zero GPU use.
+
+## Phase 3 — Android phone, then TV flavour (`clients/android`, D12)
 - [ ] N1 (M) Kotlin/Media3 skeleton: server list with multi-address
-  entries tried in order LAN → Tailscale → public; one login
-- [ ] N2 (M) TV UI (Leanback-style rows) + phone UI from one
-  codebase; D-pad-first navigation, big type, fast focus
+  entries tried in order LAN → Tailscale → public, failover at
+  playback start / on fatal network error (restart at position
+  on the new origin), one login; client sends a capability
+  profile at session start (codecs, max resolution) so the
+  server can pick ladder/DirectPlay
+- [ ] N2 (M) **Phone UI first** (Compose): browse, search, detail,
+  profile picker; TV UI is N8, a flavour of this app, not a
+  second app
 - [ ] N3 (M) Player: Media3 with native PGS/picture-subtitle
   rendering, audio/subtitle pickers, resume + reporting (P4 shape)
-- [ ] N4 (S) Sideload install on every home Fire Stick; living-room
-  soak test vs the Emby app it replaces
+- [ ] N7 (M) Media3 ABR profile (research §1.5):
+  `DefaultLoadControl` min 50 s / max 120 s buffer,
+  bufferForPlayback 2.5 s / after-rebuffer 5 s (large *target*,
+  fast *start* — don't conflate them),
+  `prioritizeTimeOverSizeThresholds(true)` or an explicit
+  ~200 MB byte target so the byte cap doesn't override the time
+  target; `DefaultTrackSelector` caps (max video size,
+  data-saver bitrate cap on cellular); keep the default
+  AdaptiveTrackSelection/bandwidth meter — tune parameters,
+  don't fork the ABR. Depends on: T10.
+- [ ] N4 (S) Sideload install on the owner's phone + living-room /
+  road soak test vs the Emby app it replaces (adb install; no
+  store needed for household use)
+- [ ] N8 (L) TV flavour — **only after R7 confirms Fire OS**:
+  `LEANBACK_LAUNCHER` flavour, 320×180 banner, Compose-for-TV
+  rows, D-pad-first navigation with visible focus (the focus
+  work, not playback, is the bulk of this), byte-capped buffers
+  for 1–2 GB RAM TV hardware; sideload onto the owner's set via
+  adb/Downloader. Depends on: N1–N3, N7, R7.
+- [ ] N9 (—) **PARKED — Vega/Kepler TV app.** Separate project
+  (React Native + Vega SDK, `.vpkg`, W3C MSE player with
+  Shaka/hls.js, dev-install via Vega CLI — no adb, no APKs,
+  cleartext-LAN needs explicit config). Starts only if a Vega
+  device is actually owned (D12). Do not estimate it as a port.
 - [ ] N5 (M) Store prep (only when publishing — see DECISIONS):
   Amazon developer account, reviewer demo server with
   public-domain media + test account, privacy policy page, store
@@ -265,13 +408,76 @@ go back to Emby for X" moments.
 - [ ] N6 (S) Optional later: offline downloads in the **phone**
   build only (truck use); TV build stays streaming-only
 
-## Phase 4 — Requests + integrations (`integrations`, `discord`)
-- [ ] I1 (M) *arr clients: Sonarr/Radarr/Lidarr (`/api/v3`,
-  `X-Api-Key`), Prowlarr (`/api/v1`), qBittorrent WebUI —
-  credentials encrypted in DB, admin-only, connection-test buttons
-- [ ] I2 (L) Requests in Parlour: search (TMDB) → already-in-library
-  check → request → admin approval or per-user quota → route to
-  the right *arr app → status sync job → notify the requester
+## Phase 4 — Recommendations + requests + integrations (`integrations`, `discord`)
+
+### Recommendations (D10, research §3)
+- [ ] REC1 (M) TMDB edges cache: per catalog item, fetch +
+  persist `/recommendations` and `/similar` (movie + TV
+  endpoints; recommendations weighted above similar), plus
+  trending (day/week) snapshots; weekly refresh job. Never call
+  TMDB per page render. Depends on: MD1.
+- [ ] REC2 (M) Affinity profiles: per `profile_id`, aggregate
+  genre/person/keyword affinity from watch events — completed
+  (≥85%) **+3**, favourite **+3**, rewatch **+2**, partial
+  (20–85%) **+1**, abandoned (<20% after ≥5 min) **−2**,
+  dismissed/not-interested **−5** — with recency decay
+  `0.5^(age_days/180)`; recomputed nightly + on watch events.
+  Profiles strictly separate. Depends on: P4 reporting being
+  accurate (completion % is an input, not just UX).
+- [ ] REC3 (L) Scoring v1 in SQL: candidate score = 3.0·genre
+  affinity + 2.0·people affinity + 1.0·keyword affinity +
+  2.5·TMDB-edge signal (capped) + 0.5·quality prior
+  (vote average × log vote count) + 0.5·in-library boost;
+  exclude watched/dismissed; materialised per-profile scores
+  refreshed by job; row APIs: Because-you-watched,
+  More-like-this, Top-picks, Trending. Depends on: REC1, REC2.
+- [ ] REC4 (M) Recs UI rows in the web UI: every personalised
+  row names its seed ("Because you watched X"); item pages show
+  shared genre/people chips; **kids profiles get a hard
+  certification filter inside the query**, not UI hiding;
+  cold-start profiles fall back to onboarding genre picks +
+  trending/top-rated — never fake personalisation. Depends
+  on: REC3.
+- [ ] REC5 (S) Discover page: TMDB trending/popular + rec-driven
+  not-in-library titles, clearly global (not personalised),
+  each with a Request button into I2. Depends on: REC1, I2.
+
+### Requests + *arr (D11, research §4)
+- [ ] I1 (M) *arr clients: Sonarr + Radarr (`/api/v3`,
+  `X-Api-Key` header; lookup by `tvdb:`/`tmdb:` term, root
+  folders + quality profiles discovered for the admin mapping
+  UI, add + search commands), Lidarr (`/api/v1`, MusicBrainz —
+  later), qBittorrent WebUI — credentials encrypted in DB,
+  admin-only, **Test connection hits `GET /system/status`** and
+  verifies the instance's own API shape before anything else.
+  Prowlarr: read-only health only (D11).
+- [ ] I2 (L) Requests in Parlour (Seerr-shaped lifecycle):
+  search (TMDB) → already-in-library check → request (movies
+  whole; **TV partial-season** — selected seasons only) →
+  states pending / approved / declined / processing /
+  available / failed / no-releases → admin approval or
+  per-user auto-approve + **quotas** (per-user movie/TV-season
+  limits per window) → dispatch: existence pre-check first
+  (`GET /movie?tmdbId=`, `GET /series?tvdbId=`), add with
+  `monitored` + `searchForMissingEpisodes`/`searchForMovie`,
+  **an add that returns 400/422 "already added" is idempotent
+  success, not an error**; `hasFile` = already available, never
+  dispatch; no-releases is a real state with scheduled retry,
+  not an eternal "processing"; stuck queue items surface their
+  reason with a blocklist-and-research action
+  (`DELETE /queue/{id}?removeFromClient=true&blocklist=true`
+  + new search). Sanitise Radarr tags to `[a-z0-9-]`.
+- [ ] I6 (M) *arr webhook receiver: authenticated endpoint for
+  Sonarr/Radarr Connect webhooks — On Import + On Upgrade flip
+  the request to available, trigger a targeted scan, and
+  notify the requester; On Grab / Download Failure update
+  status. **Plus startup reconciliation**: poll queue/history
+  for active requests on boot (webhooks get missed while
+  Parlour is down). Depends on: I2.
+- [ ] I7 (S) Request status poller: interval poll of
+  `/queue` + `/history` for active requests between webhooks;
+  surfaces `trackedDownloadStatus` warnings in the UI.
+  Depends on: I2.
 - [ ] I3 (M) Books flow: no *arr app exists (Readarr retired) —
   Prowlarr search → qBittorrent → library folder, tracked as a
   request like everything else
@@ -292,11 +498,27 @@ go back to Emby for X" moments.
 - [ ] X3 (S) Decide with real usage: keep, freeze, or delete —
   compat that nobody uses gets deleted, not maintained
 
-## Phase 6 — iOS (`clients/ios`)
+## Phase 6 — iOS (`clients/ios`, D12 — after Android)
 - [ ] S1 (M) Swift/AVPlayer app: same server entries + login,
-  browse, play with reporting; subtitles via HLS/WebVTT
+  browse, play with reporting; subtitles via HLS/WebVTT.
+  HLS-only platform — the T10 ladder serves it unchanged.
+- [ ] S3 (S) AVPlayer caps (the *only* ABR control Apple
+  exposes — the algorithm itself is opaque, don't try to
+  replace it): `preferredPeakBitRate` per network kind
+  (+ `preferredPeakBitRateForExpensiveNetworks` ~1.5 Mbps),
+  `preferredForwardBufferDuration` ~60 s if testing shows the
+  default under-buffers on cellular,
+  `automaticallyWaitsToMinimizeStalling = true` for VoD.
 - [ ] S2 (S) TestFlight → App Store prep (same demo-server +
-  privacy-policy assets as N5, Apple flavour)
+  privacy-policy assets as N5, Apple flavour). TestFlight
+  facts: 100 internal / 10,000 external testers, **builds
+  expire after 90 days** — put a refresh reminder on the
+  calendar, don't discover it on the road.
+- [ ] S4 (M) Optional later: offline downloads via
+  `AVAssetDownloadTask` — clean for Parlour's **unencrypted**
+  HLS (no FairPlay complexity — don't import it); downloads
+  are sandbox assets, rendition chosen from the T10 ladder.
+  Phone only, like N6.
 
 ---
 
@@ -326,3 +548,16 @@ go back to Emby for X" moments.
   sullivan + NVENC session limits on consumer drivers
 - [ ] R5 (1 h, Phase 3) Media3 on Fire OS: which Fire OS versions
   on the household sticks, ExoPlayer subtitle support matrix
+- [ ] R6 (1 h, before T11) **Sullivan GPU inventory**: which GPU
+  is actually in sullivan (the NVENC session math assumes
+  GeForce; an Intel-only box makes QSV *throughput* the limit)
+  + a real concurrent-encode benchmark on that hardware
+- [ ] R7 (5 min, owner, gates N8) **TV OS check**: on the new
+  Ember TV, Settings → About — record the build model + OS
+  version. Amazon's table says Ember Artline = Fire OS 8
+  (AFTB… builds); a Vega result would park N8 and unpark N9
+- [ ] R8 (2 h, before T16) TV built-in browser viability: does
+  the Ember TV's browser run MSE + hls.js at usable speed?
+- [ ] R9 (1 h, before T15/N7) Pin hls.js + Media3 versions in
+  the lockfiles and re-check every ABR default in T15/N7
+  against the *bundled* versions' docs (defaults drift)
