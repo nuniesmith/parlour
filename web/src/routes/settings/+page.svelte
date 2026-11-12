@@ -19,6 +19,10 @@
     audio_lang: '',
     remote_cap: '',
   });
+  let pwForm = $state({ current: '', next: '', confirm: '' });
+  let pwError = $state<string | null>(null);
+  let pwNotice = $state<string | null>(null);
+  let pwSaving = $state(false);
 
   onMount(async () => {
     await loadSession();
@@ -58,6 +62,41 @@
       await loadSession();
     } else {
       error = err ?? 'Could not save settings.';
+    }
+  }
+
+  async function changePassword(event: SubmitEvent) {
+    event.preventDefault();
+    pwError = null;
+    pwNotice = null;
+    if (pwForm.next.length < 8) {
+      pwError = 'New password must be at least 8 characters.';
+      return;
+    }
+    if (pwForm.next !== pwForm.confirm) {
+      pwError = 'New password and confirmation do not match.';
+      return;
+    }
+    if (pwForm.next === pwForm.current) {
+      pwError = 'New password must be different from your current password.';
+      return;
+    }
+    pwSaving = true;
+    const { status, error: err } = await api('/api/v1/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({
+        current_password: pwForm.current,
+        new_password: pwForm.next,
+      }),
+    });
+    pwSaving = false;
+    if (status === 204) {
+      pwForm = { current: '', next: '', confirm: '' };
+      pwNotice = 'Password changed. Your other sessions have been signed out.';
+      const { data } = await api<SessionRow[]>('/api/v1/auth/sessions');
+      sessions = data ?? [];
+    } else {
+      pwError = err ?? 'Could not change password.';
     }
   }
 
@@ -107,6 +146,45 @@
 {:else}
   <p class="dim">Pick a profile first — playback settings live on profiles.</p>
 {/if}
+
+<h2>Change password</h2>
+<form onsubmit={changePassword} class="form">
+  {#if pwError}<p class="error" role="alert">{pwError}</p>{/if}
+  {#if pwNotice}<p class="notice" role="status">{pwNotice}</p>{/if}
+  <div class="field">
+    <label for="pw-current">Current password</label>
+    <input
+      id="pw-current"
+      type="password"
+      bind:value={pwForm.current}
+      autocomplete="current-password"
+      required
+    />
+  </div>
+  <div class="field">
+    <label for="pw-new">New password (8 or more characters)</label>
+    <input
+      id="pw-new"
+      type="password"
+      bind:value={pwForm.next}
+      autocomplete="new-password"
+      required
+      minlength="8"
+    />
+  </div>
+  <div class="field">
+    <label for="pw-confirm">Confirm new password</label>
+    <input
+      id="pw-confirm"
+      type="password"
+      bind:value={pwForm.confirm}
+      autocomplete="new-password"
+      required
+    />
+  </div>
+  <button class="btn primary" type="submit" disabled={pwSaving}>Change password</button>
+  <p class="dim">Changing your password signs out your other sessions.</p>
+</form>
 
 <h2>Sessions</h2>
 <p class="dim">Devices signed in as {session.me?.user.username}.</p>
