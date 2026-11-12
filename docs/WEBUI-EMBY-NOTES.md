@@ -229,6 +229,20 @@ should show the same anatomy with *its* reasons
   kind supports it, errors), Import/Export (Phase 8's UI8
   lands here), Emby Import (under Library). URLs stay
   `/admin/...` deep-linkable.
+  *Shipped (UI6):* one route per page under
+  `web/src/routes/admin/` — `/admin` (Dashboard),
+  `/admin/general`, `/admin/users`, `/admin/library`,
+  `/admin/library/emby-import`, `/admin/metadata`,
+  `/admin/sessions`, `/admin/jobs`, `/admin/activity`,
+  `/admin/import-export` — sharing `admin/+layout.svelte`
+  (table/form styles, and a "Page not found" for non-admins;
+  the API remains the real gate). Old `/admin?tab=…` links
+  redirect. General is read-only: it shows each setting with
+  the environment variable that sets it. Library access
+  grants moved to Users. Jobs gained per-job error and result
+  detail and "run now" for the two kinds that can be started
+  by hand (per-library scan and metadata match). Import /
+  Export is an honest placeholder until Phase 8.
 - **Preferences IA (UI7)**: Settings splits into Display,
   Home Screen (rail toggles/order), Playback (autoplay-next
   + skip behaviour — Phase 9 SEG5/SEG6 read these), 

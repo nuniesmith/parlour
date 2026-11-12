@@ -14,6 +14,19 @@
       page.url.pathname.startsWith('/invite'),
   );
 
+  const ADMIN_TITLES: Record<string, string> = {
+    '/admin': 'Dashboard',
+    '/admin/general': 'General',
+    '/admin/users': 'Users',
+    '/admin/library': 'Library',
+    '/admin/library/emby-import': 'Emby import',
+    '/admin/metadata': 'Metadata',
+    '/admin/sessions': 'Sessions',
+    '/admin/jobs': 'Jobs',
+    '/admin/activity': 'Activity',
+    '/admin/import-export': 'Import / Export',
+  };
+
   // Top-bar title. Item and player pages carry their own heading
   // in the page body, so the bar stays quiet there.
   const title = $derived.by(() => {
@@ -22,7 +35,9 @@
     if (path === '/search') return 'Search';
     if (path === '/settings') return 'Settings';
     if (path === '/web-settings') return 'Web Settings';
-    if (path === '/admin') return 'Server';
+    if (path === '/admin' || path.startsWith('/admin/')) {
+      return ADMIN_TITLES[path] ?? 'Server';
+    }
     if (path.startsWith('/library/')) {
       return session.libraries.find((l) => l.id === page.params.id)?.name ?? 'Library';
     }

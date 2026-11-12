@@ -604,7 +604,7 @@ does NOT depend on Phase 2 transcoding.
   by failed jobs, metadata-review backlog, disk-space check,
   config-changed-restart flag; Dashboard banner + right-rail
   Alerts list with icons + timestamps; dismiss per admin.
-- [ ] UI6 (L) **Admin IA re-org**: the one tabbed `/admin`
+- [x] UI6 (L) **Admin IA re-org**: the one tabbed `/admin`
   page becomes the sidebar Server tree: Dashboard, General,
   Users (users + invites + access), Library (libraries,
   paths, scans, Emby import), Metadata (review queue),
