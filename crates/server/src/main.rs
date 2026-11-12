@@ -60,6 +60,11 @@ async fn main() {
         api_key: config.emby_api_key.clone(),
     };
     parlour_server::catalog::spawn_background(pool.clone(), metadata.clone(), emby.clone());
+    // UI5: keep the Dashboard's notices in line with reality.
+    parlour_server::notices::spawn(
+        pool.clone(),
+        parlour_server::notices::NoticeSettings::from_config(&config),
+    );
 
     let mut state = AppState::new(pool, config.web_dir.clone(), config.cookie_secure);
     state.metadata = metadata;

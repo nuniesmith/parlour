@@ -1224,6 +1224,7 @@ dependencies = [
  "chrono",
  "dotenvy",
  "hmac 0.12.1",
+ "libc",
  "mime_guess",
  "notify",
  "parlour-catalog",
