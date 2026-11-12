@@ -152,6 +152,8 @@ press play, resume where you left off, subtitles on.
   every item query (someone else's library = 404, never 403)
 - [x] A7 (S) Admin-only route guard; admin surfaces never render
   for normal users
+- [x] A8 (S) In-app change password: `POST /api/v1/auth/change-password`
+  + settings form; changing revokes the user's other sessions
 - **Done when:** Jordan + Kayla + one invited friend can each log
   in with separate profiles, and the friend cannot see a private
   library even by guessing URLs.

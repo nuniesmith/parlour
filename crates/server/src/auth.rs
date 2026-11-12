@@ -512,11 +512,64 @@ async fn revoke_session(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Deserialize)]
+struct ChangePasswordRequest {
+    current_password: String,
+    new_password: String,
+}
+
+/// Change the signed-in user's password. The current password must
+/// check out (401 otherwise), the new one must pass the same
+/// validation as sign-up and differ from the current one.
+/// Changing the password revokes every OTHER session for the
+/// user; the session making the change stays signed in.
+async fn change_password(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(body): Json<ChangePasswordRequest>,
+) -> Result<StatusCode, AppError> {
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT password_hash FROM users WHERE id = $1 AND disabled_at IS NULL")
+            .bind(user.user_id)
+            .fetch_optional(&state.pool)
+            .await
+            .map_err(AppError::from)?;
+    let Some((stored_hash,)) = row else {
+        return Err(AppError::Unauthorized("not signed in".into()));
+    };
+    if !verify_password(&body.current_password, &stored_hash) {
+        return Err(AppError::Unauthorized(
+            "current password is incorrect".into(),
+        ));
+    }
+    validate_password(&body.new_password)?;
+    if body.new_password == body.current_password {
+        return Err(AppError::BadRequest(
+            "new password must be different from the current password".into(),
+        ));
+    }
+    let hash = hash_password(&body.new_password)?;
+    sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
+        .bind(&hash)
+        .bind(user.user_id)
+        .execute(&state.pool)
+        .await
+        .map_err(AppError::from)?;
+    sqlx::query("DELETE FROM sessions WHERE user_id = $1 AND id != $2")
+        .bind(user.user_id)
+        .bind(user.session_id)
+        .execute(&state.pool)
+        .await
+        .map_err(AppError::from)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/v1/auth/login", post(login))
         .route("/api/v1/auth/logout", post(logout))
         .route("/api/v1/auth/me", get(me))
+        .route("/api/v1/auth/change-password", post(change_password))
         .route("/api/v1/auth/sessions", get(list_sessions))
         .route("/api/v1/auth/sessions/{id}", delete(revoke_session))
 }
