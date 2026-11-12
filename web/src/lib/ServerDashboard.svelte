@@ -4,6 +4,7 @@
   // addresses are displayed as configured, never guessed.
   import { onMount } from 'svelte';
   import { api } from '$lib/api';
+  import NowPlaying from '$lib/NowPlaying.svelte';
   import type { Job, ServerInfo } from '$lib/types';
 
   const REFRESH_MS = 15_000;
@@ -127,6 +128,8 @@
       </p>
     {/if}
   </section>
+
+  <NowPlaying />
 
   <div class="head">
     <h2>Job queue</h2>

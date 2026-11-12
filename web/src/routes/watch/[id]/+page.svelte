@@ -1,9 +1,14 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
   import { page } from '$app/state';
   import Hls from 'hls.js';
   import { api } from '$lib/api';
-  import { formatDurationMs, type ItemDetail, type PlaybackInfo } from '$lib/types';
+  import {
+    deviceLabel,
+    formatDurationMs,
+    type ItemDetail,
+    type PlaybackInfo,
+  } from '$lib/types';
 
   let detail = $state<ItemDetail | null>(null);
   let info = $state<PlaybackInfo | null>(null);
@@ -17,20 +22,45 @@
 
   const itemId = $derived(page.params.id ?? '');
 
+  // The id the server gave this playback session, sent back on
+  // every later report so two tabs on one item stay distinct.
+  let sessionId: string | null = null;
+  // An admin ended this session from the Dashboard (UI3).
+  let stoppedByAdmin = $state(false);
+
   function report(kind: 'start' | 'progress' | 'stopped') {
-    if (!info || !video) return;
-    const body = {
+    if (!info || !video || stoppedByAdmin) return;
+    const body: Record<string, unknown> = {
       item_id: info.item_id,
       file_id: info.file_id,
       position_ms: Math.round((video.currentTime || 0) * 1000),
       duration_ms: video.duration ? Math.round(video.duration * 1000) : undefined,
     };
-    if (kind === 'start') reported = true;
-    void api(`/api/v1/playback/${kind}`, {
+    if (kind === 'start') {
+      reported = true;
+      body.client_name = 'Parlour Web';
+      body.device_name = deviceLabel(navigator.userAgent);
+    } else if (sessionId) {
+      body.session_id = sessionId;
+    }
+    void api<{ session_id: string }>(`/api/v1/playback/${kind}`, {
       method: 'POST',
       body: JSON.stringify(body),
       keepalive: kind === 'stopped',
+    }).then(({ status, data }) => {
+      if (kind === 'start' && data) sessionId = data.session_id;
+      // 409: the server stopped this session and revoked its stream.
+      if (kind === 'progress' && status === 409) onStoppedByAdmin();
     });
+  }
+
+  function onStoppedByAdmin() {
+    stoppedByAdmin = true;
+    if (progressTimer) clearInterval(progressTimer);
+    progressTimer = null;
+    video?.pause();
+    hls?.destroy();
+    hls = null;
   }
 
   async function waitForPlaylist(url: string) {
@@ -147,6 +177,8 @@
       if (p.data.resume_position_ms <= 0) {
         resumeChoice = 'restart';
         started = true;
+        // The <video> only exists once `info` has rendered.
+        await tick();
         await attach();
       }
     } else {
@@ -174,6 +206,13 @@
     · {info.reason}
     {#each info.warnings as w (w)}<br /><span class="warn">{w}</span>{/each}
   </p>
+
+  {#if stoppedByAdmin}
+    <p class="error" role="alert">
+      Playback was stopped by an administrator.
+      <button class="btn small" onclick={() => location.reload()}>Play again</button>
+    </p>
+  {/if}
 
   <div class="player-wrap">
     <video
