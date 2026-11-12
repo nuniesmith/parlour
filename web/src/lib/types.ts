@@ -183,6 +183,55 @@ export interface Job {
   finished_at: string | null;
 }
 
+export interface StreamPlan {
+  action: string;
+  reason: string;
+  delivery: 'file' | 'hls';
+  client: string;
+  network: string;
+  container: string | null;
+  bitrate_kbps: number | null;
+  video: {
+    codec: string | null;
+    width: number | null;
+    height: number | null;
+    hdr_format: string | null;
+    mode: string;
+  } | null;
+  audio: {
+    codec: string | null;
+    language: string | null;
+    channels: number | null;
+    is_default: boolean;
+    mode: string;
+  } | null;
+}
+
+export interface PlaybackSession {
+  session_id: string;
+  username: string;
+  profile_name: string;
+  item_id: string;
+  item_title: string;
+  item_kind: string;
+  series_title: string | null;
+  season_number: number | null;
+  episode_number: number | null;
+  poster_item_id: string | null;
+  started_at: string;
+  last_seen: string;
+  position_ms: number;
+  duration_ms: number | null;
+  client: {
+    name: string | null;
+    version: string | null;
+    device: string | null;
+    user_agent: string | null;
+  };
+  remote: { ip: string | null; forwarded_for: string | null; protocol: string | null };
+  plan: StreamPlan | null;
+}
+
 export interface ServerInfo {
   name: string;
   version: string;
@@ -263,4 +312,32 @@ export function formatDurationMs(ms: number | null): string {
   return h > 0
     ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
     : `${m}:${String(s).padStart(2, '0')}`;
+}
+
+/** A short "Browser on OS" label for the Now Playing card. Display
+ *  only — the server never derives capabilities from it. */
+export function deviceLabel(ua: string): string {
+  const browser = /Silk\//.test(ua)
+    ? 'Silk'
+    : /Edg\//.test(ua)
+      ? 'Edge'
+      : /Firefox\//.test(ua)
+        ? 'Firefox'
+        : /Chrome\//.test(ua)
+          ? 'Chrome'
+          : /Safari\//.test(ua)
+            ? 'Safari'
+            : 'Browser';
+  const os = /Android/.test(ua)
+    ? 'Android'
+    : /iPhone|iPad|iPod/.test(ua)
+      ? 'iOS'
+      : /Windows/.test(ua)
+        ? 'Windows'
+        : /Mac OS X/.test(ua)
+          ? 'macOS'
+          : /Linux/.test(ua)
+            ? 'Linux'
+            : '';
+  return os ? `${browser} on ${os}` : browser;
 }

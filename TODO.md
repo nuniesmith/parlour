@@ -581,7 +581,7 @@ does NOT depend on Phase 2 transcoding.
   DB status, the LAN / tailnet / public URLs from server
   config with copy buttons, job-queue snapshot, restart /
   power actions where the server honestly supports them.
-- [ ] UI3 (L) **Now Playing session cards**: extend the P8
+- [x] UI3 (L) **Now Playing session cards**: extend the P8
   session payload server-side (playback plan per stream:
   source → mode + reason; client app/device, user+profile,
   source IP/protocol, position/duration) and render Emby-

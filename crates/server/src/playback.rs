@@ -7,6 +7,11 @@
 //!   into `user_data` + the live-session registry (P4, P8)
 //! - `POST /api/v1/items/{id}/{played,favorite}` — marks (P5)
 //! - `GET /api/v1/subtitles/{track_id}` — WebVTT extraction (P6)
+//! - `GET /api/v1/admin/sessions` — Now Playing (P8, UI3): each
+//!   live session with the plan it was actually given, the
+//!   client, and where the request came from
+//! - `POST /api/v1/admin/sessions/{id}/stop` — admin stop (UI3):
+//!   revokes the session's stream tokens and marks it stopped
 //!
 //! Media URLs carry a short-lived HMAC stream token (file +
 //! profile + expiry) so a leaked URL is neither permanent nor a
@@ -19,7 +24,7 @@ use std::sync::Mutex;
 
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::{header, HeaderMap, StatusCode, Version};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -36,7 +41,7 @@ use uuid::Uuid;
 use parlour_core::{ClientKind, NetworkKind};
 use parlour_playback::{decide, pick_subtitle, FileFacts, SubtitleChoice};
 
-use crate::auth::{AdminUser, AuthUser};
+use crate::auth::{AdminUser, AuthUser, ClientIp};
 
 /// Optional-auth extractor: media URLs are authorised by stream
 /// token *or* session cookie, so a missing/invalid session must
@@ -75,7 +80,121 @@ pub struct SessionInfo {
     pub started_at: DateTime<Utc>,
     pub last_seen: DateTime<Utc>,
     pub position_ms: i64,
+    pub duration_ms: Option<i64>,
+    /// The plan playback-info handed this profile for this file
+    /// (UI3). `None` when the client never asked for one.
+    pub plan: Option<StreamPlan>,
+    pub client: ClientInfo,
+    pub remote: RemoteInfo,
+    /// Set by an admin stop: the session is hidden from Now
+    /// Playing and its next progress report is answered 409.
+    pub stopped: bool,
 }
+
+/// First video stream: codec, width, height, HDR format.
+type VideoFacts = (Option<String>, Option<i32>, Option<i32>, Option<String>);
+/// First audio stream: codec, language, channels, default flag.
+type AudioFacts = (Option<String>, Option<String>, Option<i32>, bool);
+
+/// One source stream and what the server does with it.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct VideoPlan {
+    pub codec: Option<String>,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+    pub hdr_format: Option<String>,
+    /// "direct_play" | "copy" | "transcode"
+    pub mode: &'static str,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct AudioPlan {
+    pub codec: Option<String>,
+    pub language: Option<String>,
+    pub channels: Option<i32>,
+    pub is_default: bool,
+    /// "direct_play" | "copy" | "transcode"
+    pub mode: &'static str,
+}
+
+/// The stream decision as the Now Playing card shows it (UI3):
+/// source → what the server is doing, with the engine's reason.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct StreamPlan {
+    /// `PlaybackAction` / `PlaybackReason` names, as playback-info
+    /// reports them.
+    pub action: String,
+    pub reason: String,
+    /// "file" (the original bytes) or "hls" (remux output).
+    pub delivery: &'static str,
+    /// Client kind and network the plan was decided for.
+    pub client: &'static str,
+    pub network: &'static str,
+    pub container: Option<String>,
+    pub bitrate_kbps: Option<i64>,
+    pub video: Option<VideoPlan>,
+    pub audio: Option<AudioPlan>,
+    #[serde(skip)]
+    decided_at: DateTime<Utc>,
+}
+
+/// Per-stream mode for an overall action. A remux copies every
+/// stream into the new container untouched.
+fn stream_mode(action: parlour_core::PlaybackAction) -> &'static str {
+    match action {
+        parlour_core::PlaybackAction::DirectPlay => "direct_play",
+        parlour_core::PlaybackAction::Remux => "copy",
+        parlour_core::PlaybackAction::Transcode => "transcode",
+    }
+}
+
+/// What the client said about itself at playback start, plus its
+/// User-Agent. Display only — capabilities never come from here.
+#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
+pub struct ClientInfo {
+    pub name: Option<String>,
+    pub version: Option<String>,
+    pub device: Option<String>,
+    pub user_agent: Option<String>,
+}
+
+/// Where the start report came from. `ip` is the socket peer —
+/// behind a reverse proxy that is the proxy, so the proxy's
+/// `X-Forwarded-For` claim is carried separately, unverified.
+#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
+pub struct RemoteInfo {
+    pub ip: Option<String>,
+    pub forwarded_for: Option<String>,
+    pub protocol: Option<String>,
+}
+
+fn protocol_name(version: Version) -> Option<String> {
+    let name = match version {
+        Version::HTTP_09 => "HTTP/0.9",
+        Version::HTTP_10 => "HTTP/1.0",
+        Version::HTTP_11 => "HTTP/1.1",
+        Version::HTTP_2 => "HTTP/2",
+        Version::HTTP_3 => "HTTP/3",
+        _ => return None,
+    };
+    Some(name.to_string())
+}
+
+/// Trim, drop control characters, cap the length; blank is `None`.
+fn clean_label(raw: Option<&str>, max: usize) -> Option<String> {
+    let cleaned: String = raw?
+        .trim()
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(max)
+        .collect();
+    (!cleaned.is_empty()).then_some(cleaned)
+}
+
+/// Sessions with no report for this long are not "now playing".
+const SESSION_LIVE_SECS: i64 = 90;
+/// ...and are forgotten entirely after this long.
+const SESSION_FORGET_SECS: i64 = 3600;
 
 #[derive(Clone, PartialEq)]
 enum RemuxStatus {
@@ -88,6 +207,12 @@ pub struct PlaybackState {
     secret: Vec<u8>,
     pub cache_dir: PathBuf,
     sessions: Mutex<HashMap<Uuid, SessionInfo>>,
+    /// Latest plan handed out per (profile, file) by playback-info,
+    /// picked up by the start report (UI3).
+    plans: Mutex<HashMap<(Uuid, Uuid), StreamPlan>>,
+    /// Admin stop (UI3): stream tokens for (profile, file) issued
+    /// at or before this instant (ms) are refused.
+    revoked: Mutex<HashMap<(Uuid, Uuid), i64>>,
     remux: std::sync::Arc<Mutex<HashMap<Uuid, (PathBuf, RemuxStatus)>>>,
 }
 
@@ -100,6 +225,8 @@ impl PlaybackState {
             secret,
             cache_dir: PathBuf::from("cache"),
             sessions: Mutex::new(HashMap::new()),
+            plans: Mutex::new(HashMap::new()),
+            revoked: Mutex::new(HashMap::new()),
             remux: std::sync::Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -128,6 +255,17 @@ struct TokenClaims {
     fid: Uuid,
     pid: Uuid,
     exp: i64,
+    /// Issued-at, milliseconds. Tokens minted before this field
+    /// existed read as 0 and so fall to any later revocation.
+    #[serde(default)]
+    iat: i64,
+}
+
+enum TokenCheck {
+    Valid(Uuid),
+    /// Genuine token, but an admin stopped the session it fed.
+    Revoked,
+    Invalid,
 }
 
 fn make_token(state: &PlaybackState, file_id: Uuid, profile_id: Uuid) -> String {
@@ -135,6 +273,7 @@ fn make_token(state: &PlaybackState, file_id: Uuid, profile_id: Uuid) -> String 
         fid: file_id,
         pid: profile_id,
         exp: Utc::now().timestamp() + TOKEN_TTL_SECS,
+        iat: Utc::now().timestamp_millis(),
     };
     let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).unwrap_or_default());
     let mut mac = HmacSha256::new_from_slice(&state.secret).expect("hmac key");
@@ -143,18 +282,44 @@ fn make_token(state: &PlaybackState, file_id: Uuid, profile_id: Uuid) -> String 
     format!("{payload}.{sig}")
 }
 
-fn verify_token(state: &PlaybackState, token: &str, file_id: Uuid) -> Option<Uuid> {
+fn decode_token(state: &PlaybackState, token: &str) -> Option<TokenClaims> {
     let (payload, sig) = token.split_once('.')?;
     let mut mac = HmacSha256::new_from_slice(&state.secret).ok()?;
     mac.update(payload.as_bytes());
     let sig_bytes = URL_SAFE_NO_PAD.decode(sig).ok()?;
     mac.verify_slice(&sig_bytes).ok()?;
-    let claims: TokenClaims =
-        serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload).ok()?).ok()?;
+    serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload).ok()?).ok()
+}
+
+fn verify_token(state: &PlaybackState, token: &str, file_id: Uuid) -> TokenCheck {
+    let Some(claims) = decode_token(state, token) else {
+        return TokenCheck::Invalid;
+    };
     if claims.fid != file_id || claims.exp < Utc::now().timestamp() {
-        return None;
+        return TokenCheck::Invalid;
     }
-    Some(claims.pid)
+    let revoked_at = state
+        .revoked
+        .lock()
+        .unwrap()
+        .get(&(claims.pid, claims.fid))
+        .copied();
+    match revoked_at {
+        Some(at) if claims.iat <= at => TokenCheck::Revoked,
+        _ => TokenCheck::Valid(claims.pid),
+    }
+}
+
+/// Refuse every stream token already issued to this profile for
+/// this file. Tokens minted afterwards (a deliberate new
+/// playback-info) work again.
+fn revoke_tokens(state: &PlaybackState, profile_id: Uuid, file_id: Uuid) {
+    let now = Utc::now().timestamp_millis();
+    let mut revoked = state.revoked.lock().unwrap();
+    // A revocation outlives every token it could apply to after
+    // one token lifetime; drop those.
+    revoked.retain(|_, at| now - *at <= TOKEN_TTL_SECS * 1000);
+    revoked.insert((profile_id, file_id), now);
 }
 
 /// Authorise a media request: a valid stream token for this
@@ -167,8 +332,14 @@ async fn authorise_media(
     session_user: Option<&AuthUser>,
 ) -> Result<Uuid, AppError> {
     if let Some(token) = token {
-        if let Some(pid) = verify_token(&app.playback, token, file_id) {
-            return Ok(pid);
+        match verify_token(&app.playback, token, file_id) {
+            TokenCheck::Valid(pid) => return Ok(pid),
+            // A stopped stream stays stopped: the session cookie
+            // must not quietly re-authorise the same URL.
+            TokenCheck::Revoked => {
+                return Err(AppError::Unauthorized("this stream was stopped".into()))
+            }
+            TokenCheck::Invalid => {}
         }
     }
     if let Some(user) = session_user {
@@ -357,6 +528,22 @@ async fn playback_info(
     .await
     .map_err(AppError::from)?;
     let audio_codec = audio.first().and_then(|a| a.codec.clone());
+    let video_facts: Option<VideoFacts> = sqlx::query_as(
+        "SELECT codec, width, height, hdr_format FROM media_streams
+             WHERE file_id = $1 AND kind = 'video' ORDER BY stream_index LIMIT 1",
+    )
+    .bind(file.id)
+    .fetch_optional(&app.pool)
+    .await
+    .map_err(AppError::from)?;
+    let audio_facts: Option<AudioFacts> = sqlx::query_as(
+        "SELECT codec, language, channels, is_default FROM media_streams
+         WHERE file_id = $1 AND kind = 'audio' ORDER BY stream_index LIMIT 1",
+    )
+    .bind(file.id)
+    .fetch_optional(&app.pool)
+    .await
+    .map_err(AppError::from)?;
     let bitrate_kbps = match (file.duration_ms, file.size_bytes) {
         (Some(d), s) if d > 0 => Some(s * 8 / d),
         _ => None,
@@ -406,6 +593,52 @@ async fn playback_info(
         }
         _ => ("file", format!("/api/v1/stream/{}?token={token}", file.id)),
     };
+
+    // UI3: remember the plan this profile was just handed for this
+    // file, so the start report can attach it to the session.
+    {
+        let mode = stream_mode(plan.action);
+        let now = Utc::now();
+        let mut plans = app.playback.plans.lock().unwrap();
+        plans.retain(|_, p| (now - p.decided_at).num_seconds() <= TOKEN_TTL_SECS);
+        plans.insert(
+            (profile_id, file.id),
+            StreamPlan {
+                action: format!("{:?}", plan.action),
+                reason: format!("{:?}", plan.reason),
+                delivery: stream_kind,
+                client: match client {
+                    ClientKind::Web => "web",
+                    ClientKind::AndroidPhone => "android",
+                    ClientKind::AndroidTv => "androidtv",
+                    ClientKind::Ios => "ios",
+                    ClientKind::TvOs => "tvos",
+                },
+                network: match network {
+                    NetworkKind::Lan => "lan",
+                    NetworkKind::Tailnet => "tailnet",
+                    NetworkKind::Public => "public",
+                },
+                container: file.container.clone(),
+                bitrate_kbps,
+                video: video_facts.map(|(codec, width, height, hdr_format)| VideoPlan {
+                    codec,
+                    width,
+                    height,
+                    hdr_format,
+                    mode,
+                }),
+                audio: audio_facts.map(|(codec, language, channels, is_default)| AudioPlan {
+                    codec,
+                    language,
+                    channels,
+                    is_default,
+                    mode,
+                }),
+                decided_at: now,
+            },
+        );
+    }
 
     let mut warnings = Vec::new();
     if plan.reason == parlour_core::PlaybackReason::RemoteBandwidth {
@@ -761,6 +994,38 @@ struct ReportBody {
     file_id: Option<Uuid>,
     position_ms: Option<i64>,
     duration_ms: Option<i64>,
+    /// The id `start` returned. Optional: without it the session
+    /// is matched by profile + item.
+    session_id: Option<Uuid>,
+    /// Display-only self-description (start report).
+    client_name: Option<String>,
+    client_version: Option<String>,
+    device_name: Option<String>,
+}
+
+/// Find the session a report belongs to: by id when the client
+/// sent one, else this profile's live session for the item (a
+/// stopped one only if nothing live matches).
+fn find_session<'a>(
+    sessions: &'a mut HashMap<Uuid, SessionInfo>,
+    profile_id: Uuid,
+    body: &ReportBody,
+) -> Option<&'a mut SessionInfo> {
+    let id = match body.session_id {
+        Some(id) => sessions
+            .get(&id)
+            .filter(|s| s.profile_id == profile_id && s.item_id == body.item_id)
+            .map(|_| id),
+        None => {
+            let mut matches: Vec<(&Uuid, &SessionInfo)> = sessions
+                .iter()
+                .filter(|(_, s)| s.profile_id == profile_id && s.item_id == body.item_id)
+                .collect();
+            matches.sort_by_key(|(_, s)| (s.stopped, std::cmp::Reverse(s.last_seen)));
+            matches.first().map(|(id, _)| **id)
+        }
+    }?;
+    sessions.get_mut(&id)
 }
 
 async fn require_item_access(
@@ -827,21 +1092,54 @@ fn active_profile(user: &AuthUser) -> Result<Uuid, AppError> {
 async fn report_start(
     State(app): State<AppState>,
     user: AuthUser,
+    ClientIp(ip): ClientIp,
+    version: Version,
+    headers: HeaderMap,
     Json(body): Json<ReportBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let profile_id = active_profile(&user)?;
     require_item_access(&app, profile_id, body.item_id).await?;
     upsert_position(&app, profile_id, &body, true).await?;
+    let header_text = |name: header::HeaderName, max: usize| {
+        clean_label(headers.get(name).and_then(|v| v.to_str().ok()), max)
+    };
+    let plan = body.file_id.and_then(|file_id| {
+        app.playback
+            .plans
+            .lock()
+            .unwrap()
+            .get(&(profile_id, file_id))
+            .cloned()
+    });
+    let now = Utc::now();
     let session_id = Uuid::new_v4();
-    app.playback.sessions.lock().unwrap().insert(
+    let mut sessions = app.playback.sessions.lock().unwrap();
+    sessions.retain(|_, s| (now - s.last_seen).num_seconds() <= SESSION_FORGET_SECS);
+    sessions.insert(
         session_id,
         SessionInfo {
             profile_id,
             item_id: body.item_id,
             file_id: body.file_id,
-            started_at: Utc::now(),
-            last_seen: Utc::now(),
+            started_at: now,
+            last_seen: now,
             position_ms: body.position_ms.unwrap_or(0),
+            duration_ms: body.duration_ms.filter(|d| *d > 0),
+            plan,
+            client: ClientInfo {
+                name: clean_label(body.client_name.as_deref(), 80),
+                version: clean_label(body.client_version.as_deref(), 40),
+                device: clean_label(body.device_name.as_deref(), 80),
+                user_agent: header_text(header::USER_AGENT, 300),
+            },
+            remote: RemoteInfo {
+                ip: ip.map(|a| a.to_string()),
+                // First hop only: the address the proxy says it saw.
+                forwarded_for: header_text(header::HeaderName::from_static("x-forwarded-for"), 200)
+                    .and_then(|v| clean_label(v.split(',').next(), 64)),
+                protocol: protocol_name(version),
+            },
+            stopped: false,
         },
     );
     Ok(Json(serde_json::json!({"session_id": session_id})))
@@ -856,12 +1154,19 @@ async fn report_progress(
     require_item_access(&app, profile_id, body.item_id).await?;
     upsert_position(&app, profile_id, &body, false).await?;
     let mut sessions = app.playback.sessions.lock().unwrap();
-    if let Some(s) = sessions
-        .values_mut()
-        .find(|s| s.profile_id == profile_id && s.item_id == body.item_id)
-    {
+    if let Some(s) = find_session(&mut sessions, profile_id, &body) {
+        if s.stopped {
+            // The position above is still saved; the client is
+            // told so it can stop instead of fighting 401s.
+            return Err(AppError::Conflict(
+                "this playback session was stopped by an administrator".into(),
+            ));
+        }
         s.last_seen = Utc::now();
         s.position_ms = body.position_ms.unwrap_or(s.position_ms);
+        if let Some(d) = body.duration_ms.filter(|d| *d > 0) {
+            s.duration_ms = Some(d);
+        }
     }
     Ok(StatusCode::NO_CONTENT)
 }
@@ -874,11 +1179,19 @@ async fn report_stopped(
     let profile_id = active_profile(&user)?;
     require_item_access(&app, profile_id, body.item_id).await?;
     upsert_position(&app, profile_id, &body, false).await?;
-    app.playback
-        .sessions
-        .lock()
-        .unwrap()
-        .retain(|_, s| !(s.profile_id == profile_id && s.item_id == body.item_id));
+    let mut sessions = app.playback.sessions.lock().unwrap();
+    match body.session_id {
+        // A client that names its session ends only that one.
+        Some(id) => {
+            if sessions
+                .get(&id)
+                .is_some_and(|s| s.profile_id == profile_id && s.item_id == body.item_id)
+            {
+                sessions.remove(&id);
+            }
+        }
+        None => sessions.retain(|_, s| !(s.profile_id == profile_id && s.item_id == body.item_id)),
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -889,52 +1202,132 @@ struct SessionDto {
     profile_name: String,
     item_id: Uuid,
     item_title: String,
+    item_kind: String,
+    /// Episodes only: the show, and where the episode sits in it.
+    series_title: Option<String>,
+    season_number: Option<i32>,
+    episode_number: Option<i32>,
+    /// The item whose poster to show (the series for an episode),
+    /// or null when neither has one.
+    poster_item_id: Option<Uuid>,
     started_at: DateTime<Utc>,
     last_seen: DateTime<Utc>,
     position_ms: i64,
+    duration_ms: Option<i64>,
+    client: ClientInfo,
+    remote: RemoteInfo,
+    plan: Option<StreamPlan>,
+}
+
+#[derive(FromRow)]
+struct SessionRow {
+    username: String,
+    profile_name: String,
+    item_title: String,
+    item_kind: String,
+    season_number: Option<i32>,
+    episode_number: Option<i32>,
+    series_title: Option<String>,
+    poster_item_id: Option<Uuid>,
+    file_duration_ms: Option<i64>,
 }
 
 async fn list_sessions(
     State(app): State<AppState>,
     _admin: AdminUser,
 ) -> Result<Json<Vec<SessionDto>>, AppError> {
-    let cutoff = Utc::now() - chrono::Duration::seconds(90);
-    let active: Vec<(Uuid, SessionInfo)> = app
+    let cutoff = Utc::now() - chrono::Duration::seconds(SESSION_LIVE_SECS);
+    let mut active: Vec<(Uuid, SessionInfo)> = app
         .playback
         .sessions
         .lock()
         .unwrap()
         .iter()
-        .filter(|(_, s)| s.last_seen > cutoff)
+        .filter(|(_, s)| !s.stopped && s.last_seen > cutoff)
         .map(|(id, s)| (*id, s.clone()))
         .collect();
+    active.sort_by_key(|(id, s)| (s.started_at, *id));
     let mut out = Vec::new();
     for (session_id, s) in active {
-        let row: Option<(String, String, String)> = sqlx::query_as(
-            "SELECT u.username, p.name, i.title FROM profiles p
+        // Episode -> season -> series; a movie has neither parent.
+        let row = sqlx::query_as::<_, SessionRow>(
+            "SELECT u.username, p.name AS profile_name, i.title AS item_title,
+                    i.kind AS item_kind, i.season_number, i.episode_number,
+                    sr.title AS series_title,
+                    (SELECT c.id FROM media_items c
+                      WHERE c.id IN (sr.id, i.id)
+                        AND EXISTS (SELECT 1 FROM images im
+                                     WHERE im.item_id = c.id AND im.kind = 'poster'
+                                       AND im.path <> '' AND im.path NOT LIKE 'pending:%')
+                      ORDER BY (c.id = sr.id) DESC LIMIT 1) AS poster_item_id,
+                    (SELECT f.duration_ms FROM media_files f WHERE f.id = $3) AS file_duration_ms
+             FROM profiles p
              JOIN users u ON u.id = p.user_id
              JOIN media_items i ON i.id = $2
+             LEFT JOIN media_items se ON se.id = i.parent_id AND i.kind = 'episode'
+             LEFT JOIN media_items sr ON sr.id = se.parent_id
              WHERE p.id = $1",
         )
         .bind(s.profile_id)
         .bind(s.item_id)
+        .bind(s.file_id)
         .fetch_optional(&app.pool)
         .await
         .map_err(AppError::from)?;
-        if let Some((username, profile_name, item_title)) = row {
+        if let Some(row) = row {
             out.push(SessionDto {
                 session_id,
-                username,
-                profile_name,
+                username: row.username,
+                profile_name: row.profile_name,
                 item_id: s.item_id,
-                item_title,
+                item_title: row.item_title,
+                item_kind: row.item_kind,
+                series_title: row.series_title,
+                season_number: row.season_number,
+                episode_number: row.episode_number,
+                poster_item_id: row.poster_item_id,
                 started_at: s.started_at,
                 last_seen: s.last_seen,
                 position_ms: s.position_ms,
+                duration_ms: s.duration_ms.or(row.file_duration_ms),
+                client: s.client,
+                remote: s.remote,
+                plan: s.plan,
             });
         }
     }
     Ok(Json(out))
+}
+
+/// UI3 admin stop. There is no channel to a client in v1, so
+/// "stop" is the honest server-side version: revoke the stream
+/// tokens this profile holds for the file (the next segment or
+/// range request is refused) and mark the session stopped (its
+/// next progress report is answered 409 so the player can say
+/// why). A real remote pause needs client support.
+async fn stop_session(
+    State(app): State<AppState>,
+    admin: AdminUser,
+    Path(session_id): Path<Uuid>,
+) -> Result<StatusCode, AppError> {
+    let target = {
+        let mut sessions = app.playback.sessions.lock().unwrap();
+        match sessions.get_mut(&session_id) {
+            Some(s) if !s.stopped => {
+                s.stopped = true;
+                Some((s.profile_id, s.file_id))
+            }
+            _ => None,
+        }
+    };
+    let Some((profile_id, file_id)) = target else {
+        return Err(AppError::NotFound("no such session".into()));
+    };
+    if let Some(file_id) = file_id {
+        revoke_tokens(&app.playback, profile_id, file_id);
+    }
+    tracing::info!(%session_id, admin = %admin.0.username, "playback session stopped by admin");
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // ---------------------------------------------------------------------
@@ -1121,4 +1514,5 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/items/{id}/mark", post(mark))
         .route("/api/v1/subtitles/{track_id}", get(subtitle_vtt))
         .route("/api/v1/admin/sessions", get(list_sessions))
+        .route("/api/v1/admin/sessions/{id}/stop", post(stop_session))
 }

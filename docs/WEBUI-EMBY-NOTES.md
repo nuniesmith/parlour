@@ -172,6 +172,22 @@ should show the same anatomy with *its* reasons
   stopped is the honest v1 — real client pause needs client
   support, note it), stop session, and message-to-screen
   later if clients grow it. Poll ~5 s; empty state is quiet.
+  *Shipped (UI3):* `GET /api/v1/admin/sessions` now carries,
+  per session, the plan playback-info actually handed out
+  (action + reason, delivery, and source → mode for the
+  video and audio stream), the client's self-description +
+  User-Agent, the socket peer IP / protocol (plus the
+  proxy's unverified `X-Forwarded-For` first hop, shown
+  separately), position/duration, and series/season/episode
+  for the S:E line. `POST /api/v1/admin/sessions/{id}/stop`
+  revokes the stream tokens issued to that profile for that
+  file and marks the session stopped; the player's next
+  heartbeat gets 409 and says why. There is no remote pause
+  — the card has one Stop control and says so. Cards live
+  in `web/src/lib/NowPlaying.svelte` on the Dashboard
+  (UI6 gives Sessions its own page). Session state is
+  in-memory, as in P8: a server restart forgets live
+  sessions and revocations.
 - **Activity (UI4)**: an `activity` table written at login,
   playback start/stop, scan/import completion, invite/user
   admin actions; Dashboard feed + a full page under Server →
