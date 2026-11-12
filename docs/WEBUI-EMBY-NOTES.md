@@ -192,6 +192,21 @@ should show the same anatomy with *its* reasons
   playback start/stop, scan/import completion, invite/user
   admin actions; Dashboard feed + a full page under Server →
   Logs & Activity. Retention job (90 days).
+  *Shipped (UI4):* `activity` table (migration
+  `20261112000000_activity.sql`) written by
+  `crates/server/src/activity.rs::record` — a failed write is
+  logged and never fails the request or job that caused it.
+  Kinds: `auth.login`, `auth.password_changed`,
+  `playback.start`, `playback.stop`,
+  `playback.stopped_by_admin`, `scan.completed`,
+  `scan.failed`, `import.completed`, `import.failed`,
+  `invite.created`, `invite.revoked`, `user.joined`. Failed
+  sign-ins are not recorded (the login limiter covers them).
+  `GET /api/v1/admin/activity` pages newest-first
+  (`limit`, `before`, `category`). The Dashboard shows the
+  latest few; the full page is Server → Activity
+  (`/admin?tab=activity`). Retention is a nightly
+  `purge_activity` job, visible in Jobs with a deleted count.
 - **Admin IA (UI6)**: tabs become sidebar pages: Dashboard,
   General (server settings), Users (users + invites +
   profile access), Library (libraries, paths, access,

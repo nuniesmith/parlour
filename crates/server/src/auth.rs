@@ -413,6 +413,17 @@ async fn login(
     state.limiter.record_success(&ip_key);
     state.limiter.record_success(&user_key);
     let raw = create_session(&state, user.id, &headers, connect.0).await?;
+    crate::activity::record(
+        &state.pool,
+        crate::activity::Entry::by_user(
+            "auth.login",
+            user.id,
+            &user.username,
+            format!("{} signed in", user.username),
+        )
+        .detail(serde_json::json!({ "ip": connect.0.map(|ip| ip.to_string()) })),
+    )
+    .await;
     let profiles = list_profiles_for(&state.pool, user.id).await?;
     let body = LoginResponse {
         user: UserDto::from(&user),
@@ -561,6 +572,16 @@ async fn change_password(
         .execute(&state.pool)
         .await
         .map_err(AppError::from)?;
+    crate::activity::record(
+        &state.pool,
+        crate::activity::Entry::by_user(
+            "auth.password_changed",
+            user.user_id,
+            &user.username,
+            format!("{} changed their password", user.username),
+        ),
+    )
+    .await;
     Ok(StatusCode::NO_CONTENT)
 }
 

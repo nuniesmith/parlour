@@ -81,6 +81,7 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::playback::routes())
         .merge(crate::emby_admin::routes())
         .merge(crate::dashboard::routes())
+        .merge(crate::activity::routes())
         .fallback(fallback)
         .layer(PropagateRequestIdLayer::x_request_id())
         .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
@@ -223,6 +224,7 @@ mod tests {
             "/api/v1/auth/sessions",
             "/api/v1/libraries",
             "/api/v1/admin/server",
+            "/api/v1/admin/activity",
         ] {
             let (status, _) = get(test_router(), path).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{path}");

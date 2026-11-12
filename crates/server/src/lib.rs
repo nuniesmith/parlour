@@ -2,6 +2,7 @@
 //! auth/profile/invite/library API. `main.rs` is a thin wrapper so
 //! integration tests can drive the real router.
 
+pub mod activity;
 pub mod auth;
 pub mod catalog;
 pub mod config;

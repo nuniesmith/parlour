@@ -53,6 +53,17 @@ async fn create_invite(
     .fetch_one(&state.pool)
     .await
     .map_err(AppError::from)?;
+    crate::activity::record(
+        &state.pool,
+        crate::activity::Entry::by_user(
+            "invite.created",
+            admin.0.user_id,
+            &admin.0.username,
+            format!("{} created an invite", admin.0.username),
+        )
+        .detail(serde_json::json!({ "invite_id": row.0, "expires_at": row.1 })),
+    )
+    .await;
     Ok((
         StatusCode::CREATED,
         Json(CreatedInvite {
@@ -79,7 +90,7 @@ async fn list_invites(
 
 async fn revoke_invite(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    admin: AdminUser,
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
     let id = Uuid::parse_str(&id).map_err(|_| AppError::NotFound("no such invite".into()))?;
@@ -91,6 +102,17 @@ async fn revoke_invite(
     if done.rows_affected() == 0 {
         return Err(AppError::NotFound("no such invite".into()));
     }
+    crate::activity::record(
+        &state.pool,
+        crate::activity::Entry::by_user(
+            "invite.revoked",
+            admin.0.user_id,
+            &admin.0.username,
+            format!("{} revoked an unused invite", admin.0.username),
+        )
+        .detail(serde_json::json!({ "invite_id": id })),
+    )
+    .await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -175,6 +197,17 @@ async fn accept_invite(
         .fetch_one(&state.pool)
         .await
         .map_err(AppError::from)?;
+    crate::activity::record(
+        &state.pool,
+        crate::activity::Entry::by_user(
+            "user.joined",
+            user_id,
+            &user.0,
+            format!("{} joined with an invite", user.0),
+        )
+        .detail(serde_json::json!({ "invite_id": invite_id })),
+    )
+    .await;
     Ok((
         StatusCode::CREATED,
         Json(AcceptResponse {
