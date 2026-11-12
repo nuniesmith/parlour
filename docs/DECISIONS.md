@@ -101,3 +101,40 @@ the code.
   and a cleared name — all before submission.
 - Vega OS Fire TV sticks don't run Android apps; supporting them
   is a separate, later decision.
+
+## 2026-11-11 — ABR, caching, recommendations, requests, client order
+
+From the ABR/recommendations/clients research of 2026-11-11
+(full report kept with the project's research notes).
+
+- **D8 Adaptive streaming:** Netflix-style ABR instead of a
+  manual bitrate picker. HLS ladder (5 H.264 rungs, 360p–1080p,
+  shared AAC track), 6 s segments / 2 s GOP, CMAF/fMP4, one
+  multi-output FFmpeg per session, ~120 s transcode-ahead.
+  HLS-only for v1; DASH would be a manifest over the same
+  segments. Client players measure and switch; the server
+  only offers rungs. GPU session budgets are a design input
+  (GeForce NVENC: 12 sessions/system), with admission control
+  instead of failed FFmpeg spawns.
+- **D9 No Redis:** segments are cached on filesystem/SSD with
+  a Postgres cache index (LRU, pinning for partially-watched
+  items). Redis/Memcached never hold segment bytes. Jobs and
+  sessions stay in Postgres. Revisit only for multi-node.
+- **D10 Recommendations:** content-based + TMDB edges,
+  SQL-scored per profile. No collaborative filtering / ML —
+  it cannot work with a handful of users.
+- **D11 Requests:** Seerr-shaped lifecycle native to Parlour;
+  Sonarr/Radarr called directly (`/api/v3`); Prowlarr never
+  called for requests (indexer sync only, health at most);
+  Lidarr is `/api/v1`.
+- **D12 Client order:** web first (it is the ABR test vehicle,
+  including on the TV's browser), Android phone next, TV
+  native deferred, iOS after Android. **TV OS correction:**
+  the owner assumed his new built-in "Ember" TV runs Vega OS;
+  Amazon's own device table lists the Ember Artline (2026) as
+  Fire OS 8 (Android 11) — Vega OS 2.0 is sticks-only so far.
+  The TV's About screen (build model / OS version) is the
+  deciding check (TODO R7). **R7 DONE 2026-11-11: the set
+  reports Fire OS 8.1.8.5** — TV app = Android TV flavour,
+  sideloadable. Vega/Kepler support stays a parked, separate
+  app track, started only if a Vega device is owned.
