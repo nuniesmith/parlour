@@ -138,3 +138,52 @@ From the ABR/recommendations/clients research of 2026-11-11
   reports Fire OS 8.1.8.5** — TV app = Android TV flavour,
   sideloadable. Vega/Kepler support stays a parked, separate
   app track, started only if a Vega device is owned.
+
+## 2026-11-11 (late) — Web UI shape, import/export, segments
+
+From the owner's Emby Dashboard screenshots and testing
+directions, 2026-11-11 evening.
+
+- **D13 Web UI follows Emby's information architecture:**
+  sidebar shell with grouped sections (web settings /
+  per-user preferences / server admin tree), a server
+  Dashboard (info card with version, port, LAN/tailnet/
+  public URLs; notices banner; Alerts rail), Now Playing
+  session cards showing the stream decision per stream,
+  and an Activity feed. The owner already knows where
+  everything is in Emby; Parlour should not make him
+  relearn it. Clean-room rule applies: layout patterns and
+  IA yes; Emby code, assets, icons, wording, branding no —
+  Parlour branding and tokens stay. Non-goals from Emby's
+  tree: Premiere/paywall, Live TV, DLNA, Camera Upload,
+  Cinema Intros, plugin store. Spec + gap analysis:
+  `docs/WEBUI-EMBY-NOTES.md`; tasks: TODO Phase 7.
+- **D14 Import/export everything + sidecar metadata:** one
+  integrated system with two halves. (1) A versioned export
+  bundle carrying users/logins (hashes, behind an explicit
+  admin confirm), profiles + preferences, library
+  definitions + access grants, catalog metadata, watch
+  history, and segments — importable into a fresh install
+  with a dry-run report, idempotent, never deleting by
+  default. Server secrets (API keys etc.) are never in the
+  bundle. (2) Per-item metadata sidecars stored **with the
+  media files** (`<name>.parlour.json`), scanner-authoritative
+  over provider lookups, so metadata travels when files
+  move. Split of record: *item* metadata lives in sidecars;
+  *per-user* state (watch history, logins) lives only in
+  the bundle. Media mounts stay read-only unless a library
+  explicitly opts into sidecar writing. Tasks: TODO Phase 8.
+- **D15 Segments + autoplay:** intros/credits are a
+  first-class per-episode record (`media_segments`) with a
+  source + confidence. Detection order: chapter markers →
+  cheap heuristics → audio-fingerprint correlation across a
+  season's episodes (the intro-skipper method, implemented
+  from the algorithm, no borrowed code); manual edits win
+  over all auto sources; a low-confidence result is no
+  segment, never a guess. The player gets Skip Intro /
+  Skip Credits (per-profile: button / auto / off) and
+  next-episode autoplay behind a 10 s countdown card
+  (per-profile toggle, default on), riding the existing
+  start/progress/stopped reporting so Continue Watching
+  and the recommendation affinity stay truthful.
+  Tasks: TODO Phase 9.

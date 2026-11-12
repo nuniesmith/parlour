@@ -46,6 +46,34 @@ layers over the same catalog.
 Swift/AVPlayer app (HLS-only, which the Phase 2 ladder
 already serves). Deliberately last.
 
+## Phase 7 — Web UI parity (Emby-style)
+Sidebar shell and grouped IA; server Dashboard with info
+card, notices and Alerts; Now Playing session cards with
+explained stream decisions; Activity feed; admin as a
+section tree instead of tabs; per-user preferences split by
+topic; account self-service incl. username change.
+Spec: `docs/WEBUI-EMBY-NOTES.md`. Presentation-led; does not
+wait on Phase 2.
+
+## Phase 8 — Import/export & sidecar metadata
+Versioned export bundle for the whole server (users/logins,
+profiles, libraries, catalog metadata, watch history,
+segments) with dry-run, idempotent import; per-item
+`.parlour.json` sidecars stored with the media files so
+metadata travels with them; nightly export backups.
+
+## Phase 9 — Segments, skip & autoplay
+Per-episode intro/credits records; detection from chapters,
+heuristics, then audio-fingerprint correlation across a
+season; Skip Intro/Credits in the player (per-profile
+button/auto/off); next-episode autoplay behind a countdown
+card on the existing playback reporting.
+
+**Owner's priority note (2026-11-11):** Phases 7–9 are the
+tracks the owner wants worked next, alongside the Phase 1
+operational cutover; their numbers are labels, not a queue
+order relative to Phases 2–6.
+
 ## Growth after that
 New library types (audiobooks, ebooks, music, podcasts) as
 catalog + metadata additions; new hardware as a `HwBackend`;
