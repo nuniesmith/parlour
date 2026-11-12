@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
+  import { page } from '$app/state';
   import { api } from '$lib/api';
   import Poster from '$lib/Poster.svelte';
   import Rail from '$lib/Rail.svelte';
@@ -19,7 +21,7 @@
   let searching = $state(false);
   let timer: ReturnType<typeof setTimeout> | null = null;
 
-  function onInput() {
+  function run(delay: number) {
     if (timer) clearTimeout(timer);
     const query = q.trim();
     if (query.length < 2) {
@@ -29,13 +31,28 @@
     timer = setTimeout(async () => {
       searching = true;
       const { data } = await api<SearchData>(`/api/v1/search?q=${encodeURIComponent(query)}`);
+      // A newer keystroke or sidebar search may have superseded this one.
+      if (query !== q.trim()) return;
       searching = false;
       results = data;
-    }, 300);
+    }, delay);
   }
+
+  function onInput() {
+    run(300);
+  }
+
+  // `/search?q=…` (the sidebar search box) seeds the field and runs at once.
+  $effect(() => {
+    const fromUrl = page.url.searchParams.get('q');
+    if (fromUrl === null) return;
+    untrack(() => {
+      q = fromUrl;
+      run(0);
+    });
+  });
 </script>
 
-<h1>Search</h1>
 <div class="field search-box">
   <label for="q">Title or person</label>
   <input

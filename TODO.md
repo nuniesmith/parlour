@@ -570,7 +570,7 @@ screenshot analysis, the current-UI inventory, and the gap
 table this phase closes. Presentation + light server support;
 does NOT depend on Phase 2 transcoding.
 
-- [ ] UI1 (L) **Sidebar shell**: left sidebar with collapsible
+- [x] UI1 (L) **Sidebar shell**: left sidebar with collapsible
   sections (Libraries · Web Settings · `<profile>`
   Preferences · Server, admins only), active-item pill,
   search box in the sidebar, top bar with back/title +

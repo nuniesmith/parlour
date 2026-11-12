@@ -27,7 +27,7 @@
   <p class="dim">Loading…</p>
 {:else}
   {#if home.continue_watching.length === 0 && home.recently_added.length === 0}
-    <h1>Welcome to Parlour</h1>
+    <h2>Welcome to Parlour</h2>
     <p class="dim">
       Nothing here yet. Once an admin adds a library and scans it, your movies and shows will show
       up here.

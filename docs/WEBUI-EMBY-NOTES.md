@@ -136,6 +136,14 @@ should show the same anatomy with *its* reasons
   sidebar section. Focus states and text sizes must stay
   TV-browser usable (this shell is also the Ember TV
   browser experience until the native TV app).
+  *Shipped (UI1):* `web/src/lib/Sidebar.svelte` + the root
+  layout. Section collapse state is per-browser
+  (`localStorage`). Until UI6/UI7 split the pages, the
+  Server entries deep-link to `/admin?tab=…` and the
+  Preferences entries to `/settings#…`; the sidebar search
+  box submits to `/search?q=…`. Web Settings holds one
+  page so far, `/web-settings` (keyboard shortcut
+  reference) — what else belongs there is the owner's call.
 - **Dashboard (UI2 + UI5)**: `/admin` landing becomes the
   Dashboard: server name + version (from `/api/v1/version`),
   listener port, the three URLs Parlour is reached by
