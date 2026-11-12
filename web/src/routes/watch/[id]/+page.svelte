@@ -105,6 +105,14 @@
 
   function onKey(event: KeyboardEvent) {
     if (!video) return;
+    // Typing in the sidebar search (or any field) is not a player command.
+    const target = event.target;
+    if (
+      target instanceof HTMLElement &&
+      (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
+    ) {
+      return;
+    }
     switch (event.code) {
       case 'Space':
       case 'KeyK':

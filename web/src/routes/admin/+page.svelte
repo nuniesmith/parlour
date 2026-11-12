@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { goto } from '$app/navigation';
+  import { page } from '$app/state';
   import { api } from '$lib/api';
   import { session } from '$lib/session.svelte';
   import type {
@@ -12,7 +14,19 @@
   } from '$lib/types';
 
   type Tab = 'users' | 'libraries' | 'jobs' | 'review' | 'emby';
-  let tab = $state<Tab>('users');
+  const TABS: Tab[] = ['users', 'libraries', 'jobs', 'review', 'emby'];
+  // The tab lives in the URL (`/admin?tab=jobs`) so the sidebar's
+  // Server entries deep-link to it and Back steps through tabs.
+  const tab = $derived.by((): Tab => {
+    const t = page.url.searchParams.get('tab') as Tab | null;
+    return t && TABS.includes(t) ? t : 'users';
+  });
+  function setTab(t: Tab) {
+    void goto(`/admin?tab=${t}`, { keepFocus: true, noScroll: true });
+  }
+  $effect(() => {
+    if (tab === 'emby') void loadEmby();
+  });
   let error = $state<string | null>(null);
   let notice = $state<string | null>(null);
 
@@ -234,16 +248,15 @@
   }
 </script>
 
-<h1>Admin</h1>
 {#if error}<p class="error" role="alert">{error}</p>{/if}
 {#if notice}<p class="notice" role="status">{notice}</p>{/if}
 
 <div class="tabs" role="tablist">
-  <button class="btn" class:primary={tab === 'users'} onclick={() => (tab = 'users')}>Users & invites</button>
-  <button class="btn" class:primary={tab === 'libraries'} onclick={() => (tab = 'libraries')}>Libraries</button>
-  <button class="btn" class:primary={tab === 'jobs'} onclick={() => (tab = 'jobs')}>Jobs</button>
-  <button class="btn" class:primary={tab === 'emby'} onclick={() => { tab = 'emby'; void loadEmby(); }}>Emby import</button>
-  <button class="btn" class:primary={tab === 'review'} onclick={() => (tab = 'review')}>
+  <button class="btn" class:primary={tab === 'users'} onclick={() => setTab('users')}>Users & invites</button>
+  <button class="btn" class:primary={tab === 'libraries'} onclick={() => setTab('libraries')}>Libraries</button>
+  <button class="btn" class:primary={tab === 'jobs'} onclick={() => setTab('jobs')}>Jobs</button>
+  <button class="btn" class:primary={tab === 'emby'} onclick={() => setTab('emby')}>Emby import</button>
+  <button class="btn" class:primary={tab === 'review'} onclick={() => setTab('review')}>
     Metadata review ({review.length})
   </button>
 </div>

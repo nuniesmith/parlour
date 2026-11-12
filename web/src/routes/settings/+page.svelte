@@ -114,12 +114,11 @@
   }
 </script>
 
-<h1>Settings</h1>
 {#if error}<p class="error" role="alert">{error}</p>{/if}
 {#if notice}<p class="notice" role="status">{notice}</p>{/if}
 
 {#if session.me?.active_profile}
-  <h2>Playback — {session.me.active_profile.name}</h2>
+  <h2 id="playback">Playback — {session.me.active_profile.name}</h2>
   <form onsubmit={save} class="form">
     <div class="field">
       <label for="submode">Subtitles</label>
@@ -147,7 +146,7 @@
   <p class="dim">Pick a profile first — playback settings live on profiles.</p>
 {/if}
 
-<h2>Change password</h2>
+<h2 id="password">Change password</h2>
 <form onsubmit={changePassword} class="form">
   {#if pwError}<p class="error" role="alert">{pwError}</p>{/if}
   {#if pwNotice}<p class="notice" role="status">{pwNotice}</p>{/if}
@@ -186,7 +185,7 @@
   <p class="dim">Changing your password signs out your other sessions.</p>
 </form>
 
-<h2>Sessions</h2>
+<h2 id="sessions">Sessions</h2>
 <p class="dim">Devices signed in as {session.me?.user.username}.</p>
 {#if sessions.length === 0}
   <p class="dim">No other sessions.</p>

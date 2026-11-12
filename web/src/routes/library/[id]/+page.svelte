@@ -3,7 +3,6 @@
   import { page } from '$app/state';
   import { api } from '$lib/api';
   import Poster from '$lib/Poster.svelte';
-  import { session } from '$lib/session.svelte';
   import type { Item } from '$lib/types';
 
   const PAGE = 60;
@@ -24,8 +23,6 @@
   let sort = $state('title');
 
   let sentinel: HTMLDivElement | null = $state(null);
-
-  const library = $derived(session.libraries.find((l) => l.id === page.params.id));
 
   async function load() {
     loading = true;
@@ -69,8 +66,6 @@
   });
 
 </script>
-
-<h1>{library?.name ?? 'Library'}</h1>
 
 <div class="toolbar" role="group" aria-label="Filters">
   <label>
