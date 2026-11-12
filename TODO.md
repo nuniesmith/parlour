@@ -14,6 +14,17 @@ Phase 4 with recommendations (D10, REC1–REC5) and a detailed
 *arr request lifecycle (D11), and the client phases re-sequenced
 per D12 (web is the ABR test vehicle; Android phone next; TV
 deferred pending the OS check R7; iOS after that).
+**2026-11-11 (late):** a test instance runs on oryx behind
+https://parlour.7gram.xyz (temporary princess proxy; production
+still moves to sullivan per D4). Owner added three new tracks,
+now Phases 7–9 below: **Web UI parity with Emby's setup**
+(D13, spec: `docs/WEBUI-EMBY-NOTES.md`), **import/export of
+everything + sidecar metadata stored with the media files**
+(D14), and **segments — intro/credits detection, skip, and
+autoplay next episode** (D15). These are the owner's priority
+tracks after the Phase 1 operational finish; the phase numbers
+are labels, not a queue order — the owner picks. An in-app
+change-password PR (A8) is in flight separately.
 
 ---
 
@@ -83,7 +94,35 @@ deferred pending the OS check R7; iOS after that).
   OS, so the TV build is probably the cheap Android TV flavour
   after all; Vega/Kepler is a separate parked track that starts
   only if a Vega device is actually owned. iOS after Android.
-  Research §5.
+  Research §5. **R7 confirmed 2026-11-11: the set runs
+  Fire OS 8.1.8.5.**
+- [x] **D13 — Web UI follows Emby's information architecture.
+  DECIDED 2026-11-11:** sidebar shell with grouped sections
+  (web settings / per-user preferences / server admin tree),
+  a server Dashboard with info card, Now Playing session
+  cards, Activity and Alerts — the layout the owner already
+  knows. Original Parlour implementation and branding
+  (clean-room rule applies to UI too: patterns yes, Emby
+  code/assets/wording no). Spec: `docs/WEBUI-EMBY-NOTES.md`.
+  Explicit non-goals: Premiere/paywall, Live TV, DLNA,
+  Camera Upload, Cinema Intros, plugin store.
+- [x] **D14 — Import/export everything, plus sidecar metadata.
+  DECIDED 2026-11-11:** one integrated system: a versioned
+  export bundle (users/logins, profiles, library definitions
+  + access, catalog metadata, watch history, segments) that
+  imports back idempotently with a dry-run report; AND
+  per-item metadata sidecars stored **with the media files**,
+  so the metadata travels when files move. Item metadata
+  lives in sidecars; per-user state (watch history, logins)
+  lives in the bundle only. Media stays read-only unless a
+  library opts into sidecar writing.
+- [x] **D15 — Segments + autoplay. DECIDED 2026-11-11:**
+  intros/credits are detected automatically (chapters first,
+  then audio-fingerprint matching across a season's episodes,
+  Jellyfin-intro-skipper style), stored per episode, and the
+  player offers Skip (button or auto, per profile). Next
+  episode autoplays behind a countdown card, per-profile
+  toggle, riding the existing playback reporting.
 
 ---
 
@@ -521,6 +560,164 @@ go back to Emby for X" moments.
   HLS (no FairPlay complexity — don't import it); downloads
   are sandbox assets, rendition chosen from the T10 ladder.
   Phone only, like N6.
+
+---
+
+## Phase 7 — Web UI: Emby-style shell, dashboard & sessions (`web/`, `server`, D13)
+
+Spec: `docs/WEBUI-EMBY-NOTES.md` — read it first; it has the
+screenshot analysis, the current-UI inventory, and the gap
+table this phase closes. Presentation + light server support;
+does NOT depend on Phase 2 transcoding.
+
+- [ ] UI1 (L) **Sidebar shell**: left sidebar with collapsible
+  sections (Libraries · Web Settings · `<profile>`
+  Preferences · Server, admins only), active-item pill,
+  search box in the sidebar, top bar with back/title +
+  account actions; drawer under 1024 px; keep Parlour
+  tokens + focus states; usable in the TV's browser.
+- [ ] UI2 (M) **Server Dashboard page** (`/admin` landing):
+  server name, version (`/api/v1/version`), listener port,
+  DB status, the LAN / tailnet / public URLs from server
+  config with copy buttons, job-queue snapshot, restart /
+  power actions where the server honestly supports them.
+- [ ] UI3 (L) **Now Playing session cards**: extend the P8
+  session payload server-side (playback plan per stream:
+  source → mode + reason; client app/device, user+profile,
+  source IP/protocol, position/duration) and render Emby-
+  anatomy cards (poster, S/E line, progress bar, stream
+  block, controls: stop session; pause = revoke + stop in
+  v1, noted as such). Poll ~5 s; quiet empty state.
+- [ ] UI4 (M) **Activity feed**: `activity` table + writes at
+  login, playback start/stop, scan/import completion, user/
+  invite admin actions; Dashboard feed + full page; 90-day
+  retention job.
+- [ ] UI5 (M) **Notices / Alerts**: server notices model fed
+  by failed jobs, metadata-review backlog, disk-space check,
+  config-changed-restart flag; Dashboard banner + right-rail
+  Alerts list with icons + timestamps; dismiss per admin.
+- [ ] UI6 (L) **Admin IA re-org**: the one tabbed `/admin`
+  page becomes the sidebar Server tree: Dashboard, General,
+  Users (users + invites + access), Library (libraries,
+  paths, scans, Emby import), Metadata (review queue),
+  Sessions (UI3), Jobs (run-now where supported, error
+  detail), Import/Export (XFER8 lands here). All deep-
+  linkable under `/admin/...`; old tab URLs redirect.
+- [ ] UI7 (M) **Preferences IA re-org**: Settings splits into
+  Display, Home Screen (rail visibility/order), Playback
+  (SEG5/SEG6 prefs live here), Subtitles, Profile, Account.
+- [ ] UI8 (S) **Home parity bits**: library tile row +
+  per-library Latest rails alongside the existing
+  Continue Watching / Next Up / Recently Added rails.
+- [ ] UI9 (S) Search affordances: `/` keyboard shortcut
+  focuses search from anywhere; recent searches per profile.
+- [ ] UI10 (M) **Account self-service**: change-username
+  endpoint (case-insensitive unique, current password
+  required, existing sessions survive) + Account page UI;
+  admins can rename users too.
+- [ ] UI11 (S) **Visual QA pass**: screenshot checklist
+  against `docs/WEBUI-EMBY-NOTES.md` §1 (shell, dashboard,
+  session card, rails) at desktop + phone widths; fix
+  spacing/anatomy drift; empty states everywhere.
+- **Done when:** an Emby user can sit down and find
+  everything where Emby taught them to look — dashboard,
+  sessions with explained stream decisions, users, libraries,
+  jobs — without a tour; Parlour branding throughout.
+
+## Phase 8 — Import/export & sidecar metadata (`server`, `catalog`, `jobs`, `db`, D14)
+
+- [ ] XFER1 (M) **Bundle format spec**: versioned
+  `parlour-export v1` (zip): `manifest.json` (format +
+  server versions, export time), `users.json` (username,
+  is_admin, password + PIN **hashes** — hashes leave the
+  server only behind an explicit admin confirm with a
+  warning), `profiles.json` (+ prefs), `libraries.json`
+  (definitions, paths, access grants by username),
+  `catalog.json` (items keyed by library + stable_key, with
+  provider ids, genres, people, ratings, segments),
+  `user_data.json` (per username+profile: positions,
+  played, favourites, play counts, last played). Settings
+  secrets (API keys, stream secret) are **never** exported.
+  Written up in `docs/IMPORT-EXPORT.md` as part of this task.
+- [ ] XFER2 (L) **Export**: admin endpoint + background job
+  producing the bundle; optional artwork inclusion (files
+  under `artwork/` in the zip, off by default with a size
+  warning); download from the Jobs UI.
+- [ ] XFER3 (L) **Import**: upload → parse → **dry-run
+  report** (creates / updates / conflicts, matched by
+  username, library name, item stable_key/provider ids) →
+  apply as a job. Idempotent; import never deletes anything
+  by default; conflicting usernames are reported, not merged.
+- [ ] XFER4 (L) **Sidecar metadata with the media files**:
+  per-file `<name>.parlour.json` (series: folder-level
+  `series.parlour.json` + per-episode files), versioned,
+  holding item metadata (titles, year, provider ids, genres,
+  overview, rating, cast, segments). Scanner reads sidecars
+  **before** provider lookup and treats them as
+  authoritative for those fields; a metadata job rewrites
+  sidecars when matched metadata changes. Atomic writes
+  (temp + rename).
+- [ ] XFER5 (M) **Sidecar write opt-in**: per-library
+  `write_sidecars` flag (default off — media mounts are
+  read-only today); when on, XFER4 writes + optionally
+  copies poster/backdrop as `poster.jpg` / `backdrop.jpg`
+  next to the media. The flag + mount change is an explicit
+  ops step, documented in the task PR.
+- [ ] XFER6 (S) **NFO interop**: scanner also reads
+  Kodi/Emby-style `.nfo` (ids + title) as an input source;
+  XFER4 can optionally write `.nfo` alongside the JSON.
+- [ ] XFER7 (M) **Automatic backups**: nightly export job to
+  a configurable folder with retention (ties into the
+  Cross-cutting backups item); restore = XFER3.
+- [ ] XFER8 (M) **Admin UI**: Server → Import/Export page —
+  export (options + download), import (upload, dry-run
+  report render, apply), per-library sidecar status.
+- **Done when:** the whole server state survives a host
+  move — bundle out on oryx, bundle in on a fresh install,
+  same users/profiles/watch history — and copying a movie
+  folder to a new drive carries its Parlour metadata with it.
+
+## Phase 9 — Segments: intro/credits detection, skip, autoplay next (`catalog`, `playback`, `web`, D15)
+
+- [ ] SEG1 (M) **`media_segments`**: migration + types —
+  (item_id, kind intro/credits/recap, start_ms, end_ms,
+  source chapters/fingerprint/manual, confidence);
+  playback-info returns the file's segments; manual source
+  always wins over auto.
+- [ ] SEG2 (M) **Cheap detection pass**: `DetectSegments`
+  job — ffprobe chapters named intro/opening/credits, plus
+  black-frame + silence heuristics at head/tail. Runs on
+  scan for series episodes; fills SEG1 with source=chapters
+  or a low-confidence heuristic row.
+- [ ] SEG3 (L) **Audio-fingerprint detection**: fingerprint
+  each episode's audio (ffmpeg chromaprint) once, cache by
+  file hash; cross-correlate episodes within a season —
+  the long common segment inside the first ~25% is the
+  intro; a common tail segment is the credits. Confidence
+  from match length/quality; below threshold → no segment,
+  never a guess. This is the Jellyfin intro-skipper method;
+  implement from the algorithm description, no borrowed code.
+- [ ] SEG4 (M) **Segment editor**: on the item admin view —
+  list segments, add/edit times/delete, "preview from here"
+  seek in the player; saves as source=manual.
+- [ ] SEG5 (M) **Skip in the player**: Skip Intro / Skip
+  Credits button while the playhead is inside a segment
+  (web first); per-profile mode in Preferences → Playback
+  (UI7): button / auto-skip / off.
+- [ ] SEG6 (M) **Autoplay next episode**: playback-info
+  gains `next_episode` (reuse the 1.6 next-up query);
+  at credits-start or file end, a countdown card (10 s,
+  poster + title, Play now / Cancel); on fire: stopped
+  report for the old episode + start for the new one, so
+  Continue Watching and affinity data stay correct.
+  Per-profile toggle (default on), Preferences → Playback.
+- [ ] SEG7 (S) **Still-watching prompt** (stretch): after
+  3 episodes autoplayed back-to-back, the countdown card
+  asks once; resets on any interaction.
+- **Done when:** a season with a shared intro gets Skip
+  Intro on every episode with no manual work, episodes roll
+  into each other hands-free, and turning it off per profile
+  actually turns all of it off.
 
 ---
 
