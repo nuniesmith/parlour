@@ -3,6 +3,7 @@
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import { api } from '$lib/api';
+  import ServerDashboard from '$lib/ServerDashboard.svelte';
   import { session } from '$lib/session.svelte';
   import type {
     AdminUser,
@@ -13,13 +14,13 @@
     ReviewItem,
   } from '$lib/types';
 
-  type Tab = 'users' | 'libraries' | 'jobs' | 'review' | 'emby';
-  const TABS: Tab[] = ['users', 'libraries', 'jobs', 'review', 'emby'];
+  type Tab = 'dashboard' | 'users' | 'libraries' | 'jobs' | 'review' | 'emby';
+  const TABS: Tab[] = ['dashboard', 'users', 'libraries', 'jobs', 'review', 'emby'];
   // The tab lives in the URL (`/admin?tab=jobs`) so the sidebar's
   // Server entries deep-link to it and Back steps through tabs.
   const tab = $derived.by((): Tab => {
     const t = page.url.searchParams.get('tab') as Tab | null;
-    return t && TABS.includes(t) ? t : 'users';
+    return t && TABS.includes(t) ? t : 'dashboard';
   });
   function setTab(t: Tab) {
     void goto(`/admin?tab=${t}`, { keepFocus: true, noScroll: true });
@@ -252,6 +253,7 @@
 {#if notice}<p class="notice" role="status">{notice}</p>{/if}
 
 <div class="tabs" role="tablist">
+  <button class="btn" class:primary={tab === 'dashboard'} onclick={() => setTab('dashboard')}>Dashboard</button>
   <button class="btn" class:primary={tab === 'users'} onclick={() => setTab('users')}>Users & invites</button>
   <button class="btn" class:primary={tab === 'libraries'} onclick={() => setTab('libraries')}>Libraries</button>
   <button class="btn" class:primary={tab === 'jobs'} onclick={() => setTab('jobs')}>Jobs</button>
@@ -260,6 +262,10 @@
     Metadata review ({review.length})
   </button>
 </div>
+
+{#if tab === 'dashboard'}
+  <ServerDashboard />
+{/if}
 
 {#if tab === 'users'}
   <h2>Users</h2>

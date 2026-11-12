@@ -5,6 +5,7 @@
 pub mod auth;
 pub mod catalog;
 pub mod config;
+pub mod dashboard;
 pub mod discover;
 pub mod emby_admin;
 pub mod error;

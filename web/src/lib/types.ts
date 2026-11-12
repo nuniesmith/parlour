@@ -183,6 +183,21 @@ export interface Job {
   finished_at: string | null;
 }
 
+export interface ServerInfo {
+  name: string;
+  version: string;
+  port: number;
+  db: 'ok' | 'unreachable';
+  urls: { lan: string | null; tailnet: string | null; public: string | null };
+  jobs: {
+    queued: number;
+    running: number;
+    failed_recent: number;
+    succeeded_recent: number;
+  } | null;
+  actions: { restart: boolean; shutdown: boolean };
+}
+
 export interface Candidate {
   provider: string;
   provider_id: number;

@@ -37,6 +37,11 @@ services:
       PARLOUR_CACHE_DIR: /cache
       PARLOUR_EMBY_URL: ${PARLOUR_EMBY_URL:-}
       PARLOUR_EMBY_API_KEY: ${PARLOUR_EMBY_API_KEY:-}
+      # Shown on the Server Dashboard (UI2). Optional; unset = "not set".
+      PARLOUR_SERVER_NAME: ${PARLOUR_SERVER_NAME:-}
+      PARLOUR_URL_LAN: ${PARLOUR_URL_LAN:-}
+      PARLOUR_URL_TAILNET: ${PARLOUR_URL_TAILNET:-}
+      PARLOUR_URL_PUBLIC: ${PARLOUR_URL_PUBLIC:-}
     ports:
       - "${PARLOUR_PORT:-8585}:${PARLOUR_PORT:-8585}"
     volumes:

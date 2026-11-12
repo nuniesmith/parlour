@@ -47,7 +47,7 @@
 
   const path = $derived(page.url.pathname);
   const hash = $derived(page.url.hash);
-  const adminTab = $derived(page.url.searchParams.get('tab') ?? 'users');
+  const adminTab = $derived(page.url.searchParams.get('tab') ?? 'dashboard');
 
   function settingsItem(anchor: string, label: string, first = false): NavItem {
     return {
@@ -102,6 +102,7 @@
         id: 'server',
         title: 'Server',
         items: [
+          adminItem('dashboard', 'Dashboard'),
           adminItem('users', 'Users & invites'),
           adminItem('libraries', 'Libraries'),
           adminItem('jobs', 'Jobs'),
