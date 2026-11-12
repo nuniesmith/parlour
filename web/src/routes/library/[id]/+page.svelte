@@ -116,7 +116,7 @@
 {:else if loading}
   <p class="dim">Loading…</p>
 {:else if items.length === 0}
-  <p class="dim">Nothing matches. Try clearing a filter — or scan the library from Admin.</p>
+  <p class="dim">Nothing matches. Try clearing a filter — or scan the library from Server → Library.</p>
 {:else}
   <div class="grid">
     {#each items.slice(0, visible) as item (item.id)}

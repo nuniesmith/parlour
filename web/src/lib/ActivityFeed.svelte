@@ -93,7 +93,7 @@
 <div class="head">
   <h2>Activity</h2>
   {#if compact}
-    <a class="btn small" href="/admin?tab=activity">All activity</a>
+    <a class="btn small" href="/admin/activity">All activity</a>
   {:else}
     <label class="filter">
       <span class="sr-only">Show</span>

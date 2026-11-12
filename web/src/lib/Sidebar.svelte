@@ -1,9 +1,9 @@
 <script lang="ts">
   // Sidebar navigation tree (UI1, D13): brand, search box, then
   // collapsible sections — Libraries, Web Settings, "<profile>
-  // Preferences", and Server (admins only). The Preferences and
-  // Server entries deep-link into today's /settings and /admin
-  // pages; UI6/UI7 turn them into pages of their own.
+  // Preferences", and Server (admins only). The Server entries
+  // are pages under /admin (UI6); the Preferences entries still
+  // deep-link into /settings until UI7 splits it.
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import { session } from '$lib/session.svelte';
@@ -47,7 +47,6 @@
 
   const path = $derived(page.url.pathname);
   const hash = $derived(page.url.hash);
-  const adminTab = $derived(page.url.searchParams.get('tab') ?? 'dashboard');
 
   function settingsItem(anchor: string, label: string, first = false): NavItem {
     return {
@@ -57,12 +56,11 @@
     };
   }
 
-  function adminItem(tab: string, label: string): NavItem {
-    return {
-      href: `/admin?tab=${tab}`,
-      label,
-      active: path === '/admin' && adminTab === tab,
-    };
+  // Server pages: Dashboard is exactly /admin; every other
+  // entry also owns the pages beneath it (Library → Emby import).
+  function adminItem(href: string, label: string): NavItem {
+    const active = href === '/admin' ? path === '/admin' : path === href || path.startsWith(`${href}/`);
+    return { href, label, active };
   }
 
   const sections = $derived.by((): NavSection[] => {
@@ -102,13 +100,15 @@
         id: 'server',
         title: 'Server',
         items: [
-          adminItem('dashboard', 'Dashboard'),
-          adminItem('users', 'Users & invites'),
-          adminItem('libraries', 'Libraries'),
-          adminItem('jobs', 'Jobs'),
-          adminItem('review', 'Metadata review'),
-          adminItem('emby', 'Emby import'),
-          adminItem('activity', 'Activity'),
+          adminItem('/admin', 'Dashboard'),
+          adminItem('/admin/general', 'General'),
+          adminItem('/admin/users', 'Users'),
+          adminItem('/admin/library', 'Library'),
+          adminItem('/admin/metadata', 'Metadata'),
+          adminItem('/admin/sessions', 'Sessions'),
+          adminItem('/admin/jobs', 'Jobs'),
+          adminItem('/admin/activity', 'Activity'),
+          adminItem('/admin/import-export', 'Import / Export'),
         ],
       });
     }

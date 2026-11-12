@@ -168,7 +168,7 @@
 
   <div class="head">
     <h2>Job queue</h2>
-    <a class="btn small" href="/admin?tab=jobs">All jobs</a>
+    <a class="btn small" href="/admin/jobs">All jobs</a>
   </div>
   {#if info.jobs}
     <ul class="stats">

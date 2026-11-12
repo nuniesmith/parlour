@@ -10,8 +10,8 @@
   }: { notices: Notice[] | null; ondismiss: (n: Notice) => void } = $props();
 
   const LINKS: Record<string, { href: string; label: string }> = {
-    job_failed: { href: '/admin?tab=jobs', label: 'Open jobs' },
-    metadata_review: { href: '/admin?tab=review', label: 'Review matches' },
+    job_failed: { href: '/admin/jobs', label: 'Open jobs' },
+    metadata_review: { href: '/admin/metadata', label: 'Review matches' },
   };
 
   const SEVERITY_LABEL: Record<string, string> = {
