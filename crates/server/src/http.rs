@@ -39,6 +39,9 @@ pub struct AppState {
     pub playback: std::sync::Arc<crate::playback::PlaybackState>,
     /// Milestone 1.7 Emby connection (optional).
     pub emby: parlour_catalog::EmbySettings,
+    /// UI2 Dashboard facts (name, port, access URLs). Defaults to
+    /// unconfigured; `main` fills it from `Config`.
+    pub server: crate::dashboard::ServerSettings,
 }
 
 impl AppState {
@@ -51,6 +54,7 @@ impl AppState {
             metadata: crate::metadata::MetadataSettings::default(),
             playback: std::sync::Arc::new(crate::playback::PlaybackState::new()),
             emby: parlour_catalog::EmbySettings::default(),
+            server: crate::dashboard::ServerSettings::default(),
         }
     }
 }
@@ -76,6 +80,7 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::discover::routes())
         .merge(crate::playback::routes())
         .merge(crate::emby_admin::routes())
+        .merge(crate::dashboard::routes())
         .fallback(fallback)
         .layer(PropagateRequestIdLayer::x_request_id())
         .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
@@ -217,6 +222,7 @@ mod tests {
             "/api/v1/profiles",
             "/api/v1/auth/sessions",
             "/api/v1/libraries",
+            "/api/v1/admin/server",
         ] {
             let (status, _) = get(test_router(), path).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{path}");

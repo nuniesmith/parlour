@@ -45,6 +45,15 @@ pub struct Config {
     pub emby_api_key: Option<String>,
     pub cache_dir: PathBuf,
     pub stream_secret: Option<String>,
+    /// UI2: display name on the Server Dashboard
+    /// (`PARLOUR_SERVER_NAME`, default "Parlour").
+    pub server_name: String,
+    /// UI2: the addresses this server is reached by, shown (never
+    /// guessed) on the Dashboard: `PARLOUR_URL_LAN`,
+    /// `PARLOUR_URL_TAILNET`, `PARLOUR_URL_PUBLIC`.
+    pub url_lan: Option<String>,
+    pub url_tailnet: Option<String>,
+    pub url_public: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -173,6 +182,15 @@ impl Config {
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("artwork"));
 
+        let server_name = vars
+            .get("PARLOUR_SERVER_NAME")
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "Parlour".to_string());
+        let url_lan = access_url(vars, "PARLOUR_URL_LAN")?;
+        let url_tailnet = access_url(vars, "PARLOUR_URL_TAILNET")?;
+        let url_public = access_url(vars, "PARLOUR_URL_PUBLIC")?;
+
         Ok(Self {
             bind_addr,
             database_url,
@@ -190,7 +208,36 @@ impl Config {
             emby_api_key,
             cache_dir,
             stream_secret,
+            server_name,
+            url_lan,
+            url_tailnet,
+            url_public,
         })
+    }
+}
+
+/// An optional access URL for the Dashboard. Unset or blank is
+/// `None`; anything set must be an http(s) URL, because the UI
+/// renders it as a link.
+fn access_url(
+    vars: &HashMap<String, String>,
+    name: &'static str,
+) -> Result<Option<String>, ConfigError> {
+    let Some(raw) = vars.get(name).map(|s| s.trim()).filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    let rest = raw
+        .strip_prefix("http://")
+        .or_else(|| raw.strip_prefix("https://"));
+    match rest {
+        Some(host) if !host.is_empty() && !raw.contains(char::is_whitespace) => {
+            Ok(Some(raw.to_string()))
+        }
+        _ => Err(ConfigError::InvalidVar {
+            name,
+            value: raw.to_string(),
+            reason: "expected a full URL starting with http:// or https://",
+        }),
     }
 }
 
@@ -217,6 +264,44 @@ mod tests {
         assert_eq!(cfg.web_dir, None);
         assert_eq!(cfg.admin_user, None);
         assert!(!cfg.cookie_secure);
+        assert_eq!(cfg.server_name, "Parlour");
+        assert_eq!(cfg.url_lan, None);
+        assert_eq!(cfg.url_tailnet, None);
+        assert_eq!(cfg.url_public, None);
+    }
+
+    #[test]
+    fn server_name_and_access_urls_are_read() {
+        let cfg = Config::from_vars(&vars(&[
+            ("PARLOUR_DATABASE_URL", "postgres://u:p@localhost/parlour"),
+            ("PARLOUR_SERVER_NAME", "  oryx  "),
+            ("PARLOUR_URL_LAN", "http://192.168.1.20:8585"),
+            ("PARLOUR_URL_TAILNET", "https://parlour.example.ts.net"),
+            ("PARLOUR_URL_PUBLIC", "   "),
+        ]))
+        .unwrap();
+        assert_eq!(cfg.server_name, "oryx");
+        assert_eq!(cfg.url_lan.as_deref(), Some("http://192.168.1.20:8585"));
+        assert_eq!(
+            cfg.url_tailnet.as_deref(),
+            Some("https://parlour.example.ts.net")
+        );
+        assert_eq!(cfg.url_public, None, "blank means not set");
+    }
+
+    #[test]
+    fn access_url_without_a_scheme_is_a_clear_error() {
+        for bad in ["parlour.example.com", "https://", "ftp://x", "http://a b"] {
+            let err = Config::from_vars(&vars(&[
+                ("PARLOUR_DATABASE_URL", "postgres://u:p@localhost/parlour"),
+                ("PARLOUR_URL_PUBLIC", bad),
+            ]))
+            .unwrap_err();
+            assert!(
+                err.to_string().contains("PARLOUR_URL_PUBLIC"),
+                "{bad}: {err}"
+            );
+        }
     }
 
     #[test]

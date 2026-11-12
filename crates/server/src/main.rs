@@ -64,6 +64,7 @@ async fn main() {
     let mut state = AppState::new(pool, config.web_dir.clone(), config.cookie_secure);
     state.metadata = metadata;
     state.emby = emby;
+    state.server = parlour_server::dashboard::ServerSettings::from_config(&config);
     std::sync::Arc::get_mut(&mut state.playback)
         .expect("fresh playback state")
         .configure(config.cache_dir.clone(), config.stream_secret.clone());

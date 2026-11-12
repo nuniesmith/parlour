@@ -153,6 +153,17 @@ should show the same anatomy with *its* reasons
   feed sourced from failed jobs, metadata-review backlog,
   disk-space checks, and "restart to apply" flags after a
   config change).
+  *Shipped (UI2):* `GET /api/v1/admin/server` (admin-only)
+  feeds `web/src/lib/ServerDashboard.svelte`, the default
+  view of `/admin`. Name and URLs come from
+  `PARLOUR_SERVER_NAME` / `PARLOUR_URL_LAN` /
+  `PARLOUR_URL_TAILNET` / `PARLOUR_URL_PUBLIC` (see
+  `.env.example`); an unset URL shows "Not set". Restart /
+  shut down are **not** offered: the compose file sets no
+  restart policy, so the server cannot honestly promise to
+  come back — the payload's `actions` flags are both false
+  and the page points at the host instead. Notices banner +
+  Alerts rail are UI5.
 - **Now Playing (UI3)**: session cards with §1.4's anatomy
   fed by the existing registry, extended server-side to
   carry the playback plan (container/codecs → mode +

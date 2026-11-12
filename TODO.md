@@ -576,7 +576,7 @@ does NOT depend on Phase 2 transcoding.
   search box in the sidebar, top bar with back/title +
   account actions; drawer under 1024 px; keep Parlour
   tokens + focus states; usable in the TV's browser.
-- [ ] UI2 (M) **Server Dashboard page** (`/admin` landing):
+- [x] UI2 (M) **Server Dashboard page** (`/admin` landing):
   server name, version (`/api/v1/version`), listener port,
   DB status, the LAN / tailnet / public URLs from server
   config with copy buttons, job-queue snapshot, restart /
