@@ -390,7 +390,7 @@ go back to Emby for X" moments.
 - [ ] N4 (S) Sideload install on the owner's phone + living-room /
   road soak test vs the Emby app it replaces (adb install; no
   store needed for household use)
-- [ ] N8 (L) TV flavour — **only after R7 confirms Fire OS**:
+- [ ] N8 (L) TV flavour — **R7 confirmed Fire OS 8.1.8.5 (2026-11-11)**:
   `LEANBACK_LAUNCHER` flavour, 320×180 banner, Compose-for-TV
   rows, D-pad-first navigation with visible focus (the focus
   work, not playback, is the bulk of this), byte-capped buffers
@@ -552,10 +552,11 @@ go back to Emby for X" moments.
   is actually in sullivan (the NVENC session math assumes
   GeForce; an Intel-only box makes QSV *throughput* the limit)
   + a real concurrent-encode benchmark on that hardware
-- [ ] R7 (5 min, owner, gates N8) **TV OS check**: on the new
-  Ember TV, Settings → About — record the build model + OS
-  version. Amazon's table says Ember Artline = Fire OS 8
-  (AFTB… builds); a Vega result would park N8 and unpark N9
+- [x] R7 (5 min, owner, gates N8) **TV OS check — DONE
+  2026-11-11: Fire OS 8.1.8.5** (owner read it off the set).
+  Not Vega OS: the TV runs Android apps and sideloads APKs.
+  N8 (Android TV flavour) is the TV path; N9 (Vega) stays
+  parked unless a Vega device is ever owned
 - [ ] R8 (2 h, before T16) TV built-in browser viability: does
   the Ember TV's browser run MSE + hls.js at usable speed?
 - [ ] R9 (1 h, before T15/N7) Pin hls.js + Media3 versions in

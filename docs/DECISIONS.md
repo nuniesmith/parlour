@@ -134,6 +134,7 @@ From the ABR/recommendations/clients research of 2026-11-11
   Amazon's own device table lists the Ember Artline (2026) as
   Fire OS 8 (Android 11) — Vega OS 2.0 is sticks-only so far.
   The TV's About screen (build model / OS version) is the
-  deciding check (TODO R7). If Fire OS: TV app = Android TV
-  flavour, sideloadable. Vega/Kepler support stays a parked,
-  separate app track, started only if a Vega device is owned.
+  deciding check (TODO R7). **R7 DONE 2026-11-11: the set
+  reports Fire OS 8.1.8.5** — TV app = Android TV flavour,
+  sideloadable. Vega/Kepler support stays a parked, separate
+  app track, started only if a Vega device is owned.
