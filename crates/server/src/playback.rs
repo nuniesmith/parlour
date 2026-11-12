@@ -1113,35 +1113,54 @@ async fn report_start(
     });
     let now = Utc::now();
     let session_id = Uuid::new_v4();
-    let mut sessions = app.playback.sessions.lock().unwrap();
-    sessions.retain(|_, s| (now - s.last_seen).num_seconds() <= SESSION_FORGET_SECS);
-    sessions.insert(
-        session_id,
-        SessionInfo {
-            profile_id,
-            item_id: body.item_id,
-            file_id: body.file_id,
-            started_at: now,
-            last_seen: now,
-            position_ms: body.position_ms.unwrap_or(0),
-            duration_ms: body.duration_ms.filter(|d| *d > 0),
-            plan,
-            client: ClientInfo {
-                name: clean_label(body.client_name.as_deref(), 80),
-                version: clean_label(body.client_version.as_deref(), 40),
-                device: clean_label(body.device_name.as_deref(), 80),
-                user_agent: header_text(header::USER_AGENT, 300),
-            },
-            remote: RemoteInfo {
-                ip: ip.map(|a| a.to_string()),
-                // First hop only: the address the proxy says it saw.
-                forwarded_for: header_text(header::HeaderName::from_static("x-forwarded-for"), 200)
+    {
+        let mut sessions = app.playback.sessions.lock().unwrap();
+        sessions.retain(|_, s| (now - s.last_seen).num_seconds() <= SESSION_FORGET_SECS);
+        sessions.insert(
+            session_id,
+            SessionInfo {
+                profile_id,
+                item_id: body.item_id,
+                file_id: body.file_id,
+                started_at: now,
+                last_seen: now,
+                position_ms: body.position_ms.unwrap_or(0),
+                duration_ms: body.duration_ms.filter(|d| *d > 0),
+                plan,
+                client: ClientInfo {
+                    name: clean_label(body.client_name.as_deref(), 80),
+                    version: clean_label(body.client_version.as_deref(), 40),
+                    device: clean_label(body.device_name.as_deref(), 80),
+                    user_agent: header_text(header::USER_AGENT, 300),
+                },
+                remote: RemoteInfo {
+                    ip: ip.map(|a| a.to_string()),
+                    // First hop only: the address the proxy says it saw.
+                    forwarded_for: header_text(
+                        header::HeaderName::from_static("x-forwarded-for"),
+                        200,
+                    )
                     .and_then(|v| clean_label(v.split(',').next(), 64)),
-                protocol: protocol_name(version),
+                    protocol: protocol_name(version),
+                },
+                stopped: false,
             },
-            stopped: false,
-        },
-    );
+        );
+    }
+    let title = crate::activity::item_label(&app.pool, body.item_id).await;
+    crate::activity::record(
+        &app.pool,
+        crate::activity::Entry::by_user(
+            "playback.start",
+            user.user_id,
+            &user.username,
+            format!("{} started playing {title}", user.username),
+        )
+        .profile(profile_id)
+        .item(body.item_id)
+        .detail(serde_json::json!({ "session_id": session_id })),
+    )
+    .await;
     Ok(Json(serde_json::json!({"session_id": session_id})))
 }
 
@@ -1179,18 +1198,51 @@ async fn report_stopped(
     let profile_id = active_profile(&user)?;
     require_item_access(&app, profile_id, body.item_id).await?;
     upsert_position(&app, profile_id, &body, false).await?;
-    let mut sessions = app.playback.sessions.lock().unwrap();
-    match body.session_id {
-        // A client that names its session ends only that one.
-        Some(id) => {
-            if sessions
+    // Whether a session that was still playing ended here. Players
+    // can report `stopped` twice (ended, then page teardown), and a
+    // session an admin stopped already has its own activity line.
+    let ended_live = {
+        let mut sessions = app.playback.sessions.lock().unwrap();
+        let mine = |s: &SessionInfo| s.profile_id == profile_id && s.item_id == body.item_id;
+        let ids: Vec<Uuid> = match body.session_id {
+            // A client that names its session ends only that one.
+            Some(id) => sessions
                 .get(&id)
-                .is_some_and(|s| s.profile_id == profile_id && s.item_id == body.item_id)
-            {
-                sessions.remove(&id);
+                .filter(|s| mine(s))
+                .map(|_| vec![id])
+                .unwrap_or_default(),
+            None => sessions
+                .iter()
+                .filter(|(_, s)| mine(s))
+                .map(|(id, _)| *id)
+                .collect(),
+        };
+        let mut live = false;
+        for id in ids {
+            if let Some(s) = sessions.remove(&id) {
+                live |= !s.stopped;
             }
         }
-        None => sessions.retain(|_, s| !(s.profile_id == profile_id && s.item_id == body.item_id)),
+        live
+    };
+    if ended_live {
+        let title = crate::activity::item_label(&app.pool, body.item_id).await;
+        crate::activity::record(
+            &app.pool,
+            crate::activity::Entry::by_user(
+                "playback.stop",
+                user.user_id,
+                &user.username,
+                format!("{} stopped playing {title}", user.username),
+            )
+            .profile(profile_id)
+            .item(body.item_id)
+            .detail(serde_json::json!({
+                "position_ms": body.position_ms,
+                "duration_ms": body.duration_ms,
+            })),
+        )
+        .await;
     }
     Ok(StatusCode::NO_CONTENT)
 }
@@ -1315,17 +1367,44 @@ async fn stop_session(
         match sessions.get_mut(&session_id) {
             Some(s) if !s.stopped => {
                 s.stopped = true;
-                Some((s.profile_id, s.file_id))
+                Some((s.profile_id, s.file_id, s.item_id))
             }
             _ => None,
         }
     };
-    let Some((profile_id, file_id)) = target else {
+    let Some((profile_id, file_id, item_id)) = target else {
         return Err(AppError::NotFound("no such session".into()));
     };
     if let Some(file_id) = file_id {
         revoke_tokens(&app.playback, profile_id, file_id);
     }
+    let viewer: Option<(String,)> = sqlx::query_as(
+        "SELECT u.username FROM profiles p JOIN users u ON u.id = p.user_id WHERE p.id = $1",
+    )
+    .bind(profile_id)
+    .fetch_optional(&app.pool)
+    .await
+    .unwrap_or(None);
+    let viewer = viewer
+        .map(|(name,)| name)
+        .unwrap_or_else(|| "someone".into());
+    let title = crate::activity::item_label(&app.pool, item_id).await;
+    crate::activity::record(
+        &app.pool,
+        crate::activity::Entry::by_user(
+            "playback.stopped_by_admin",
+            admin.0.user_id,
+            &admin.0.username,
+            format!(
+                "{} stopped {viewer}'s playback of {title}",
+                admin.0.username
+            ),
+        )
+        .profile(profile_id)
+        .item(item_id)
+        .detail(serde_json::json!({ "session_id": session_id })),
+    )
+    .await;
     tracing::info!(%session_id, admin = %admin.0.username, "playback session stopped by admin");
     Ok(StatusCode::NO_CONTENT)
 }

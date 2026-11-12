@@ -545,6 +545,48 @@ async fn sessions_flow() {
         .await;
     assert_eq!(sessions.as_array().unwrap().len(), 0);
 
+    // --- UI4: the same story, as the Activity feed tells it.
+    let (status, feed) = app
+        .req(
+            reqwest::Method::GET,
+            "/api/v1/admin/activity?category=playback",
+            None,
+        )
+        .await;
+    assert_eq!(status, 200, "{feed}");
+    let lines: Vec<&str> = feed["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["summary"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "jordan stopped playing Test Show S1:E1 · Episode 1",
+            "jordan stopped jordan's playback of Direct Movie",
+            "jordan started playing Direct Movie",
+            "jordan started playing Test Show S1:E1 · Episode 1",
+        ],
+        "{feed}"
+    );
+    assert_eq!(feed["entries"][0]["item_id"], ep1_id.as_str());
+    let (_, scans) = app
+        .req(
+            reqwest::Method::GET,
+            "/api/v1/admin/activity?category=scan",
+            None,
+        )
+        .await;
+    let scan = scans["entries"]
+        .as_array()
+        .unwrap()
+        .last()
+        .expect("the manual scan is in the feed");
+    assert_eq!(scan["kind"], "scan.completed");
+    assert_eq!(scan["summary"], "Scan of Media finished");
+    assert_eq!(scan["detail"]["seen_files"], 3, "{scan}");
+
     let _ = std::fs::remove_dir_all(&fixtures);
     server.abort();
 }

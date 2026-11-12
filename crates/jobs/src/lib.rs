@@ -27,6 +27,8 @@ pub enum JobKind {
     GenerateArtwork,
     ReconcileRequests,
     ImportEmby,
+    /// Nightly retention sweep of the activity feed (UI4).
+    PurgeActivity,
 }
 
 impl JobKind {
@@ -40,6 +42,7 @@ impl JobKind {
             JobKind::GenerateArtwork => "generate_artwork",
             JobKind::ReconcileRequests => "reconcile_requests",
             JobKind::ImportEmby => "import_emby",
+            JobKind::PurgeActivity => "purge_activity",
         }
     }
 }

@@ -185,9 +185,36 @@ pub async fn run_emby_job_claimed(
                 ambiguous = report.ambiguous, dry_run, "emby import finished"
             );
             let _ = parlour_jobs::complete(&pool, job.id).await;
+            crate::activity::record(
+                &pool,
+                crate::activity::Entry::system(
+                    "import.completed",
+                    if dry_run {
+                        "Emby import dry run finished"
+                    } else {
+                        "Emby import finished"
+                    },
+                )
+                .profile(profile_id)
+                .detail(serde_json::json!({
+                    "job_id": job.id,
+                    "dry_run": dry_run,
+                    "matched": report.matched,
+                    "unmatched": report.unmatched,
+                    "ambiguous": report.ambiguous,
+                })),
+            )
+            .await;
         }
         Err(e) => {
             let _ = parlour_jobs::fail(&pool, job.id, &e.to_string()).await;
+            crate::activity::record(
+                &pool,
+                crate::activity::Entry::system("import.failed", "Emby import failed")
+                    .profile(profile_id)
+                    .detail(serde_json::json!({ "job_id": job.id, "dry_run": dry_run })),
+            )
+            .await;
         }
     }
 }

@@ -108,6 +108,7 @@
           adminItem('jobs', 'Jobs'),
           adminItem('review', 'Metadata review'),
           adminItem('emby', 'Emby import'),
+          adminItem('activity', 'Activity'),
         ],
       });
     }

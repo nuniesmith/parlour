@@ -325,24 +325,8 @@ pub async fn run_scan_job(pool: parlour_db::PgPool, job_id: Uuid) {
         Ok(Some(j)) => j,
         _ => return,
     };
-    let Some(library_id) = job.library_id else {
-        let _ = parlour_jobs::fail(&pool, job_id, "scan job without a library").await;
-        return;
-    };
-    match parlour_catalog::scan_library(&pool, library_id, Some(job_id)).await {
-        Ok(report) => {
-            tracing::info!(
-                %job_id, %library_id, seen = report.seen_files,
-                probed = report.probed_files, missing = report.missing_files,
-                errors = report.errors.len(), "library scan finished"
-            );
-            let _ = parlour_jobs::complete(&pool, job_id).await;
-        }
-        Err(e) => {
-            tracing::warn!(%job_id, error = %e, "library scan failed");
-            let _ = parlour_jobs::fail(&pool, job_id, &e.to_string()).await;
-        }
-    }
+    // Same scan + completion (and activity line) as the worker path.
+    run_scan_job_claimed(pool, job).await;
 }
 
 async fn trigger_scan(
@@ -480,6 +464,7 @@ pub fn spawn_background(
                     parlour_jobs::JobKind::FetchMetadata,
                     parlour_jobs::JobKind::DownloadArtwork,
                     parlour_jobs::JobKind::ImportEmby,
+                    parlour_jobs::JobKind::PurgeActivity,
                 ] {
                     match parlour_jobs::claim_next(&pool, kind).await {
                         Ok(Some(job)) => {
@@ -503,6 +488,9 @@ pub fn spawn_background(
                     }
                     Some(job) if job.kind == "import_emby" => {
                         crate::emby_admin::run_emby_job_claimed(pool.clone(), job, &emby).await
+                    }
+                    Some(job) if job.kind == "purge_activity" => {
+                        run_purge_activity_job(&pool, job).await
                     }
                     Some(job) => run_scan_job_claimed(pool.clone(), job).await,
                     None => tokio::time::sleep(Duration::from_secs(3)).await,
@@ -538,15 +526,83 @@ async fn run_scan_job_claimed(pool: parlour_db::PgPool, job: parlour_jobs::Job) 
         let _ = parlour_jobs::fail(&pool, job.id, "scan job without a library").await;
         return;
     };
+    let library: Option<(String,)> = sqlx::query_as("SELECT name FROM libraries WHERE id = $1")
+        .bind(library_id)
+        .fetch_optional(&pool)
+        .await
+        .unwrap_or(None);
+    let library = library
+        .map(|(name,)| name)
+        .unwrap_or_else(|| "a library".to_string());
+    let trigger = job.payload["trigger"].as_str().unwrap_or("manual");
     match parlour_catalog::scan_library(&pool, library_id, Some(job.id)).await {
         Ok(report) => {
             tracing::info!(job_id = %job.id, %library_id, seen = report.seen_files,
                 "library scan finished");
             let _ = parlour_jobs::complete(&pool, job.id).await;
+            crate::activity::record(
+                &pool,
+                crate::activity::Entry::system(
+                    "scan.completed",
+                    format!("Scan of {library} finished"),
+                )
+                .detail(serde_json::json!({
+                    "job_id": job.id,
+                    "library_id": library_id,
+                    "trigger": trigger,
+                    "seen_files": report.seen_files,
+                    "probed_files": report.probed_files,
+                    "created_items": report.created_items,
+                    "missing_files": report.missing_files,
+                    "errors": report.errors.len(),
+                })),
+            )
+            .await;
         }
         Err(e) => {
+            tracing::warn!(job_id = %job.id, error = %e, "library scan failed");
             let _ = parlour_jobs::fail(&pool, job.id, &e.to_string()).await;
+            crate::activity::record(
+                &pool,
+                crate::activity::Entry::system("scan.failed", format!("Scan of {library} failed"))
+                    .detail(serde_json::json!({
+                        "job_id": job.id,
+                        "library_id": library_id,
+                        "trigger": trigger,
+                    })),
+            )
+            .await;
         }
+    }
+}
+
+/// UI4 retention: drop activity older than 90 days. The count
+/// lands in the job's result so the Jobs page shows what it did.
+async fn run_purge_activity_job(pool: &parlour_db::PgPool, job: parlour_jobs::Job) {
+    match crate::activity::purge_older_than(pool, crate::activity::RETENTION_DAYS).await {
+        Ok(deleted) => {
+            let _ =
+                parlour_jobs::set_result(pool, job.id, serde_json::json!({ "deleted": deleted }))
+                    .await;
+            let _ = parlour_jobs::complete(pool, job.id).await;
+        }
+        Err(e) => {
+            let _ = parlour_jobs::fail(pool, job.id, &e.to_string()).await;
+        }
+    }
+}
+
+/// Whether a filesystem event means the library may have changed.
+/// Opening or reading a file is not a change — and a scan itself
+/// opens every directory it walks, so treating those as changes
+/// made each scan queue the next one, forever.
+fn is_change(kind: &notify::EventKind) -> bool {
+    use notify::event::{AccessKind, AccessMode};
+    use notify::EventKind;
+    match kind {
+        EventKind::Access(AccessKind::Close(AccessMode::Write)) => true,
+        EventKind::Access(_) => false,
+        _ => true,
     }
 }
 
@@ -577,6 +633,28 @@ async fn nightly_tick(pool: &parlour_db::PgPool) {
             Err(e) => tracing::warn!(error = %e, "nightly scan check failed"),
         }
     }
+    // UI4: one activity-retention sweep per day.
+    match parlour_jobs::exists_since(
+        pool,
+        parlour_jobs::JobKind::PurgeActivity,
+        None,
+        start_of_day,
+        "nightly",
+    )
+    .await
+    {
+        Ok(true) => {}
+        Ok(false) => {
+            let _ = parlour_jobs::enqueue(
+                pool,
+                parlour_jobs::JobKind::PurgeActivity,
+                None,
+                serde_json::json!({ "trigger": "nightly" }),
+            )
+            .await;
+        }
+        Err(e) => tracing::warn!(error = %e, "nightly activity purge check failed"),
+    }
 }
 
 fn watcher_loop(pool: parlour_db::PgPool, handle: tokio::runtime::Handle) {
@@ -585,6 +663,9 @@ fn watcher_loop(pool: parlour_db::PgPool, handle: tokio::runtime::Handle) {
     let mut watcher =
         match notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
             if let Ok(event) = res {
+                if !is_change(&event.kind) {
+                    return;
+                }
                 for p in event.paths {
                     let _ = tx.send(p);
                 }
@@ -659,5 +740,38 @@ fn watcher_loop(pool: parlour_db::PgPool, handle: tokio::runtime::Handle) {
                 }
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_change;
+    use notify::event::{AccessKind, AccessMode, CreateKind, ModifyKind, RemoveKind};
+    use notify::EventKind;
+
+    #[test]
+    fn reads_are_not_library_changes() {
+        // What a scan's own directory walk and ffprobe produce.
+        assert!(!is_change(&EventKind::Access(AccessKind::Open(
+            AccessMode::Any
+        ))));
+        assert!(!is_change(&EventKind::Access(AccessKind::Read)));
+        assert!(!is_change(&EventKind::Access(AccessKind::Close(
+            AccessMode::Read
+        ))));
+        assert!(!is_change(&EventKind::Access(AccessKind::Any)));
+    }
+
+    #[test]
+    fn writes_creates_and_removes_are_changes() {
+        assert!(is_change(&EventKind::Access(AccessKind::Close(
+            AccessMode::Write
+        ))));
+        assert!(is_change(&EventKind::Create(CreateKind::File)));
+        assert!(is_change(&EventKind::Modify(ModifyKind::Any)));
+        assert!(is_change(&EventKind::Remove(RemoveKind::Folder)));
+        // Unknown kinds err on the side of rescanning.
+        assert!(is_change(&EventKind::Any));
+        assert!(is_change(&EventKind::Other));
     }
 }

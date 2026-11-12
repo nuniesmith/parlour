@@ -3,6 +3,7 @@
   // comes from GET /api/v1/admin/server and the recent-jobs list —
   // addresses are displayed as configured, never guessed.
   import { onMount } from 'svelte';
+  import ActivityFeed from '$lib/ActivityFeed.svelte';
   import { api } from '$lib/api';
   import NowPlaying from '$lib/NowPlaying.svelte';
   import type { Job, ServerInfo } from '$lib/types';
@@ -130,6 +131,8 @@
   </section>
 
   <NowPlaying />
+
+  <ActivityFeed compact />
 
   <div class="head">
     <h2>Job queue</h2>

@@ -232,6 +232,23 @@ export interface PlaybackSession {
   plan: StreamPlan | null;
 }
 
+export interface ActivityEntry {
+  id: string;
+  created_at: string;
+  kind: string;
+  user_id: string | null;
+  profile_id: string | null;
+  item_id: string | null;
+  actor: string | null;
+  summary: string;
+  detail: Record<string, unknown>;
+}
+
+export interface ActivityPage {
+  entries: ActivityEntry[];
+  next_before: string | null;
+}
+
 export interface ServerInfo {
   name: string;
   version: string;

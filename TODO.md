@@ -588,7 +588,7 @@ does NOT depend on Phase 2 transcoding.
   anatomy cards (poster, S/E line, progress bar, stream
   block, controls: stop session; pause = revoke + stop in
   v1, noted as such). Poll ~5 s; quiet empty state.
-- [ ] UI4 (M) **Activity feed**: `activity` table + writes at
+- [x] UI4 (M) **Activity feed**: `activity` table + writes at
   login, playback start/stop, scan/import completion, user/
   invite admin actions; Dashboard feed + full page; 90-day
   retention job.
