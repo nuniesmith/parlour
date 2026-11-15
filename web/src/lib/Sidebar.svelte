@@ -6,6 +6,7 @@
   // pages under /settings (UI7).
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
+  import { loadRecent, recent, recordSearch } from '$lib/recentSearches.svelte';
   import { session } from '$lib/session.svelte';
 
   interface NavItem {
@@ -119,8 +120,22 @@
     event.preventDefault();
     const query = q.trim();
     q = '';
+    // UI9: a submitted search is a committed one — remember it.
+    void recordSearch(query);
     void goto(query ? `/search?q=${encodeURIComponent(query)}` : '/search');
   }
+
+  // Offer the profile's recent searches as suggestions; refreshed
+  // each time the box gains focus (`/` or a click), so another
+  // device's searches show up too.
+  // Also load once the active profile is known (or changes), so a
+  // `/` pressed while the page is still loading isn't left empty.
+  $effect(() => {
+    if (session.me?.active_profile?.id) void loadRecent();
+  });
+  const suggestions = $derived(
+    recent.profileId === (session.me?.active_profile?.id ?? null) ? recent.items : [],
+  );
 </script>
 
 <a class="brand" href="/">
@@ -133,11 +148,19 @@
   <input
     id="sidebar-search"
     type="search"
-    placeholder="Search"
+    placeholder="Search (press /)"
     autocomplete="off"
+    aria-keyshortcuts="/"
+    list="sidebar-recent-searches"
     bind:value={q}
     bind:this={searchInput}
+    onfocus={() => void loadRecent()}
   />
+  <datalist id="sidebar-recent-searches">
+    {#each suggestions as s (s.id)}
+      <option value={s.query}></option>
+    {/each}
+  </datalist>
 </form>
 
 <nav aria-label="Main">

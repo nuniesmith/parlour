@@ -73,8 +73,51 @@
     if (restoreFocus) menuButton?.focus();
   }
 
+  // UI9: `/` focuses search from anywhere in the shell — the Search
+  // page's own field when on /search, otherwise the sidebar box
+  // (opening the drawer first on small screens). Ignored while
+  // typing in a field, with a modifier held, or if a page already
+  // handled the key.
+  function isTyping(target: EventTarget | null): boolean {
+    return (
+      target instanceof HTMLElement &&
+      (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
+    );
+  }
+
+  async function focusSearch() {
+    const pageField = document.getElementById('q');
+    if (page.url.pathname === '/search' && pageField instanceof HTMLInputElement) {
+      pageField.focus();
+      pageField.select();
+      return;
+    }
+    if (window.matchMedia('(max-width: 1023.98px)').matches) {
+      await openDrawer();
+    } else {
+      searchInput?.focus();
+    }
+  }
+
   function onKey(event: KeyboardEvent) {
-    if (event.key === 'Escape') closeDrawer();
+    if (event.key === 'Escape') {
+      closeDrawer();
+      return;
+    }
+    if (
+      event.key === '/' &&
+      !bare &&
+      !event.defaultPrevented &&
+      !event.isComposing &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey &&
+      !isTyping(event.target)
+    ) {
+      // Also stops the browser's own quick-find on `/`.
+      event.preventDefault();
+      void focusSearch();
+    }
   }
 
   afterNavigate((nav) => {

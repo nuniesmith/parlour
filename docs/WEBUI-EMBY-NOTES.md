@@ -307,6 +307,34 @@ should show the same anatomy with *its* reasons
   row (`web/src/lib/LibraryTiles.svelte`) replaces Home's old
   "Browse <library> →" links; each Latest rail's heading
   links to its library.
+- **Search (UI9)**: `/` focuses search from anywhere; recent
+  searches per profile.
+  *Shipped (UI9):* the root layout answers `/` on every shell
+  page (not on login / Who's watching / invite): on `/search`
+  it focuses that page's field, otherwise the sidebar search
+  box, opening the drawer first under 1024 px. It does nothing
+  while focus is in a field (so `/` still types), with
+  Ctrl / Cmd / Alt held, or mid-IME composition, and it
+  suppresses the browser's own `/` quick-find. Web Settings →
+  Keyboard lists it. Recent searches are stored **on the
+  server per profile** like the UI7 preferences (table
+  `recent_searches`, migration
+  `20261115010000_recent_searches.sql`; deleted with the
+  profile): `GET /api/v1/search/recent` (newest first),
+  `POST {query}` (returns the updated list), `DELETE` (clear
+  all) and `DELETE /api/v1/search/recent/{id}`, all scoped to
+  the active profile — another profile's entry is a 404. A
+  search is recorded only when committed — Enter in the
+  sidebar box or on the Search page, or opening a result — not
+  on each debounced keystroke. Queries are trimmed, 2–200
+  characters, de-duplicated case-insensitively (searching
+  again moves it to the top with the latest spelling), and
+  only the newest 10 are kept. The Search page lists them
+  while its field is empty (click to rerun, × to forget one,
+  Clear all); the sidebar box offers them as native
+  suggestions (`<datalist>`). Whether the D14 bundle carries
+  them is XFER1's call; they are profile state, so the
+  natural home is next to the profile's preferences.
 - **Explicit non-goals** (in Emby's tree, not wanted):
   Emby Premiere/paywall surfaces, Live TV, DLNA, Camera
   Upload, Cinema Intros, plugin store. If the owner ever

@@ -8,9 +8,16 @@
 //!
 //! `GET /api/v1/search?q=` — Postgres full-text over item titles
 //! plus person matches (cast) with the items they appear in.
+//!
+//! `/api/v1/search/recent` (UI9) — the active profile's recent
+//! searches: `GET` lists them newest first, `POST {query}` records
+//! one (the web UI calls it when a search is committed — Enter or
+//! opening a result — not per keystroke), `DELETE` clears them all
+//! and `DELETE /api/v1/search/recent/{id}` forgets one.
 
-use axum::extract::{Query, State};
-use axum::routing::get;
+use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
+use axum::routing::{delete, get};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
@@ -343,10 +350,148 @@ async fn search(
     Ok(Json(SearchDto { items, people }))
 }
 
+/// Recent searches kept per profile (UI9).
+const RECENT_SEARCHES_KEPT: i64 = 10;
+/// Longest query worth remembering, in characters.
+const RECENT_QUERY_MAX_CHARS: usize = 200;
+
+/// Trim a query for the recent list; reject what search itself
+/// would not run (under 2 characters) and anything absurdly long.
+fn recent_query(raw: &str) -> Result<String, AppError> {
+    let query = raw.trim();
+    let chars = query.chars().count();
+    if chars < 2 {
+        return Err(AppError::BadRequest(
+            "a search needs at least 2 characters".into(),
+        ));
+    }
+    if chars > RECENT_QUERY_MAX_CHARS {
+        return Err(AppError::BadRequest(format!(
+            "a search can be at most {RECENT_QUERY_MAX_CHARS} characters"
+        )));
+    }
+    Ok(query.to_string())
+}
+
+#[derive(Debug, Serialize, FromRow)]
+struct RecentSearchDto {
+    id: Uuid,
+    query: String,
+    searched_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Deserialize)]
+struct RecentSearchBody {
+    query: String,
+}
+
+fn require_profile(user: &AuthUser) -> Result<Uuid, AppError> {
+    user.active_profile_id
+        .ok_or_else(|| AppError::BadRequest("select a profile first".into()))
+}
+
+async fn fetch_recent(
+    state: &AppState,
+    profile_id: Uuid,
+) -> Result<Vec<RecentSearchDto>, AppError> {
+    sqlx::query_as::<_, RecentSearchDto>(
+        "SELECT id, query, searched_at FROM recent_searches
+         WHERE profile_id = $1
+         ORDER BY searched_at DESC, id
+         LIMIT $2",
+    )
+    .bind(profile_id)
+    .bind(RECENT_SEARCHES_KEPT)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(AppError::from)
+}
+
+async fn list_recent(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> Result<Json<Vec<RecentSearchDto>>, AppError> {
+    let profile_id = require_profile(&user)?;
+    Ok(Json(fetch_recent(&state, profile_id).await?))
+}
+
+/// Record a committed search and return the updated list.
+async fn add_recent(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(body): Json<RecentSearchBody>,
+) -> Result<Json<Vec<RecentSearchDto>>, AppError> {
+    let profile_id = require_profile(&user)?;
+    let query = recent_query(&body.query)?;
+    let mut tx = state.pool.begin().await.map_err(AppError::from)?;
+    sqlx::query(
+        "INSERT INTO recent_searches (profile_id, query) VALUES ($1, $2)
+         ON CONFLICT (profile_id, lower(query))
+         DO UPDATE SET query = EXCLUDED.query, searched_at = now()",
+    )
+    .bind(profile_id)
+    .bind(&query)
+    .execute(&mut *tx)
+    .await
+    .map_err(AppError::from)?;
+    sqlx::query(
+        "DELETE FROM recent_searches
+         WHERE profile_id = $1
+           AND id NOT IN (SELECT id FROM recent_searches WHERE profile_id = $1
+                          ORDER BY searched_at DESC, id LIMIT $2)",
+    )
+    .bind(profile_id)
+    .bind(RECENT_SEARCHES_KEPT)
+    .execute(&mut *tx)
+    .await
+    .map_err(AppError::from)?;
+    tx.commit().await.map_err(AppError::from)?;
+    Ok(Json(fetch_recent(&state, profile_id).await?))
+}
+
+async fn clear_recent(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> Result<StatusCode, AppError> {
+    let profile_id = require_profile(&user)?;
+    sqlx::query("DELETE FROM recent_searches WHERE profile_id = $1")
+        .bind(profile_id)
+        .execute(&state.pool)
+        .await
+        .map_err(AppError::from)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn forget_recent(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<String>,
+) -> Result<StatusCode, AppError> {
+    let profile_id = require_profile(&user)?;
+    let id = Uuid::parse_str(&id).map_err(|_| AppError::NotFound("no such search".into()))?;
+    // Scoped to the active profile: another profile's entry is
+    // indistinguishable from a missing one.
+    let done = sqlx::query("DELETE FROM recent_searches WHERE id = $1 AND profile_id = $2")
+        .bind(id)
+        .bind(profile_id)
+        .execute(&state.pool)
+        .await
+        .map_err(AppError::from)?;
+    if done.rows_affected() == 0 {
+        return Err(AppError::NotFound("no such search".into()));
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/v1/home", get(home))
         .route("/api/v1/search", get(search))
+        .route(
+            "/api/v1/search/recent",
+            get(list_recent).post(add_recent).delete(clear_recent),
+        )
+        .route("/api/v1/search/recent/{id}", delete(forget_recent))
 }
 
 #[cfg(test)]
@@ -403,5 +548,17 @@ mod tests {
     #[test]
     fn no_rows_means_no_rails() {
         assert!(group_latest(Vec::new()).is_empty());
+    }
+
+    #[test]
+    fn recent_query_is_trimmed_and_bounded() {
+        assert_eq!(recent_query("  dune  ").unwrap(), "dune");
+        assert!(recent_query(" a ").is_err());
+        assert!(recent_query("   ").is_err());
+        // Counted in characters, not bytes: two accented letters pass.
+        assert_eq!(recent_query("été").unwrap(), "été");
+        assert!(recent_query("é").is_err());
+        assert!(recent_query(&"x".repeat(RECENT_QUERY_MAX_CHARS)).is_ok());
+        assert!(recent_query(&"x".repeat(RECENT_QUERY_MAX_CHARS + 1)).is_err());
     }
 }

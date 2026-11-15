@@ -617,7 +617,7 @@ does NOT depend on Phase 2 transcoding.
 - [x] UI8 (S) **Home parity bits**: library tile row +
   per-library Latest rails alongside the existing
   Continue Watching / Next Up / Recently Added rails.
-- [ ] UI9 (S) Search affordances: `/` keyboard shortcut
+- [x] UI9 (S) Search affordances: `/` keyboard shortcut
   focuses search from anywhere; recent searches per profile.
 - [ ] UI10 (M) **Account self-service**: change-username
   endpoint (case-insensitive unique, current password
