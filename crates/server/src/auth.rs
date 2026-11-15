@@ -181,6 +181,51 @@ pub async fn create_user(
     Ok(row.0)
 }
 
+/// UI10: give an existing user a new username. Shared by the
+/// self-service route (password-gated) and the admin route.
+///
+/// Uniqueness is case-insensitive (the `lower(username)` index):
+/// a name another account holds in any case is a 409, but a user
+/// may change the case of their own name (`jordan` → `Jordan`).
+/// Re-submitting the exact current name is a 400. Sessions are
+/// keyed by user id, so every session survives the rename, and
+/// profiles keep their own names.
+///
+/// Returns the previous username, or `None` if no such user.
+pub async fn rename_user(
+    pool: &sqlx::PgPool,
+    user_id: Uuid,
+    new_username: &str,
+) -> Result<Option<String>, AppError> {
+    validate_username(new_username)?;
+    let mut tx = pool.begin().await.map_err(AppError::from)?;
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT username FROM users WHERE id = $1 FOR UPDATE")
+            .bind(user_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(AppError::from)?;
+    let Some((old,)) = row else {
+        return Ok(None);
+    };
+    if old == new_username {
+        return Err(AppError::BadRequest("that is already the username".into()));
+    }
+    sqlx::query("UPDATE users SET username = $1 WHERE id = $2")
+        .bind(new_username)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| match &e {
+            sqlx::Error::Database(db) if db.is_unique_violation() => {
+                AppError::Conflict(format!("username '{new_username}' is taken"))
+            }
+            _ => AppError::from(e),
+        })?;
+    tx.commit().await.map_err(AppError::from)?;
+    Ok(Some(old))
+}
+
 /// A3: if the environment names a first admin and no users exist,
 /// create that admin (once — later boots ignore the variables).
 pub async fn bootstrap_admin(pool: &sqlx::PgPool, config: &Config) -> Result<(), AppError> {
@@ -585,12 +630,70 @@ async fn change_password(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Deserialize)]
+struct ChangeUsernameRequest {
+    current_password: String,
+    new_username: String,
+}
+
+/// UI10: change the signed-in user's username. The current
+/// password must check out (401 otherwise) before anything else
+/// is looked at, so the route can't be used to probe which names
+/// exist. Surrounding whitespace is trimmed; the rest follows
+/// [`rename_user`]. Unlike a password change, no session is
+/// revoked — a new name is not a credential reset.
+async fn change_username(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(body): Json<ChangeUsernameRequest>,
+) -> Result<Json<UserDto>, AppError> {
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT password_hash FROM users WHERE id = $1 AND disabled_at IS NULL")
+            .bind(user.user_id)
+            .fetch_optional(&state.pool)
+            .await
+            .map_err(AppError::from)?;
+    let Some((stored_hash,)) = row else {
+        return Err(AppError::Unauthorized("not signed in".into()));
+    };
+    if !verify_password(&body.current_password, &stored_hash) {
+        return Err(AppError::Unauthorized(
+            "current password is incorrect".into(),
+        ));
+    }
+    let new_username = body.new_username.trim();
+    let old = rename_user(&state.pool, user.user_id, new_username)
+        .await?
+        .ok_or_else(|| AppError::Unauthorized("not signed in".into()))?;
+    crate::activity::record(
+        &state.pool,
+        crate::activity::Entry::by_user(
+            "user.renamed",
+            user.user_id,
+            &old,
+            format!("{old} changed their username to {new_username}"),
+        )
+        .detail(serde_json::json!({
+            "user_id": user.user_id,
+            "old_username": old,
+            "new_username": new_username,
+        })),
+    )
+    .await;
+    Ok(Json(UserDto {
+        id: user.user_id,
+        username: new_username.to_string(),
+        is_admin: user.is_admin,
+    }))
+}
+
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/v1/auth/login", post(login))
         .route("/api/v1/auth/logout", post(logout))
         .route("/api/v1/auth/me", get(me))
         .route("/api/v1/auth/change-password", post(change_password))
+        .route("/api/v1/auth/change-username", post(change_username))
         .route("/api/v1/auth/sessions", get(list_sessions))
         .route("/api/v1/auth/sessions/{id}", delete(revoke_session))
 }
