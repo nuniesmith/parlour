@@ -12,7 +12,7 @@
 //!   files unavailable instead of deleting anything (C8).
 //! - `segments` — the cheap intro/credits pass over new or changed
 //!   episodes: chapter names, then black-frame + silence at the
-//!   head and tail (SEG2, D17/D18).
+//!   head and tail (SEG2, D17–D19).
 //!
 //! Matching files to TMDB/TVDB metadata is `metadata_sync`
 //! (Milestone 1.4, providers in `parlour-metadata`); artwork

@@ -705,9 +705,9 @@ does NOT depend on Phase 2 transcoding.
   episode's playback file is new or changed (per-file
   `segments_detected_at`, cleared by the scanner); own
   worker. Chapters at 1.0; otherwise black + silence per
-  D17/D18, stored as source `heuristic` at 0.5. The 0.6
-  floor in `effective_segments` keeps every guess away from
-  the player; manual rows are exempt.
+  D17/D18, stored as source `heuristic` at 0.5; tie-breaks
+  per D19. The 0.6 floor in `effective_segments` keeps
+  every guess away from the player; manual rows are exempt.
 - [ ] SEG3 (L) **Audio-fingerprint detection**: fingerprint
   each episode's audio (ffmpeg chromaprint) once, cache by
   file hash; cross-correlate episodes within a season —

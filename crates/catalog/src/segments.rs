@@ -1,4 +1,4 @@
-//! Segment detection — the cheap pass (SEG2; D15, D17, D18).
+//! Segment detection — the cheap pass (SEG2; D15, D17, D18, D19).
 //!
 //! `DetectSegments` runs after a library scan over every episode
 //! whose playback file is new or changed: the scanner clears
@@ -175,7 +175,7 @@ pub fn parse_chapters_json(json: &str) -> Result<Vec<Chapter>, String> {
 /// A title holding words for both — "Opening Credits" — names the
 /// intro: the opening credits *are* the intro, and calling them the
 /// credits would start next-episode autoplay at the top of the
-/// episode (proposed D19).
+/// episode (D19).
 pub fn chapter_kind(title: &str) -> Option<SegmentKind> {
     let (mut intro, mut credits) = (false, false);
     for word in title
@@ -200,7 +200,7 @@ pub fn chapter_kind(title: &str) -> Option<SegmentKind> {
 /// The intro and the credits a file's chapters name, as
 /// `(intro, credits)`. When several chapters name the same kind, the
 /// earliest wins — so "Credits" beats a later "Post-Credits Scene"
-/// (proposed D19). Chapters that are no usable span are skipped.
+/// (D19). Chapters that are no usable span are skipped.
 pub fn chapter_spans(chapters: &[Chapter]) -> (Option<Span>, Option<Span>) {
     let mut ordered: Vec<&Chapter> = chapters.iter().collect();
     ordered.sort_by_key(|c| (c.start_ms, c.end_ms));
@@ -360,8 +360,7 @@ pub fn intro_span(breaks: &[Span]) -> Option<Span> {
 ///
 /// When more than one span qualifies — an act break before the
 /// credits break, say — the one nearest the end of the file wins:
-/// the tail's mirror of the intro's "first match wins" (proposed
-/// D19).
+/// the tail's mirror of the intro's "first match wins" (D19).
 pub fn credits_span(breaks: &[Span], duration_ms: i64) -> Option<Span> {
     let mut best = None;
     for (i, start) in breaks.iter().enumerate() {
@@ -924,7 +923,7 @@ Input #0, matroska,webm, from 'black_start:99 silence_start: 1.mkv':
             ("Chapter 1", None),
             ("", None),
             // Words for both kinds: the opening credits are the intro
-            // (proposed D19).
+            // (D19).
             ("Opening Credits", Some(Intro)),
             ("Credits (Intro)", Some(Intro)),
             // A hyphen separates words, so this names the credits;
@@ -1086,7 +1085,7 @@ Input #0, matroska,webm, from 'black_start:99 silence_start: 1.mkv':
             Some(span(2621.0, 2698.0))
         );
         // An act break before the credits break: both spans qualify,
-        // and the one nearest the end wins (proposed D19).
+        // and the one nearest the end wins (D19).
         assert_eq!(
             credits_span(&b(&[(2220.0, 2221.0), (2640.0, 2641.0)]), t),
             Some(span(2641.0, 2700.0))
