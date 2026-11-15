@@ -611,7 +611,7 @@ does NOT depend on Phase 2 transcoding.
   Sessions (UI3), Jobs (run-now where supported, error
   detail), Import/Export (XFER8 lands here). All deep-
   linkable under `/admin/...`; old tab URLs redirect.
-- [ ] UI7 (M) **Preferences IA re-org**: Settings splits into
+- [x] UI7 (M) **Preferences IA re-org**: Settings splits into
   Display, Home Screen (rail visibility/order), Playback
   (SEG5/SEG6 prefs live here), Subtitles, Profile, Account.
 - [ ] UI8 (S) **Home parity bits**: library tile row +

@@ -16,6 +16,17 @@ export interface Profile {
   subtitle_lang: string | null;
   subtitle_mode: string;
   remote_bitrate_cap_kbps: number | null;
+  /** Home Screen rails in display order (UI7). */
+  home_rails: HomeRail[];
+  /** Inside an intro/credits segment: button, auto or off (SEG5). */
+  segment_skip: 'button' | 'auto' | 'off';
+  /** Next-episode countdown (SEG6). */
+  autoplay_next: boolean;
+}
+
+export interface HomeRail {
+  id: string;
+  visible: boolean;
 }
 
 export interface Me {

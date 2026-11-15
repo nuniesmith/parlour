@@ -2,8 +2,8 @@
   // Sidebar navigation tree (UI1, D13): brand, search box, then
   // collapsible sections — Libraries, Web Settings, "<profile>
   // Preferences", and Server (admins only). The Server entries
-  // are pages under /admin (UI6); the Preferences entries still
-  // deep-link into /settings until UI7 splits it.
+  // are pages under /admin (UI6); the Preferences entries are
+  // pages under /settings (UI7).
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import { session } from '$lib/session.svelte';
@@ -46,14 +46,9 @@
   }
 
   const path = $derived(page.url.pathname);
-  const hash = $derived(page.url.hash);
 
-  function settingsItem(anchor: string, label: string, first = false): NavItem {
-    return {
-      href: `/settings#${anchor}`,
-      label,
-      active: path === '/settings' && (hash === `#${anchor}` || (first && hash === '')),
-    };
+  function settingsItem(href: string, label: string): NavItem {
+    return { href, label, active: path === href };
   }
 
   // Server pages: Dashboard is exactly /admin; every other
@@ -89,9 +84,12 @@
         id: 'preferences',
         title: `${profile.name} Preferences`,
         items: [
-          settingsItem('playback', 'Playback', true),
-          settingsItem('password', 'Password'),
-          settingsItem('sessions', 'Sessions'),
+          settingsItem('/settings/display', 'Display'),
+          settingsItem('/settings/home', 'Home Screen'),
+          settingsItem('/settings/playback', 'Playback'),
+          settingsItem('/settings/subtitles', 'Subtitles'),
+          settingsItem('/settings/profile', 'Profile'),
+          settingsItem('/settings/account', 'Account'),
         ],
       });
     }
