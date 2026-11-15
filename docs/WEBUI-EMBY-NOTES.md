@@ -214,7 +214,8 @@ should show the same anatomy with *its* reasons
   `playback.start`, `playback.stop`,
   `playback.stopped_by_admin`, `scan.completed`,
   `scan.failed`, `import.completed`, `import.failed`,
-  `invite.created`, `invite.revoked`, `user.joined`. Failed
+  `invite.created`, `invite.revoked`, `user.joined`,
+  `user.renamed` (UI10). Failed
   sign-ins are not recorded (the login limiter covers them).
   `GET /api/v1/admin/activity` pages newest-first
   (`limit`, `before`, `category`). The Dashboard shows the
@@ -278,13 +279,49 @@ should show the same anatomy with *its* reasons
   Subtitles holds mode + language. Profile edits the active
   profile's name, colour and PIN (adding/deleting profiles
   stays on Who's watching). Account holds change password,
-  signed-in sessions, switch profile and sign out. Display
+  signed-in sessions, switch profile and sign out (and,
+  since UI10, change username). Display
   has no options yet — Parlour has no per-profile display
   settings; the page exists so the tree matches §1, and
   what belongs there is the owner's call. PATCH also gained
   `clear_audio_lang` / `clear_subtitle_lang` (like
   `clear_bitrate_cap`): before, blanking a language in the
   form silently kept the old one.
+- **Account self-service (UI10)**: change-username endpoint
+  (case-insensitive unique, current password required,
+  existing sessions survive) + Account page UI; admins can
+  rename users too.
+  *Shipped (UI10):* no migration — `users_username_lower_idx`
+  (unique on `lower(username)`, since Milestone 1.2) already
+  enforces case-insensitive uniqueness. One helper,
+  `auth::rename_user`, backs two routes:
+  `POST /api/v1/auth/change-username`
+  `{current_password, new_username}` → 200 with the user
+  (`{id, username, is_admin}`), and admin-only
+  `PATCH /api/v1/admin/users/{id}` `{username}` → 200 with the
+  admin user row (404 for unknown ids and for non-admins, per
+  A7). Rules, both routes: surrounding whitespace is trimmed;
+  the name must pass sign-up validation (3–32 of letters,
+  digits, `_ . -`) → else 400; a name another account holds
+  in any case → 409; the exact current name → 400; changing
+  only the case of your own name (`jordan` → `Jordan`) is
+  allowed. Self-service checks the password **first** (401
+  before any 400/409), so the route can't probe which names
+  exist; the admin route needs no password, like every other
+  admin action. Nothing else changes: sessions are keyed by
+  user id and read the name per request, so every session
+  stays signed in and sees the new name (no revocation —
+  unlike a password change, a rename is not a credential
+  reset); the password is untouched; **profiles keep their
+  names** (the default profile was named after the username
+  at sign-up and is not renamed with it). Each rename writes
+  a `user.renamed` activity row (old + new name in detail;
+  the actor is the name at the time). UI: Preferences →
+  Account gains a Change username form above Change password
+  (new name + current password; the shell's name refreshes
+  on success); Server → Users gains a per-row Rename (inline
+  field, Save / Cancel). Integration test:
+  `crates/server/tests/username_flow.rs`.
 - **Home (UI8)**: add library tile row + per-library
   "Latest" rails; keep existing rails and labels.
   *Shipped (UI8):* `GET /api/v1/home` gained `libraries`

@@ -6,14 +6,14 @@
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
-use crate::auth::{create_user, new_token, token_hash, AdminUser, UserDto};
+use crate::auth::{create_user, new_token, rename_user, token_hash, AdminUser, UserDto};
 use crate::error::AppError;
 use crate::http::AppState;
 
@@ -245,6 +245,54 @@ async fn list_users(
     Ok(Json(rows))
 }
 
+#[derive(Deserialize)]
+struct UpdateUser {
+    username: String,
+}
+
+/// UI10: an admin renames any account (including their own) —
+/// no password, the admin session is the authority, as for every
+/// other admin action. Same rules as self-service
+/// ([`rename_user`]): case-insensitive unique, sessions survive.
+/// Unknown id is a 404.
+async fn update_user(
+    State(state): State<AppState>,
+    admin: AdminUser,
+    Path(id): Path<String>,
+    Json(body): Json<UpdateUser>,
+) -> Result<Json<AdminUserDto>, AppError> {
+    let id = Uuid::parse_str(&id).map_err(|_| AppError::NotFound("no such user".into()))?;
+    let new_username = body.username.trim();
+    let old = rename_user(&state.pool, id, new_username)
+        .await?
+        .ok_or_else(|| AppError::NotFound("no such user".into()))?;
+    crate::activity::record(
+        &state.pool,
+        crate::activity::Entry::by_user(
+            "user.renamed",
+            admin.0.user_id,
+            &admin.0.username,
+            format!("{} renamed {old} to {new_username}", admin.0.username),
+        )
+        .detail(serde_json::json!({
+            "user_id": id,
+            "old_username": old,
+            "new_username": new_username,
+        })),
+    )
+    .await;
+    let row = sqlx::query_as::<_, AdminUserDto>(
+        "SELECT u.id, u.username, u.is_admin, u.created_at,
+                (SELECT count(*) FROM profiles p WHERE p.user_id = u.id) AS profile_count
+         FROM users u WHERE u.id = $1",
+    )
+    .bind(id)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(AppError::from)?;
+    Ok(Json(row))
+}
+
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route(
@@ -253,6 +301,7 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/api/v1/admin/invites/{id}", delete(revoke_invite))
         .route("/api/v1/admin/users", get(list_users))
+        .route("/api/v1/admin/users/{id}", patch(update_user))
         .route("/api/v1/invites/{token}", get(invite_status))
         .route("/api/v1/invites/accept", post(accept_invite))
 }

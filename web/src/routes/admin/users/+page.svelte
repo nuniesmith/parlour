@@ -1,6 +1,6 @@
 <script lang="ts">
-  // Server → Users: accounts, invites, and which profiles may
-  // see which libraries.
+  // Server → Users: accounts (an admin can rename any of them —
+  // UI10), invites, and which profiles may see which libraries.
   import { onMount } from 'svelte';
   import { api } from '$lib/api';
   import { loadSession, session } from '$lib/session.svelte';
@@ -14,6 +14,40 @@
   let libraries = $state<Library[]>([]);
   let grantProfile = $state('');
   let grantLibrary = $state('');
+  let renamingId = $state<string | null>(null);
+  let renameTo = $state('');
+  let renameSaving = $state(false);
+
+  function startRename(u: AdminUser) {
+    error = null;
+    notice = null;
+    renamingId = u.id;
+    renameTo = u.username;
+  }
+
+  async function saveRename(event: SubmitEvent, u: AdminUser) {
+    event.preventDefault();
+    error = null;
+    notice = null;
+    const next = renameTo.trim();
+    if (next === u.username) {
+      renamingId = null;
+      return;
+    }
+    renameSaving = true;
+    const { data, error: err } = await api<AdminUser>(`/api/v1/admin/users/${u.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ username: next }),
+    });
+    renameSaving = false;
+    if (data) {
+      users = users.map((x) => (x.id === data.id ? data : x));
+      renamingId = null;
+      notice = `Renamed ${u.username} to ${data.username}. Their sessions stay signed in.`;
+      // Renaming yourself: the sidebar and Account page show your name.
+      if (data.id === session.me?.user.id) void loadSession();
+    } else error = err ?? 'Could not rename that user.';
+  }
 
   async function loadUsers() {
     const [u, i] = await Promise.all([
@@ -71,18 +105,47 @@
 
 <h2>Users</h2>
 <div class="table-wrap"><table>
-  <thead><tr><th>Username</th><th>Admin</th><th>Profiles</th><th>Since</th></tr></thead>
+  <thead><tr><th>Username</th><th>Admin</th><th>Profiles</th><th>Since</th><th></th></tr></thead>
   <tbody>
     {#each users as u (u.id)}
       <tr>
-        <td>{u.username}</td>
+        <td>
+          {#if renamingId === u.id}
+            <form class="rename" onsubmit={(e) => saveRename(e, u)}>
+              <input
+                bind:value={renameTo}
+                aria-label="New username for {u.username}"
+                autocapitalize="none"
+                spellcheck="false"
+                required
+                minlength="3"
+                maxlength="32"
+              />
+              <button class="btn small primary" type="submit" disabled={renameSaving}>Save</button>
+              <button class="btn small" type="button" onclick={() => (renamingId = null)}>
+                Cancel
+              </button>
+            </form>
+          {:else}
+            {u.username}
+          {/if}
+        </td>
         <td>{u.is_admin ? 'yes' : '—'}</td>
         <td>{u.profile_count}</td>
         <td class="dim">{new Date(u.created_at).toLocaleDateString()}</td>
+        <td>
+          {#if renamingId !== u.id}
+            <button class="btn small" onclick={() => startRename(u)}>Rename</button>
+          {/if}
+        </td>
       </tr>
     {/each}
   </tbody>
 </table></div>
+<p class="dim">
+  Renaming keeps the account's password, profiles and signed-in sessions. Usernames are unique
+  regardless of capitals.
+</p>
 
 <h2>Invites</h2>
 <p><button class="btn primary" onclick={createInvite}>Create invite</button></p>
@@ -128,6 +191,15 @@
 </div>
 
 <style>
+  .rename {
+    display: flex;
+    gap: 0.4rem;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .rename input {
+    width: 12rem;
+  }
   .invite-link code {
     display: block;
     margin-top: 0.4rem;

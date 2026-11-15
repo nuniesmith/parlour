@@ -619,7 +619,7 @@ does NOT depend on Phase 2 transcoding.
   Continue Watching / Next Up / Recently Added rails.
 - [x] UI9 (S) Search affordances: `/` keyboard shortcut
   focuses search from anywhere; recent searches per profile.
-- [ ] UI10 (M) **Account self-service**: change-username
+- [x] UI10 (M) **Account self-service**: change-username
   endpoint (case-insensitive unique, current password
   required, existing sessions survive) + Account page UI;
   admins can rename users too.
