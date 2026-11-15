@@ -623,7 +623,7 @@ does NOT depend on Phase 2 transcoding.
   endpoint (case-insensitive unique, current password
   required, existing sessions survive) + Account page UI;
   admins can rename users too.
-- [ ] UI11 (S) **Visual QA pass**: screenshot checklist
+- [x] UI11 (S) **Visual QA pass**: screenshot checklist
   against `docs/WEBUI-EMBY-NOTES.md` §1 (shell, dashboard,
   session card, rails) at desktop + phone widths; fix
   spacing/anatomy drift; empty states everywhere.

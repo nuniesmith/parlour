@@ -7,7 +7,7 @@
   import AlertsRail from '$lib/AlertsRail.svelte';
   import { api } from '$lib/api';
   import NowPlaying from '$lib/NowPlaying.svelte';
-  import type { Job, Notice, ServerInfo } from '$lib/types';
+  import { formatDateTime, jobKindLabel, type Job, type Notice, type ServerInfo } from '$lib/types';
 
   const REFRESH_MS = 15_000;
 
@@ -114,15 +114,15 @@
 
   <section class="card" aria-label="Server">
     <dl>
-      <div class="row">
+      <div class="info-row">
         <dt>Version</dt>
         <dd>Parlour {info.version}</dd>
       </div>
-      <div class="row">
+      <div class="info-row">
         <dt>Listening on</dt>
         <dd>HTTP port {info.port}</dd>
       </div>
-      <div class="row">
+      <div class="info-row">
         <dt>Database</dt>
         <dd>
           {#if info.db === 'ok'}
@@ -133,7 +133,7 @@
         </dd>
       </div>
       {#each urls as u (u.key)}
-        <div class="row">
+        <div class="info-row">
           <dt>{u.label}</dt>
           <dd>
             {#if u.url}
@@ -191,9 +191,9 @@
     <ul class="jobs">
       {#each jobs as job (job.id)}
         <li>
-          <span>{job.kind}</span>
+          <span>{jobKindLabel(job.kind)}</span>
           <span class="chip" class:error={job.status === 'failed'}>{job.status}</span>
-          <span class="dim when">{new Date(job.created_at).toLocaleString()}</span>
+          <time class="dim when" datetime={job.created_at}>{formatDateTime(job.created_at)}</time>
         </li>
       {/each}
     </ul>
@@ -265,7 +265,9 @@
   dl {
     margin: 0;
   }
-  .row {
+  /* Not `.row`: the admin layout styles that class globally
+     for form rows, which broke this grid (found in UI11). */
+  .info-row {
     display: grid;
     grid-template-columns: 11rem minmax(0, 1fr);
     gap: 0.8rem;
@@ -273,7 +275,7 @@
     padding: 0.65rem 0;
     border-bottom: 1px solid var(--line);
   }
-  .row:last-child {
+  .info-row:last-child {
     border-bottom: 0;
   }
   dt {
@@ -358,12 +360,13 @@
     margin-left: auto;
     font-size: 0.9rem;
     text-align: right;
+    white-space: nowrap;
   }
   .chip.error {
     border-color: var(--danger);
   }
   @media (max-width: 640px) {
-    .row {
+    .info-row {
       grid-template-columns: 1fr;
       gap: 0.2rem;
     }

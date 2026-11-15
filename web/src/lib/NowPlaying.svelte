@@ -5,7 +5,14 @@
   // source → what the server does with it, and why.
   import { onMount } from 'svelte';
   import { api } from '$lib/api';
-  import { formatDurationMs, type PlaybackSession, type StreamPlan } from '$lib/types';
+  import {
+    containerLabel,
+    episodeLabel,
+    formatDurationMs,
+    posterUrl,
+    type PlaybackSession,
+    type StreamPlan,
+  } from '$lib/types';
 
   const POLL_MS = 5_000;
 
@@ -47,11 +54,7 @@
 
   function episodeLine(s: PlaybackSession): string | null {
     if (s.item_kind !== 'episode') return null;
-    const where =
-      s.season_number !== null && s.episode_number !== null
-        ? `S${s.season_number}:E${s.episode_number}`
-        : null;
-    return [where, s.item_title].filter(Boolean).join(' · ');
+    return episodeLabel(s.season_number, s.episode_number, s.item_title);
   }
 
   function fraction(s: PlaybackSession): number {
@@ -103,7 +106,7 @@
 
   function streamRow(p: StreamPlan): { from: string; to: string } {
     const size = rate(p.bitrate_kbps);
-    const from = `${upper(p.container)}${size ? ` (${size})` : ''}`;
+    const from = `${containerLabel(p.container)}${size ? ` (${size})` : ''}`;
     const to =
       p.delivery === 'hls'
         ? p.action === 'Transcode'
@@ -167,7 +170,7 @@
           <a class="thumb" href={`/item/${s.item_id}`} aria-label={`Open ${heading(s)}`}>
             {#if s.poster_item_id && !brokenPosters.includes(s.poster_item_id)}
               <img
-                src={`/api/v1/items/${s.poster_item_id}/artwork/poster?v=w300`}
+                src={posterUrl(s.poster_item_id)}
                 alt=""
                 loading="lazy"
                 onerror={() => (brokenPosters = [...brokenPosters, s.poster_item_id ?? ''])}

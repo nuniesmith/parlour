@@ -28,6 +28,24 @@
     else error = err ?? 'Could not load home.';
   });
 
+  // UI11: never a blank Home. An empty catalog gets the welcome;
+  // a catalog whose every visible rail is empty (or hidden in
+  // Preferences → Home Screen) says so instead of showing nothing.
+  const catalogEmpty = $derived(
+    !!home && home.continue_watching.length === 0 && home.recently_added.length === 0,
+  );
+  const anyRailShown = $derived(
+    !!home &&
+      rails.some((id) => {
+        if (id === 'libraries') return home!.libraries.length > 0;
+        if (id === 'continue_watching') return home!.continue_watching.length > 0;
+        if (id === 'next_up') return home!.next_up.length > 0;
+        if (id === 'recently_added') return home!.recently_added.length > 0;
+        if (id === 'latest') return home!.latest.length > 0;
+        return false;
+      }),
+  );
+
   function progressFor(item: Item): number | null {
     const c = home?.continue_watching.find((x) => x.id === item.id);
     if (!c || !c.duration_ms) return null;
@@ -40,11 +58,20 @@
 {:else if !home}
   <p class="dim">Loading…</p>
 {:else}
-  {#if home.continue_watching.length === 0 && home.recently_added.length === 0}
+  {#if catalogEmpty}
     <h2>Welcome to Parlour</h2>
     <p class="dim">
       Nothing here yet. Once an admin adds a library and scans it, your movies and shows will show
       up here.
+    </p>
+    {#if session.me?.user.is_admin}
+      <p><a class="btn primary" href="/admin/library">Add a library</a></p>
+    {/if}
+  {:else if !anyRailShown}
+    <h2>Nothing to show on Home</h2>
+    <p class="dim">
+      Every Home rail that has something in it is turned off for this profile. Choose which rails
+      to show in <a class="link" href="/settings/home">Preferences → Home Screen</a>.
     </p>
   {/if}
   {#each rails as id (id)}
@@ -71,3 +98,9 @@
     {/if}
   {/each}
 {/if}
+
+<style>
+  .link {
+    color: var(--accent);
+  }
+</style>

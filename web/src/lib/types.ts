@@ -127,7 +127,15 @@ export interface ItemDetail extends Item {
   user_state: UserState | null;
 }
 
-export interface ContinueItem extends Item {
+/** Home rail rows that can be episodes (UI11): the series title,
+ *  and which item's poster to show — the series' when it has one,
+ *  else the item's own, null when neither has art. */
+export interface RailItem extends Item {
+  series_title?: string | null;
+  poster_item_id?: string | null;
+}
+
+export interface ContinueItem extends RailItem {
   position_ms: number;
   duration_ms: number | null;
 }
@@ -153,7 +161,7 @@ export interface LatestRail {
 export interface HomeData {
   continue_watching: ContinueItem[];
   recently_added: Item[];
-  next_up: Item[];
+  next_up: RailItem[];
   libraries: LibraryTile[];
   latest: LatestRail[];
 }
@@ -340,8 +348,8 @@ export interface Invite {
   used_by: string | null;
 }
 
-export function posterUrl(item: Item, variant = 'w300'): string {
-  return `/api/v1/items/${item.id}/artwork/poster?v=${variant}`;
+export function posterUrl(itemId: string, variant = 'w300'): string {
+  return `/api/v1/items/${itemId}/artwork/poster?v=${variant}`;
 }
 
 export function backdropUrl(item: Item): string {
@@ -359,6 +367,52 @@ export function formatBytes(n: number): string {
   if (n >= 1e9) return `${(n / 1e9).toFixed(1)} GB`;
   if (n >= 1e6) return `${(n / 1e6).toFixed(1)} MB`;
   return `${(n / 1e3).toFixed(0)} KB`;
+}
+
+/** "S1:E2 · Pilot" — the episode line on posters and the Now
+ *  Playing card. Null when neither number nor title is known. */
+export function episodeLabel(
+  season: number | null,
+  episode: number | null,
+  title: string | null,
+): string | null {
+  const where = season !== null && episode !== null ? `S${season}:E${episode}` : null;
+  return [where, title].filter(Boolean).join(' · ') || null;
+}
+
+/** One timestamp style everywhere on the admin pages:
+ *  "Nov 15, 2026, 3:55 AM" in the viewer's locale. */
+export function formatDateTime(iso: string): string {
+  return new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+/** Readable names for job kinds (Dashboard + Server → Jobs). */
+export const JOB_KIND_LABELS: Record<string, string> = {
+  scan_library: 'Library scan',
+  fetch_metadata: 'Metadata match',
+  download_artwork: 'Artwork download',
+  import_emby: 'Emby import',
+  purge_activity: 'Activity clean-up',
+};
+
+export function jobKindLabel(kind: string): string {
+  return JOB_KIND_LABELS[kind] ?? kind;
+}
+
+/** Container names as people know them. The server stores
+ *  ffprobe's first format name, which is the family, not the
+ *  file type: `mov` covers both MP4 and MOV files. */
+const CONTAINER_LABELS: Record<string, string> = {
+  matroska: 'MKV',
+  mov: 'MP4/MOV',
+  mpegts: 'TS',
+  avi: 'AVI',
+  webm: 'WebM',
+};
+
+export function containerLabel(name: string | null): string {
+  if (!name) return 'Unknown';
+  return CONTAINER_LABELS[name.toLowerCase()] ?? name.toUpperCase();
 }
 
 export function formatDurationMs(ms: number | null): string {

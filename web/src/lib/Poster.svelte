@@ -1,20 +1,36 @@
 <script lang="ts">
-  import { posterUrl, type Item } from './types';
+  import { episodeLabel, posterUrl, type RailItem } from './types';
 
   let {
     item,
     progress = null,
-  }: { item: Item; progress?: number | null } = $props();
+  }: { item: RailItem; progress?: number | null } = $props();
+
+  // An episode reads as its show first (UI11, like the Now Playing
+  // card): the series title on top, "S1:E2 · Title" under it, and
+  // the series' poster. Rows without `series_title` (search, the
+  // library grid) keep the item's own title.
+  const isEpisode = $derived(item.kind === 'episode');
+  const heading = $derived(item.series_title ?? item.title);
+  const epLine = $derived(
+    isEpisode ? episodeLabel(item.season_number, item.episode_number, item.series_title ? item.title : null) : null,
+  );
+  // Rail rows say which item's poster to use; everything else
+  // uses the item's own when it has one.
+  const artId = $derived(
+    item.poster_item_id !== undefined ? item.poster_item_id : item.has_poster ? item.id : null,
+  );
+  const label = $derived([heading, epLine].filter(Boolean).join(', '));
 </script>
 
-<a class="poster" href={`/item/${item.id}`} aria-label={item.title}>
+<a class="poster" href={`/item/${item.id}`} aria-label={label}>
   <span class="frame">
-    {#if item.has_poster}
-      <img src={posterUrl(item)} alt="" loading="lazy" />
+    {#if artId}
+      <img src={posterUrl(artId)} alt="" loading="lazy" />
     {:else}
       <span class="tile" aria-hidden="true">
-        <span class="initial">{item.title.charAt(0).toUpperCase()}</span>
-        <span class="tile-title">{item.title}</span>
+        <span class="initial">{heading.charAt(0).toUpperCase()}</span>
+        <span class="tile-title">{heading}</span>
       </span>
     {/if}
     {#if progress !== null}
@@ -25,12 +41,16 @@
     {/if}
   </span>
   <span class="caption">
-    <span class="title">{item.title}</span>
-    <span class="meta">
-      {#if item.year}{item.year}{/if}
-      {#if item.content_rating} · {item.content_rating}{/if}
-      {#if item.vote_average} · ★ {item.vote_average.toFixed(1)}{/if}
-    </span>
+    <span class="title">{heading}</span>
+    {#if epLine}
+      <span class="meta ep">{epLine}</span>
+    {:else}
+      <span class="meta">
+        {#if item.year}{item.year}{/if}
+        {#if item.content_rating} · {item.content_rating}{/if}
+        {#if item.vote_average} · ★ {item.vote_average.toFixed(1)}{/if}
+      </span>
+    {/if}
   </span>
 </a>
 
@@ -115,5 +135,10 @@
   .meta {
     font-size: 0.78rem;
     color: var(--text-dim);
+  }
+  .ep {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 </style>

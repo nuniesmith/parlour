@@ -5,6 +5,7 @@
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { api } from '$lib/api';
+  import { formatDateTime } from '$lib/types';
   import { loadSession, session, signOut } from '$lib/session.svelte';
 
   interface SessionRow {
@@ -200,7 +201,7 @@
   <ul class="sessions">
     {#each sessions as s (s.id)}
       <li>
-        <span class="dim">since {new Date(s.created_at).toLocaleString()}</span>
+        <span class="dim">since {formatDateTime(s.created_at)}</span>
         <button class="btn small danger" onclick={() => revoke(s.id)}>Revoke</button>
       </li>
     {/each}

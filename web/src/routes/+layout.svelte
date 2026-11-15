@@ -332,6 +332,13 @@
     margin: 0 auto;
     padding: 1.2rem 1.4rem 3rem;
   }
+  /* UI11: every page starts the same distance below the top bar —
+     the first block (and the first block inside a section layout
+     such as Server or Preferences) brings no top margin of its own. */
+  main > :global(:first-child),
+  main > :global(:first-child) > :global(:first-child) {
+    margin-top: 0;
+  }
   .scrim {
     display: none;
   }

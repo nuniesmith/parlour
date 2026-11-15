@@ -295,6 +295,83 @@ async fn home_flow() {
     assert!(!all.contains("Private"), "{all}");
     assert!(!all.contains(&hidden.to_string()), "{all}");
 
+    // UI11: Continue Watching and Next Up rows say which show an
+    // episode belongs to and whose poster to draw — the series'
+    // when it has one, else the item's own, else null.
+    let show_a_ep2 =
+        sqlx::query_scalar::<_, Uuid>("SELECT id FROM media_items WHERE title = 'Show A S01E02'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let show_a_ep1 = item(&pool, shows, Some(season), "episode", "Show A S01E01", 2).await;
+    let show_b = sqlx::query_scalar::<_, Uuid>("SELECT id FROM media_items WHERE title = 'Show B'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let season_b = item(&pool, shows, Some(show_b), "season", "Show B Season 1", 48).await;
+    let show_b_ep1 = item(&pool, shows, Some(season_b), "episode", "Show B S01E01", 48).await;
+    for (id, s, e) in [(show_a_ep1, 1, 1), (show_a_ep2, 1, 2), (show_b_ep1, 1, 1)] {
+        sqlx::query("UPDATE media_items SET season_number = $2, episode_number = $3 WHERE id = $1")
+            .bind(id)
+            .bind(s)
+            .bind(e)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    image(&pool, show_a, "poster", "/artwork/show-a-poster.jpg").await;
+    image(
+        &pool,
+        show_b,
+        "poster",
+        "pending:https://example.invalid/p.jpg",
+    )
+    .await;
+    image(&pool, old_film, "poster", "/artwork/old-film-poster.jpg").await;
+    // Show A E1 watched (so E2 is Next Up); Show B E1 and Old Film
+    // are part-way through (Continue Watching, newest first).
+    for (id, played, position, mins_ago) in [
+        (show_a_ep1, true, 0_i64, 30),
+        (show_b_ep1, false, 60_000, 10),
+        (old_film, false, 90_000, 20),
+    ] {
+        sqlx::query(
+            "INSERT INTO user_data (profile_id, item_id, position_ms, duration_ms, played,
+                                    last_played_at)
+             VALUES ($1, $2, $3, 1200000, $4, now() - make_interval(mins => $5))",
+        )
+        .bind(profile)
+        .bind(id)
+        .bind(position)
+        .bind(played)
+        .bind(mins_ago)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    let (status, home, _) = client.req(Method::GET, "/api/v1/home", c, None).await;
+    assert_eq!(status, 200, "{home}");
+    let cw = home["continue_watching"].as_array().unwrap();
+    assert_eq!(
+        titles(&home["continue_watching"]),
+        ["Show B S01E01", "Old Film"],
+        "{home}"
+    );
+    assert_eq!(cw[0]["series_title"], "Show B");
+    assert_eq!(
+        cw[0]["poster_item_id"],
+        Value::Null,
+        "a pending series poster is no poster, and the episode has none"
+    );
+    assert_eq!(cw[0]["season_number"], 1);
+    assert_eq!(cw[0]["episode_number"], 1);
+    assert_eq!(cw[1]["series_title"], Value::Null, "a movie has no series");
+    assert_eq!(cw[1]["poster_item_id"], old_film.to_string());
+    let next_up = home["next_up"].as_array().unwrap();
+    assert_eq!(titles(&home["next_up"]), ["Show A S01E02"], "{home}");
+    assert_eq!(next_up[0]["series_title"], "Show A");
+    assert_eq!(next_up[0]["poster_item_id"], show_a.to_string());
+
     // The new rails can be hidden and reordered like the others.
     let (status, body, _) = client
         .req(
