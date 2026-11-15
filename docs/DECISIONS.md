@@ -260,3 +260,20 @@ SEG2's tests can assert against them.
   at least 0.5 s. D17's playback floor (0.6) applies to
   automatic sources only — a manual row always wins,
   per D15, whatever its stored confidence.
+
+## 2026-11-15 — Segment tie-breaks (SEG2)
+
+Put to the assistant by the SEG2 run as three proposed
+tie-breaks, accepted the same day under the owner's
+standing instruction to keep the chain moving; recorded
+here so SEG2's tests can assert against them.
+
+- **D19 Segment tie-breaks:** when several credits
+  spans qualify, the one nearest the end of the file
+  wins — the tail's mirror of the intro's "first match
+  wins". A chapter titled "Opening Credits" is an
+  intro, not the credits: it plays at the top of the
+  episode, and calling it the credits would start
+  next-episode autoplay there. When several chapters
+  name the same kind, the earliest wins — so "Credits"
+  beats a later "Post-Credits Scene".
