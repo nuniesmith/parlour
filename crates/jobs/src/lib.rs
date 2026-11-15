@@ -29,6 +29,9 @@ pub enum JobKind {
     ImportEmby,
     /// Nightly retention sweep of the activity feed (UI4).
     PurgeActivity,
+    /// The cheap intro/credits pass over a library's new or changed
+    /// episodes, queued after a scan (SEG2).
+    DetectSegments,
 }
 
 impl JobKind {
@@ -43,6 +46,7 @@ impl JobKind {
             JobKind::ReconcileRequests => "reconcile_requests",
             JobKind::ImportEmby => "import_emby",
             JobKind::PurgeActivity => "purge_activity",
+            JobKind::DetectSegments => "detect_segments",
         }
     }
 }
@@ -250,5 +254,6 @@ mod tests {
     fn job_kind_strings_are_stable() {
         assert_eq!(JobKind::ScanLibrary.as_str(), "scan_library");
         assert_eq!(JobKind::GenerateArtwork.as_str(), "generate_artwork");
+        assert_eq!(JobKind::DetectSegments.as_str(), "detect_segments");
     }
 }

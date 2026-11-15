@@ -12,6 +12,8 @@
 //! Background (spawned from `main`, never from the router, so tests
 //! stay deterministic):
 //! - a worker loop claiming queued scan jobs,
+//! - a second worker for segment detection (SEG2), which a finished
+//!   scan queues when an episode's file is new or changed,
 //! - a filesystem watcher (`notify`) over every library path:
 //!   events are debounced, then a targeted scan is queued for each
 //!   affected library (C7),
@@ -499,6 +501,25 @@ pub fn spawn_background(
         });
     }
 
+    // SEG2: segment detection decodes up to 15 minutes of each new
+    // episode, so it has a worker of its own — a long first pass over
+    // a big library must never hold up scans, metadata or clean-up.
+    {
+        let pool = pool.clone();
+        tokio::spawn(async move {
+            loop {
+                match parlour_jobs::claim_next(&pool, parlour_jobs::JobKind::DetectSegments).await {
+                    Ok(Some(job)) => run_detect_job_claimed(&pool, job).await,
+                    Ok(None) => tokio::time::sleep(Duration::from_secs(3)).await,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "segment detection claim failed");
+                        tokio::time::sleep(Duration::from_secs(10)).await;
+                    }
+                }
+            }
+        });
+    }
+
     // Nightly safety net (C7): after 07:30 UTC (02:30/03:30 in
     // Toronto), queue one full scan per library per day.
     {
@@ -539,6 +560,9 @@ async fn run_scan_job_claimed(pool: parlour_db::PgPool, job: parlour_jobs::Job) 
         Ok(report) => {
             tracing::info!(job_id = %job.id, %library_id, seen = report.seen_files,
                 "library scan finished");
+            // Queued before the scan reads as finished, so whoever
+            // sees the scan succeed also sees its follow-up.
+            queue_segment_detection(&pool, library_id, job.id).await;
             let _ = parlour_jobs::complete(&pool, job.id).await;
             crate::activity::record(
                 &pool,
@@ -572,6 +596,68 @@ async fn run_scan_job_claimed(pool: parlour_db::PgPool, job: parlour_jobs::Job) 
                     })),
             )
             .await;
+        }
+    }
+}
+
+/// SEG2: after a scan, queue segment detection for the library when
+/// any episode's playback file is new or changed — unless a
+/// detection job for it is already waiting. Only a *queued* job
+/// counts: a running one works from the list it read when it
+/// started, and a `running` row left behind by a restart must not
+/// block detection for that library forever.
+async fn queue_segment_detection(pool: &parlour_db::PgPool, library_id: Uuid, scan_job: Uuid) {
+    match parlour_catalog::needs_detection(pool, library_id).await {
+        Ok(true) => {}
+        Ok(false) => return,
+        Err(e) => {
+            tracing::warn!(%library_id, error = %e, "segment detection check failed");
+            return;
+        }
+    }
+    let waiting: Result<(bool,), _> = sqlx::query_as(
+        "SELECT EXISTS (SELECT 1 FROM jobs WHERE kind = 'detect_segments'
+                        AND library_id = $1 AND status = 'queued')",
+    )
+    .bind(library_id)
+    .fetch_one(pool)
+    .await;
+    if matches!(waiting, Ok((true,))) {
+        return;
+    }
+    match parlour_jobs::enqueue(
+        pool,
+        parlour_jobs::JobKind::DetectSegments,
+        Some(library_id),
+        serde_json::json!({ "trigger": "scan", "scan_job_id": scan_job }),
+    )
+    .await
+    {
+        Ok(job_id) => tracing::info!(%library_id, %job_id, "segment detection queued"),
+        Err(e) => tracing::warn!(%library_id, error = %e, "could not queue segment detection"),
+    }
+}
+
+/// SEG2: run one claimed `detect_segments` job. Per-file trouble is
+/// listed on the job and does not fail it; only a database error or
+/// ffmpeg/ffprobe being impossible to start does (the files it had
+/// not finished stay queued for the next scan's job).
+pub async fn run_detect_job_claimed(pool: &parlour_db::PgPool, job: parlour_jobs::Job) {
+    let Some(library_id) = job.library_id else {
+        let _ = parlour_jobs::fail(pool, job.id, "segment detection without a library").await;
+        return;
+    };
+    match parlour_catalog::detect_library(pool, library_id, Some(job.id)).await {
+        Ok(report) => {
+            tracing::info!(job_id = %job.id, %library_id, episodes = report.episodes,
+                failed = report.failed, "segment detection finished");
+            let summary = serde_json::to_value(&report).unwrap_or(serde_json::Value::Null);
+            let _ = parlour_jobs::set_result(pool, job.id, summary).await;
+            let _ = parlour_jobs::complete(pool, job.id).await;
+        }
+        Err(e) => {
+            tracing::warn!(job_id = %job.id, error = %e, "segment detection failed");
+            let _ = parlour_jobs::fail(pool, job.id, &e.to_string()).await;
         }
     }
 }

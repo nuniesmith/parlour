@@ -454,7 +454,8 @@ struct AudioDto {
 }
 
 /// One segment as the player sees it (SEG1): already resolved to
-/// at most one per kind, manual winning over auto.
+/// at most one per kind, manual winning over auto, and automatic
+/// rows below the confidence floor left out (D17).
 #[derive(Serialize)]
 struct SegmentDto {
     kind: &'static str,

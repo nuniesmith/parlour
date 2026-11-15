@@ -204,7 +204,9 @@ export interface PlaybackInfo {
   subtitles: SubtitleTrackInfo[];
   default_subtitle_id: string | null;
   audio_streams: AudioStreamInfo[];
-  /** SEG1: at most one per kind, start-ordered; manual wins over auto. */
+  /** SEG1: at most one per kind, start-ordered; manual wins over auto.
+   *  Automatic rows below confidence 0.6 are never sent (D17), so a
+   *  `heuristic` guess (stored at 0.5) does not appear here today. */
   segments: MediaSegment[];
   warnings: string[];
 }
@@ -213,7 +215,7 @@ export interface MediaSegment {
   kind: 'intro' | 'credits' | 'recap';
   start_ms: number;
   end_ms: number;
-  source: 'chapters' | 'fingerprint' | 'manual';
+  source: 'chapters' | 'fingerprint' | 'manual' | 'heuristic';
   confidence: number;
 }
 
@@ -403,6 +405,7 @@ export const JOB_KIND_LABELS: Record<string, string> = {
   download_artwork: 'Artwork download',
   import_emby: 'Emby import',
   purge_activity: 'Activity clean-up',
+  detect_segments: 'Segment detection',
 };
 
 export function jobKindLabel(kind: string): string {

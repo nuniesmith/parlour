@@ -120,6 +120,10 @@ pub enum SegmentSource {
     Fingerprint,
     /// Entered or corrected by an admin (SEG4).
     Manual,
+    /// A black-frame + silence guess at the file's head or tail
+    /// (SEG2, D17). Stored below the playback floor, so it never
+    /// reaches a player; kept for the editor and for SEG3.
+    Heuristic,
 }
 
 impl SegmentSource {
@@ -129,6 +133,7 @@ impl SegmentSource {
             SegmentSource::Chapters => "chapters",
             SegmentSource::Fingerprint => "fingerprint",
             SegmentSource::Manual => "manual",
+            SegmentSource::Heuristic => "heuristic",
         }
     }
 
@@ -137,6 +142,7 @@ impl SegmentSource {
             "chapters" => Some(SegmentSource::Chapters),
             "fingerprint" => Some(SegmentSource::Fingerprint),
             "manual" => Some(SegmentSource::Manual),
+            "heuristic" => Some(SegmentSource::Heuristic),
             _ => None,
         }
     }
@@ -180,6 +186,7 @@ mod tests {
             SegmentSource::Chapters,
             SegmentSource::Fingerprint,
             SegmentSource::Manual,
+            SegmentSource::Heuristic,
         ] {
             assert_eq!(SegmentSource::parse(source.as_str()), Some(source));
         }

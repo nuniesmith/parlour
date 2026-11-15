@@ -13,6 +13,9 @@
 //!    roots that walked cleanly in this run, so an unmounted disk
 //!    can never mass-mark a library missing. Rows are never
 //!    deleted: watch state (1.6) hangs off items, not files.
+//! 5. A probed (new or changed) file is marked as not yet looked at
+//!    by segment detection; the server queues `DetectSegments`
+//!    after the scan when any episode needs it (SEG2, `segments`).
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -301,6 +304,10 @@ pub async fn scan_library(
             Some(p) => (p.container.clone(), p.duration_ms),
             None => (None, None),
         };
+        // A new or changed file has not had segment detection
+        // (SEG2): `segments_detected_at` starts NULL on insert and is
+        // cleared on re-probe, so the job queued after this scan
+        // looks at it again.
         let (file_id,): (Uuid,) = sqlx::query_as(
             "INSERT INTO media_files
                  (item_id, library_id, path, relative_path, size_bytes, mtime,
@@ -311,6 +318,7 @@ pub async fn scan_library(
                      size_bytes = EXCLUDED.size_bytes, mtime = EXCLUDED.mtime,
                      container = EXCLUDED.container, duration_ms = EXCLUDED.duration_ms,
                      probe_error = EXCLUDED.probe_error, available = true,
+                     segments_detected_at = NULL,
                      last_seen_at = now(), updated_at = now()
              RETURNING id",
         )
