@@ -10,8 +10,10 @@
   let notice = $state<string | null>(null);
   let users = $state<AdminUser[]>([]);
   let invites = $state<Invite[]>([]);
+  let invitesLoaded = $state(false);
   let newInviteLink = $state<string | null>(null);
   let libraries = $state<Library[]>([]);
+  let librariesLoaded = $state(false);
   let grantProfile = $state('');
   let grantLibrary = $state('');
   let renamingId = $state<string | null>(null);
@@ -56,6 +58,7 @@
     ]);
     users = u.data ?? [];
     invites = i.data ?? [];
+    if (i.data) invitesLoaded = true;
     if (u.error) error = u.error;
   }
 
@@ -65,6 +68,7 @@
       api<Library[]>('/api/v1/admin/libraries'),
     ]);
     libraries = libs.data ?? [];
+    if (libs.data) librariesLoaded = true;
   });
 
   async function createInvite() {
@@ -155,6 +159,9 @@
     <code>{newInviteLink}</code>
   </p>
 {/if}
+{#if invitesLoaded && invites.length === 0}
+  <p class="dim">No invites yet. Create one to get a sign-up link for someone.</p>
+{:else}
 <div class="table-wrap"><table>
   <thead><tr><th>Created</th><th>Expires</th><th>Status</th><th></th></tr></thead>
   <tbody>
@@ -172,12 +179,19 @@
     {/each}
   </tbody>
 </table></div>
+{/if}
 
 <h2>Library access</h2>
 <p class="dim">
   Access is per profile (your own profiles are listed; other users manage theirs by signing in —
   grants here apply to any profile id).
 </p>
+{#if librariesLoaded && libraries.length === 0}
+  <p class="dim">
+    There are no libraries to grant yet — <a class="link" href="/admin/library">add one under Library</a>
+    first.
+  </p>
+{:else}
 <div class="row">
   <select bind:value={grantLibrary} aria-label="Library">
     <option value="">Library…</option>
@@ -189,8 +203,12 @@
   </select>
   <button class="btn" onclick={grantAccess}>Grant</button>
 </div>
+{/if}
 
 <style>
+  .link {
+    color: var(--accent);
+  }
   .rename {
     display: flex;
     gap: 0.4rem;

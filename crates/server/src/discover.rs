@@ -5,6 +5,9 @@
 //! in 1.6, the read side lands now), Next Up, Recently Added, and
 //! (UI8) the library tile row plus one Latest rail per library —
 //! all limited to libraries the active profile can access.
+//! Continue Watching and Next Up rows also carry `series_title`
+//! and `poster_item_id` (UI11) so an episode's tile can name its
+//! show and use the show's poster, as the Now Playing card does.
 //!
 //! `GET /api/v1/search?q=` — Postgres full-text over item titles
 //! plus person matches (cast) with the items they appear in.
@@ -35,6 +38,22 @@ struct ContinueDto {
     item: ItemDto,
     position_ms: i64,
     duration_ms: Option<i64>,
+    /// The episode's series title; null for anything but an episode.
+    series_title: Option<String>,
+    /// Which item's poster the tile shows: the series' for an
+    /// episode when it has one, else the item's own; null if
+    /// neither has a cached poster (same rule as Now Playing).
+    poster_item_id: Option<Uuid>,
+}
+
+/// A Next Up row: the episode plus what its tile needs (UI11).
+#[derive(Debug, Serialize, FromRow)]
+struct NextUpDto {
+    #[sqlx(flatten)]
+    #[serde(flatten)]
+    item: ItemDto,
+    series_title: Option<String>,
+    poster_item_id: Option<Uuid>,
 }
 
 /// One tile in Home's library row (UI8).
@@ -94,7 +113,7 @@ fn group_latest(rows: Vec<LatestRow>) -> Vec<LatestRailDto> {
 struct HomeDto {
     continue_watching: Vec<ContinueDto>,
     recently_added: Vec<ItemDto>,
-    next_up: Vec<ItemDto>,
+    next_up: Vec<NextUpDto>,
     libraries: Vec<LibraryTileDto>,
     latest: Vec<LatestRailDto>,
 }
@@ -109,10 +128,19 @@ async fn home(State(state): State<AppState>, user: AuthUser) -> Result<Json<Home
                 i.available, i.genres, i.vote_average, i.metadata_status, i.metadata_provider,
                 EXISTS (SELECT 1 FROM images im WHERE im.item_id = i.id AND im.kind = 'poster'
                         AND im.path <> '' AND im.path NOT LIKE 'pending:%') AS has_poster,
+                sr.title AS series_title,
+                (SELECT c.id FROM media_items c
+                  WHERE c.id IN (sr.id, i.id)
+                    AND EXISTS (SELECT 1 FROM images im
+                                 WHERE im.item_id = c.id AND im.kind = 'poster'
+                                   AND im.path <> '' AND im.path NOT LIKE 'pending:%')
+                  ORDER BY (c.id = sr.id) DESC LIMIT 1) AS poster_item_id,
                 i.created_at, i.updated_at, u.position_ms, u.duration_ms
          FROM user_data u
          JOIN media_items i ON i.id = u.item_id
          JOIN library_access a ON a.library_id = i.library_id AND a.profile_id = $1
+         LEFT JOIN media_items se ON se.id = i.parent_id AND i.kind = 'episode'
+         LEFT JOIN media_items sr ON sr.id = se.parent_id
          WHERE u.profile_id = $1 AND NOT u.played AND u.position_ms > 0
          ORDER BY u.last_played_at DESC NULLS LAST, u.updated_at DESC
          LIMIT 24",
@@ -142,15 +170,24 @@ async fn home(State(state): State<AppState>, user: AuthUser) -> Result<Json<Home
 
     // P7 Next Up: for each series with a played episode, the
     // first unwatched episode after the latest played one.
-    let next_up_rows = sqlx::query_as::<_, ItemDto>(
+    let next_up_rows = sqlx::query_as::<_, NextUpDto>(
         "SELECT i.id, i.library_id, i.parent_id, i.kind, i.title, i.sort_title,
                 i.year, i.season_number, i.episode_number, i.overview, i.content_rating,
                 i.available, i.genres, i.vote_average, i.metadata_status, i.metadata_provider,
                 EXISTS (SELECT 1 FROM images im WHERE im.item_id = i.id AND im.kind = 'poster'
                         AND im.path <> '' AND im.path NOT LIKE 'pending:%') AS has_poster,
+                sr.title AS series_title,
+                (SELECT c.id FROM media_items c
+                  WHERE c.id IN (sr.id, i.id)
+                    AND EXISTS (SELECT 1 FROM images im
+                                 WHERE im.item_id = c.id AND im.kind = 'poster'
+                                   AND im.path <> '' AND im.path NOT LIKE 'pending:%')
+                  ORDER BY (c.id = sr.id) DESC LIMIT 1) AS poster_item_id,
                 i.created_at, i.updated_at
          FROM media_items i
          JOIN library_access a ON a.library_id = i.library_id AND a.profile_id = $1
+         LEFT JOIN media_items se ON se.id = i.parent_id AND i.kind = 'episode'
+         LEFT JOIN media_items sr ON sr.id = se.parent_id
          WHERE i.kind = 'episode'
            AND EXISTS (
              SELECT 1 FROM user_data pu
@@ -176,9 +213,9 @@ async fn home(State(state): State<AppState>, user: AuthUser) -> Result<Json<Home
     // one row per series would need the grandparent, so dedupe
     // by season (parent) — good enough for a rail.
     let mut seen = std::collections::HashSet::new();
-    let mut next_up: Vec<ItemDto> = Vec::new();
+    let mut next_up: Vec<NextUpDto> = Vec::new();
     for row in next_up_rows {
-        if let Some(parent) = row.parent_id {
+        if let Some(parent) = row.item.parent_id {
             if seen.insert(parent) {
                 next_up.push(row);
             }

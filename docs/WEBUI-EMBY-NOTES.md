@@ -372,6 +372,50 @@ should show the same anatomy with *its* reasons
   suggestions (`<datalist>`). Whether the D14 bundle carries
   them is XFER1's call; they are profile state, so the
   natural home is next to the profile's preferences.
+- **Visual QA (UI11)**: screenshot checklist against §1 at
+  desktop + phone widths; fix spacing/anatomy drift; empty
+  states everywhere.
+  *Shipped (UI11):* checked in headless Chromium at
+  1440×900 and 390×844 on a private server with its own
+  throwaway database (an empty server, then two libraries
+  and two live sessions), every shell page, with three
+  automatic checks per page: nothing blank, no sideways
+  overflow, and the gap above the first content. The
+  checklist and what it found:
+  - *Shell (§1.1–1.2)*: sidebar sections, active pill,
+    search box, drawer under 1024 px — as specified. Pages
+    started 0–26 px below the top bar depending on the
+    page; the root layout now gives the first block no top
+    margin, so every page starts at the same place.
+  - *Dashboard (§1.3)*: the server card's label / value
+    grid had collapsed into run-on lines since UI6 — the
+    admin layout styles `.row` globally for form rows and
+    that won over the card's own `.row`. Renamed (the
+    Alerts list's `.actions` had the same clash). Recent
+    jobs show readable kinds ("Library scan", not
+    `scan_library`), and every admin timestamp — Dashboard,
+    Jobs, Activity, Alerts, Account sessions — uses one
+    format (`formatDateTime` in `lib/types.ts`), which also
+    stopped the phone job list wrapping its times.
+  - *Session card (§1.4)*: anatomy as specified. The Stream
+    row printed ffprobe's format family (`MATROSKA`, `MOV`);
+    it now says `MKV`, and `MP4/MOV` for the `mov` family,
+    which covers both (the server stores only the family).
+  - *Rails*: an episode in Continue Watching or Next Up
+    showed only its own title ("Episode 2") on a letter
+    tile. `GET /api/v1/home` rows in those two rails now
+    carry `series_title` and `poster_item_id` (the same rule
+    as the Now Playing card: the series' poster when it has
+    one, else the item's own, else null), and the tile reads
+    show name, then `S1:E2 · Episode 2`, on the show's
+    poster. Other rows are unchanged.
+  - *Empty states*: Home said nothing at all when every rail
+    with content was hidden — it now says so and links to
+    Preferences → Home Screen; an admin on an empty server
+    gets an Add a library button. Server → Library and
+    Users no longer show bare table headers for no
+    libraries / no invites, and Library access says to add a
+    library first when there is none.
 - **Explicit non-goals** (in Emby's tree, not wanted):
   Emby Premiere/paywall surfaces, Live TV, DLNA, Camera
   Upload, Cinema Intros, plugin store. If the owner ever

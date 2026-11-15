@@ -5,7 +5,7 @@
   // full page with a category filter and "Load older".
   import { onMount } from 'svelte';
   import { api } from '$lib/api';
-  import type { ActivityEntry, ActivityPage } from '$lib/types';
+  import { formatDateTime, type ActivityEntry, type ActivityPage } from '$lib/types';
 
   let { compact = false }: { compact?: boolean } = $props();
 
@@ -82,12 +82,6 @@
     return kind.endsWith('.failed');
   }
 
-  function when(iso: string): string {
-    return new Date(iso).toLocaleString(undefined, {
-      dateStyle: 'medium',
-      timeStyle: 'short',
-    });
-  }
 </script>
 
 <div class="head">
@@ -128,7 +122,7 @@
             {e.summary}
           {/if}
         </span>
-        <time class="dim" datetime={e.created_at}>{when(e.created_at)}</time>
+        <time class="dim" datetime={e.created_at}>{formatDateTime(e.created_at)}</time>
       </li>
     {/each}
   </ul>

@@ -80,7 +80,7 @@
 <h2>Libraries</h2>
 {#if loaded && libraries.length === 0}
   <p class="dim">No libraries yet. Add one below, then scan it.</p>
-{/if}
+{:else}
 <div class="table-wrap"><table>
   <thead><tr><th>Name</th><th>Kind</th><th>Paths</th><th>Actions</th></tr></thead>
   <tbody>
@@ -108,6 +108,7 @@
     {/each}
   </tbody>
 </table></div>
+{/if}
 
 <form class="form" onsubmit={saveLibrary}>
   <h3>{libForm.id ? 'Edit library' : 'New library'}</h3>

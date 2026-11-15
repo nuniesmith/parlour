@@ -2,7 +2,7 @@
   // Alerts rail (UI5): the server's active notices, newest
   // first, each with a severity icon, a timestamp, a link to
   // where it can be dealt with, and a per-admin Dismiss.
-  import type { Notice } from '$lib/types';
+  import { formatDateTime, type Notice } from '$lib/types';
 
   let {
     notices,
@@ -19,10 +19,6 @@
     warning: 'Warning',
     error: 'Problem',
   };
-
-  function when(iso: string): string {
-    return new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
-  }
 
   function extra(n: Notice): string | null {
     const error = n.detail?.error;
@@ -58,9 +54,9 @@
             <p class="summary">{n.summary}</p>
             {#if extra(n)}<p class="extra dim">{extra(n)}</p>{/if}
             <p class="meta dim">
-              <time datetime={n.created_at}>{when(n.created_at)}</time>
+              <time datetime={n.created_at}>{formatDateTime(n.created_at)}</time>
             </p>
-            <p class="actions">
+            <p class="links">
               {#if LINKS[n.kind]}
                 <a href={LINKS[n.kind].href}>{LINKS[n.kind].label}</a>
               {/if}
@@ -124,25 +120,26 @@
     font-size: 0.85rem;
     overflow-wrap: anywhere;
   }
-  .actions {
+  /* Not `.actions`: the admin layout styles that class globally. */
+  .links {
     display: flex;
     flex-wrap: wrap;
     gap: 0.9rem;
     margin-top: 0.3rem;
     font-size: 0.9rem;
   }
-  .actions a,
-  .actions button {
+  .links a,
+  .links button {
     background: none;
     border: 0;
     padding: 0.2rem 0;
     cursor: pointer;
     color: var(--accent);
   }
-  .actions button {
+  .links button {
     color: var(--text-dim);
   }
-  .actions button:hover {
+  .links button:hover {
     color: var(--text);
   }
 </style>

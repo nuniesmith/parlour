@@ -5,20 +5,12 @@
   // and metadata match).
   import { onMount } from 'svelte';
   import { api } from '$lib/api';
-  import type { Job, Library } from '$lib/types';
+  import { formatDateTime, jobKindLabel, type Job, type Library } from '$lib/types';
 
   let error = $state<string | null>(null);
   let notice = $state<string | null>(null);
   let jobs = $state<Job[] | null>(null);
   let libraries = $state<Library[]>([]);
-
-  const KIND: Record<string, string> = {
-    scan_library: 'Library scan',
-    fetch_metadata: 'Metadata match',
-    download_artwork: 'Artwork download',
-    import_emby: 'Emby import',
-    purge_activity: 'Activity clean-up',
-  };
 
   const active = $derived((jobs ?? []).some((j) => j.status === 'queued' || j.status === 'running'));
 
@@ -115,7 +107,7 @@
       <li>
         <div class="line">
           <span class="what">
-            {KIND[job.kind] ?? job.kind}
+            {jobKindLabel(job.kind)}
             {#if libraryName(job.library_id)}<span class="dim"> · {libraryName(job.library_id)}</span
               >{/if}
           </span>
@@ -123,7 +115,7 @@
           {#if job.progress_total > 0}
             <span class="dim">{job.progress_done}/{job.progress_total}</span>
           {/if}
-          <span class="dim when">{new Date(job.created_at).toLocaleString()}</span>
+          <time class="dim when" datetime={job.created_at}>{formatDateTime(job.created_at)}</time>
         </div>
         {#if job.errors.length || job.result}
           <details>
