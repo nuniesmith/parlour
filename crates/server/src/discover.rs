@@ -2,8 +2,9 @@
 //!
 //! `GET /api/v1/home` — Continue Watching (per-profile resume
 //! state from `user_data`; rows are written by playback reporting
-//! in 1.6, the read side lands now) and Recently Added, both
-//! limited to libraries the active profile can access.
+//! in 1.6, the read side lands now), Next Up, Recently Added, and
+//! (UI8) the library tile row plus one Latest rail per library —
+//! all limited to libraries the active profile can access.
 //!
 //! `GET /api/v1/search?q=` — Postgres full-text over item titles
 //! plus person matches (cast) with the items they appear in.
@@ -29,11 +30,66 @@ struct ContinueDto {
     duration_ms: Option<i64>,
 }
 
+/// One tile in Home's library row (UI8).
+#[derive(Debug, Serialize, FromRow)]
+struct LibraryTileDto {
+    id: Uuid,
+    name: String,
+    kind: String,
+    /// Top-level items (movies / series) in the library.
+    item_count: i64,
+    /// The newest top-level item with a cached backdrop, whose
+    /// backdrop the tile shows; `None` → a plain tile.
+    art_item_id: Option<Uuid>,
+}
+
+/// A Latest row as fetched: an item plus the library it is in.
+#[derive(Debug, FromRow)]
+struct LatestRow {
+    #[sqlx(flatten)]
+    item: ItemDto,
+    library_name: String,
+    library_kind: String,
+}
+
+/// One per-library Latest rail (UI8).
+#[derive(Debug, Serialize)]
+struct LatestRailDto {
+    library_id: Uuid,
+    library_name: String,
+    library_kind: String,
+    items: Vec<ItemDto>,
+}
+
+/// Items in a Latest rail, per library.
+const LATEST_PER_LIBRARY: i64 = 16;
+
+/// Fold rows already ordered by library, then recency, into one
+/// rail per library, keeping that order. Libraries with nothing
+/// in them have no rows, so they get no rail.
+fn group_latest(rows: Vec<LatestRow>) -> Vec<LatestRailDto> {
+    let mut rails: Vec<LatestRailDto> = Vec::new();
+    for row in rows {
+        match rails.last_mut() {
+            Some(rail) if rail.library_id == row.item.library_id => rail.items.push(row.item),
+            _ => rails.push(LatestRailDto {
+                library_id: row.item.library_id,
+                library_name: row.library_name,
+                library_kind: row.library_kind,
+                items: vec![row.item],
+            }),
+        }
+    }
+    rails
+}
+
 #[derive(Debug, Serialize)]
 struct HomeDto {
     continue_watching: Vec<ContinueDto>,
     recently_added: Vec<ItemDto>,
     next_up: Vec<ItemDto>,
+    libraries: Vec<LibraryTileDto>,
+    latest: Vec<LatestRailDto>,
 }
 
 async fn home(State(state): State<AppState>, user: AuthUser) -> Result<Json<HomeDto>, AppError> {
@@ -125,10 +181,76 @@ async fn home(State(state): State<AppState>, user: AuthUser) -> Result<Json<Home
         }
     }
 
+    // UI8 library tile row: every library the profile can see, in
+    // the same order as the sidebar.
+    let libraries = sqlx::query_as::<_, LibraryTileDto>(
+        "SELECT l.id, l.name, l.kind,
+                (SELECT count(*) FROM media_items i
+                 WHERE i.library_id = l.id AND i.parent_id IS NULL) AS item_count,
+                (SELECT i.id FROM media_items i
+                 WHERE i.library_id = l.id AND i.parent_id IS NULL
+                   AND EXISTS (SELECT 1 FROM images im WHERE im.item_id = i.id
+                               AND im.kind = 'backdrop' AND im.path <> ''
+                               AND im.path NOT LIKE 'pending:%')
+                 ORDER BY i.created_at DESC, i.id
+                 LIMIT 1) AS art_item_id
+         FROM libraries l
+         JOIN library_access a ON a.library_id = l.id AND a.profile_id = $1
+         ORDER BY l.name",
+    )
+    .bind(profile_id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(AppError::from)?;
+
+    // UI8 Latest rails: per library, top-level items by their most
+    // recent arrival — a series counts as new when any of its
+    // seasons or episodes was added, not only when the series row
+    // itself was first created.
+    let latest_rows = sqlx::query_as::<_, LatestRow>(
+        "SELECT r.id, r.library_id, r.parent_id, r.kind, r.title, r.sort_title,
+                r.year, r.season_number, r.episode_number, r.overview, r.content_rating,
+                r.available, r.genres, r.vote_average, r.metadata_status, r.metadata_provider,
+                r.has_poster, r.created_at, r.updated_at, r.library_name, r.library_kind
+         FROM (
+           SELECT i.id, i.library_id, i.parent_id, i.kind, i.title, i.sort_title,
+                  i.year, i.season_number, i.episode_number, i.overview, i.content_rating,
+                  i.available, i.genres, i.vote_average, i.metadata_status, i.metadata_provider,
+                  EXISTS (SELECT 1 FROM images im WHERE im.item_id = i.id AND im.kind = 'poster'
+                          AND im.path <> '' AND im.path NOT LIKE 'pending:%') AS has_poster,
+                  i.created_at, i.updated_at,
+                  l.name AS library_name, l.kind AS library_kind,
+                  ROW_NUMBER() OVER (
+                    PARTITION BY i.library_id
+                    ORDER BY GREATEST(i.created_at, COALESCE(d.newest, i.created_at)) DESC, i.id
+                  ) AS rn
+           FROM media_items i
+           JOIN libraries l ON l.id = i.library_id
+           JOIN library_access a ON a.library_id = i.library_id AND a.profile_id = $1
+           LEFT JOIN LATERAL (
+             SELECT max(GREATEST(c.created_at, COALESCE(gc.created_at, c.created_at))) AS newest
+             FROM media_items c
+             LEFT JOIN media_items gc ON gc.parent_id = c.id
+             WHERE c.parent_id = i.id
+           ) d ON true
+           WHERE i.parent_id IS NULL
+         ) r
+         WHERE r.rn <= $2
+         ORDER BY r.library_name, r.library_id, r.rn",
+    )
+    .bind(profile_id)
+    .bind(LATEST_PER_LIBRARY)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(AppError::from)?;
+    let latest = group_latest(latest_rows);
+
     Ok(Json(HomeDto {
         continue_watching,
         recently_added,
         next_up,
+        libraries,
+        latest,
     }))
 }
 
@@ -225,4 +347,61 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/v1/home", get(home))
         .route("/api/v1/search", get(search))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+
+    fn row(library: Uuid, name: &str, title: &str) -> LatestRow {
+        LatestRow {
+            item: ItemDto {
+                id: Uuid::new_v4(),
+                library_id: library,
+                parent_id: None,
+                kind: "movie".into(),
+                title: title.into(),
+                sort_title: title.into(),
+                year: None,
+                season_number: None,
+                episode_number: None,
+                overview: None,
+                content_rating: None,
+                genres: Vec::new(),
+                vote_average: None,
+                metadata_status: "matched".into(),
+                metadata_provider: None,
+                has_poster: false,
+                available: true,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            },
+            library_name: name.into(),
+            library_kind: "movies".into(),
+        }
+    }
+
+    #[test]
+    fn latest_rows_fold_into_one_rail_per_library_in_order() {
+        let films = Uuid::new_v4();
+        let shows = Uuid::new_v4();
+        let rails = group_latest(vec![
+            row(films, "Films", "B"),
+            row(films, "Films", "A"),
+            row(shows, "Shows", "C"),
+        ]);
+        assert_eq!(rails.len(), 2);
+        assert_eq!(rails[0].library_id, films);
+        assert_eq!(rails[0].library_name, "Films");
+        let titles: Vec<&str> = rails[0].items.iter().map(|i| i.title.as_str()).collect();
+        assert_eq!(titles, ["B", "A"]);
+        assert_eq!(rails[1].library_id, shows);
+        assert_eq!(rails[1].items.len(), 1);
+    }
+
+    #[test]
+    fn no_rows_means_no_rails() {
+        assert!(group_latest(Vec::new()).is_empty());
+    }
 }

@@ -37,10 +37,19 @@ pub struct ProfileRow {
 }
 
 /// The Home Screen rails, in the default order. A rail id is
-/// what clients render against; adding one here (UI8) makes it
-/// appear, visible, at the end of every profile's list until the
-/// profile moves it.
-pub const HOME_RAILS: &[&str] = &["continue_watching", "next_up", "recently_added"];
+/// what clients render against; adding one here makes it appear,
+/// visible, at the end of every profile's list until the profile
+/// moves it. `libraries` is the library tile row and `latest` the
+/// group of per-library Latest rails (UI8) — one id for the whole
+/// group, so the set of ids does not depend on which libraries
+/// exist.
+pub const HOME_RAILS: &[&str] = &[
+    "libraries",
+    "continue_watching",
+    "next_up",
+    "recently_added",
+    "latest",
+];
 
 /// One rail in a profile's Home Screen, in display order.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -483,11 +492,20 @@ mod tests {
         let rails = home_rails(&strings(&["recently_added"]), &strings(&["next_up"]));
         assert_eq!(
             ids(&rails),
-            ["recently_added", "continue_watching", "next_up"]
+            [
+                "recently_added",
+                "libraries",
+                "continue_watching",
+                "next_up",
+                "latest"
+            ]
         );
-        assert!(rails[0].visible);
-        assert!(rails[1].visible);
-        assert!(!rails[2].visible);
+        let hidden: Vec<&str> = rails
+            .iter()
+            .filter(|r| !r.visible)
+            .map(|r| r.id.as_str())
+            .collect();
+        assert_eq!(hidden, ["next_up"]);
     }
 
     #[test]
@@ -498,7 +516,13 @@ mod tests {
         );
         assert_eq!(
             ids(&rails),
-            ["next_up", "continue_watching", "recently_added"]
+            [
+                "next_up",
+                "continue_watching",
+                "libraries",
+                "recently_added",
+                "latest"
+            ]
         );
         assert!(rails.iter().all(|r| r.visible));
     }
@@ -515,12 +539,20 @@ mod tests {
                 visible: false,
             },
             HomeRail {
+                id: "latest".into(),
+                visible: false,
+            },
+            HomeRail {
                 id: "continue_watching".into(),
+                visible: true,
+            },
+            HomeRail {
+                id: "libraries".into(),
                 visible: true,
             },
         ];
         let (order, hidden) = split_home_rails(&wanted).unwrap();
-        assert_eq!(hidden, strings(&["recently_added"]));
+        assert_eq!(hidden, strings(&["recently_added", "latest"]));
         assert_eq!(home_rails(&order, &hidden), wanted);
     }
 

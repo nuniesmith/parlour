@@ -17,9 +17,11 @@ export const PROFILE_COLORS = [
 
 /** Display names for the Home Screen rail ids the server knows. */
 export const RAIL_LABELS: Record<string, string> = {
+  libraries: 'Libraries',
   continue_watching: 'Continue watching',
   next_up: 'Next up',
   recently_added: 'Recently added',
+  latest: 'Latest in each library',
 };
 
 export async function updateActiveProfile(

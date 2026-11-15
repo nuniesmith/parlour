@@ -287,6 +287,26 @@ should show the same anatomy with *its* reasons
   form silently kept the old one.
 - **Home (UI8)**: add library tile row + per-library
   "Latest" rails; keep existing rails and labels.
+  *Shipped (UI8):* `GET /api/v1/home` gained `libraries`
+  (one tile per library the active profile can see, by name
+  as in the sidebar: id, name, kind, top-level item count,
+  and `art_item_id` — the newest top-level item with a cached
+  backdrop, or null for a plain tile) and `latest` (one rail
+  per non-empty visible library, same order, up to 16
+  top-level items each). Latest orders by *most recent
+  arrival*: a series counts as new when any of its seasons or
+  episodes was added, so a returning show surfaces without a
+  new series row; Recently Added keeps its old ordering.
+  Played items are not filtered out of Latest. Two rail ids
+  join `profiles::HOME_RAILS`: `libraries` (default first)
+  and `latest` (default last) — the per-library rails are
+  one id, shown or hidden and moved as a group, so the id set
+  doesn't depend on which libraries exist. Per UI7, a profile
+  that already saved an order gets both at the end, visible,
+  until it moves them in Preferences → Home Screen. The tile
+  row (`web/src/lib/LibraryTiles.svelte`) replaces Home's old
+  "Browse <library> →" links; each Latest rail's heading
+  links to its library.
 - **Explicit non-goals** (in Emby's tree, not wanted):
   Emby Premiere/paywall surfaces, Live TV, DLNA, Camera
   Upload, Cinema Intros, plugin store. If the owner ever

@@ -114,9 +114,11 @@ async fn preferences_flow() {
     assert_eq!(
         p["home_rails"],
         json!([
+            {"id": "libraries", "visible": true},
             {"id": "continue_watching", "visible": true},
             {"id": "next_up", "visible": true},
             {"id": "recently_added", "visible": true},
+            {"id": "latest", "visible": true},
         ])
     );
     assert_eq!(p["segment_skip"], "button");
@@ -146,6 +148,8 @@ async fn preferences_flow() {
             {"id": "recently_added", "visible": true},
             {"id": "continue_watching", "visible": false},
             {"id": "next_up", "visible": true},
+            {"id": "libraries", "visible": true},
+            {"id": "latest", "visible": true},
         ])
     );
     assert_eq!(body["segment_skip"], "auto");
@@ -200,8 +204,10 @@ async fn preferences_flow() {
         body["home_rails"],
         json!([
             {"id": "next_up", "visible": false},
+            {"id": "libraries", "visible": true},
             {"id": "continue_watching", "visible": true},
             {"id": "recently_added", "visible": true},
+            {"id": "latest", "visible": true},
         ])
     );
 
