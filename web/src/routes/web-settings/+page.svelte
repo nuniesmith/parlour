@@ -11,6 +11,7 @@
     { keys: ['F'], action: 'Enter or leave full screen' },
   ];
   const everywhere: { keys: string[]; action: string }[] = [
+    { keys: ['/'], action: 'Jump to search (the Search page’s own box when you’re on it)' },
     { keys: ['Tab', 'Shift + Tab'], action: 'Move between links, buttons and fields' },
     { keys: ['Enter'], action: 'Open the highlighted link or press the highlighted button' },
     { keys: ['Esc'], action: 'Close the menu drawer on small screens' },
