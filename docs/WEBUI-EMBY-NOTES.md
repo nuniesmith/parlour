@@ -248,6 +248,43 @@ should show the same anatomy with *its* reasons
   + skip behaviour — Phase 9 SEG5/SEG6 read these), 
   Subtitles, Profile, Account (password — PR #10 — and
   username, UI10).
+  *Shipped (UI7):* one route per page under
+  `web/src/routes/settings/` — `/settings/display`,
+  `/settings/home`, `/settings/playback`,
+  `/settings/subtitles`, `/settings/profile`,
+  `/settings/account` — sharing `settings/+layout.svelte`
+  (form styles; every page but Account asks for a profile
+  first). Bare `/settings` opens Display; the old anchors
+  redirect (`#playback` → Playback, `#password` /
+  `#sessions` → Account). Everything except Account is
+  stored **on the profile** (so it follows the profile to
+  every device and rides the D14 export), edited through
+  `PATCH /api/v1/profiles/{id}` and returned on every
+  profile DTO (including `/auth/me`'s `active_profile`).
+  Migration `20261115000000_profile_preferences.sql` adds:
+  `home_rail_order` + `home_rails_hidden` (the DTO merges
+  them into `home_rails: [{id, visible}]`, always every
+  known rail — rails the profile has never ordered go last,
+  visible, so UI8's new rails appear without a migration;
+  unknown or repeated ids in a PATCH are a 400; the known
+  ids live in `profiles::HOME_RAILS`), `segment_skip`
+  (`button` | `auto` | `off`, default `button` — Phase 9's
+  "Skip Intro with no manual work" needs the button on by
+  default) and `autoplay_next` (default on, D15). Home
+  renders its rails in the profile's order and skips hidden
+  ones. Playback holds audio language, the remote bitrate
+  cap, and the two Phase 9 choices — the page says the
+  player doesn't act on those yet; SEG5/SEG6 read them.
+  Subtitles holds mode + language. Profile edits the active
+  profile's name, colour and PIN (adding/deleting profiles
+  stays on Who's watching). Account holds change password,
+  signed-in sessions, switch profile and sign out. Display
+  has no options yet — Parlour has no per-profile display
+  settings; the page exists so the tree matches §1, and
+  what belongs there is the owner's call. PATCH also gained
+  `clear_audio_lang` / `clear_subtitle_lang` (like
+  `clear_bitrate_cap`): before, blanking a language in the
+  form silently kept the old one.
 - **Home (UI8)**: add library tile row + per-library
   "Latest" rails; keep existing rails and labels.
 - **Explicit non-goals** (in Emby's tree, not wanted):

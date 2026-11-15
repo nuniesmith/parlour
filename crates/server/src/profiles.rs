@@ -2,6 +2,10 @@
 //! and per-profile defaults (languages, subtitle mode, remote
 //! bitrate cap). A profile always belongs to exactly one user;
 //! asking for someone else's profile is a 404, never a 403.
+//!
+//! UI7 added the preferences the web Preferences pages edit:
+//! Home Screen rail order/visibility and the Playback choices
+//! Phase 9 reads (segment skip mode, autoplay next episode).
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -26,6 +30,78 @@ pub struct ProfileRow {
     pub subtitle_lang: Option<String>,
     pub subtitle_mode: String,
     pub remote_bitrate_cap_kbps: Option<i32>,
+    pub home_rail_order: Vec<String>,
+    pub home_rails_hidden: Vec<String>,
+    pub segment_skip: String,
+    pub autoplay_next: bool,
+}
+
+/// The Home Screen rails, in the default order. A rail id is
+/// what clients render against; adding one here (UI8) makes it
+/// appear, visible, at the end of every profile's list until the
+/// profile moves it.
+pub const HOME_RAILS: &[&str] = &["continue_watching", "next_up", "recently_added"];
+
+/// One rail in a profile's Home Screen, in display order.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct HomeRail {
+    pub id: String,
+    pub visible: bool,
+}
+
+/// Every known rail, in the profile's chosen order, with its
+/// visibility. Stored ids the server no longer knows are dropped;
+/// known rails missing from the stored order go last, in default
+/// order — so the answer is always a full permutation of
+/// [`HOME_RAILS`].
+pub fn home_rails(order: &[String], hidden: &[String]) -> Vec<HomeRail> {
+    let mut ids: Vec<&str> = Vec::with_capacity(HOME_RAILS.len());
+    for id in order {
+        if let Some(known) = HOME_RAILS.iter().find(|k| **k == id.as_str()) {
+            if !ids.contains(known) {
+                ids.push(known);
+            }
+        }
+    }
+    for known in HOME_RAILS {
+        if !ids.contains(known) {
+            ids.push(known);
+        }
+    }
+    ids.into_iter()
+        .map(|id| HomeRail {
+            id: id.to_string(),
+            visible: !hidden.iter().any(|h| h == id),
+        })
+        .collect()
+}
+
+/// Validate a client's rail list and split it into what is
+/// stored: the order, and the hidden set. Unknown or repeated ids
+/// are a 400; a partial list is fine (the rest keep default
+/// order after it, visible).
+fn split_home_rails(rails: &[HomeRail]) -> Result<(Vec<String>, Vec<String>), AppError> {
+    let mut order = Vec::with_capacity(rails.len());
+    let mut hidden = Vec::new();
+    for rail in rails {
+        if !HOME_RAILS.contains(&rail.id.as_str()) {
+            return Err(AppError::BadRequest(format!(
+                "unknown home rail '{}'",
+                rail.id
+            )));
+        }
+        if order.contains(&rail.id) {
+            return Err(AppError::BadRequest(format!(
+                "home rail '{}' listed twice",
+                rail.id
+            )));
+        }
+        order.push(rail.id.clone());
+        if !rail.visible {
+            hidden.push(rail.id.clone());
+        }
+    }
+    Ok((order, hidden))
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -40,6 +116,12 @@ pub struct ProfileDto {
     pub subtitle_lang: Option<String>,
     pub subtitle_mode: String,
     pub remote_bitrate_cap_kbps: Option<i32>,
+    /// Home Screen rails in display order, each with visibility.
+    pub home_rails: Vec<HomeRail>,
+    /// Inside an intro/credits segment: `button`, `auto` or `off`.
+    pub segment_skip: String,
+    /// Next-episode countdown at credits / end of file.
+    pub autoplay_next: bool,
 }
 
 impl From<ProfileRow> for ProfileDto {
@@ -59,6 +141,9 @@ impl From<ProfileRow> for ProfileDto {
             subtitle_lang: p.subtitle_lang,
             subtitle_mode: p.subtitle_mode,
             remote_bitrate_cap_kbps: p.remote_bitrate_cap_kbps,
+            home_rails: home_rails(&p.home_rail_order, &p.home_rails_hidden),
+            segment_skip: p.segment_skip,
+            autoplay_next: p.autoplay_next,
         }
     }
 }
@@ -68,7 +153,7 @@ pub async fn list_profiles_for(
     user_id: Uuid,
 ) -> Result<Vec<ProfileDto>, AppError> {
     let rows = sqlx::query_as::<_, ProfileRow>(
-        "SELECT id, user_id, name, pin_hash, avatar_color, audio_lang, subtitle_lang, subtitle_mode, remote_bitrate_cap_kbps FROM profiles WHERE user_id = $1 ORDER BY created_at",
+        "SELECT id, user_id, name, pin_hash, avatar_color, audio_lang, subtitle_lang, subtitle_mode, remote_bitrate_cap_kbps, home_rail_order, home_rails_hidden, segment_skip, autoplay_next FROM profiles WHERE user_id = $1 ORDER BY created_at",
     )
     .bind(user_id)
     .fetch_all(pool)
@@ -83,7 +168,7 @@ pub async fn get_profile_for(
     profile_id: Uuid,
 ) -> Result<Option<ProfileDto>, AppError> {
     let row = sqlx::query_as::<_, ProfileRow>(
-        "SELECT id, user_id, name, pin_hash, avatar_color, audio_lang, subtitle_lang, subtitle_mode, remote_bitrate_cap_kbps FROM profiles WHERE id = $1 AND user_id = $2",
+        "SELECT id, user_id, name, pin_hash, avatar_color, audio_lang, subtitle_lang, subtitle_mode, remote_bitrate_cap_kbps, home_rail_order, home_rails_hidden, segment_skip, autoplay_next FROM profiles WHERE id = $1 AND user_id = $2",
     )
     .bind(profile_id)
     .bind(user_id)
@@ -99,7 +184,7 @@ async fn fetch_row(
     profile_id: Uuid,
 ) -> Result<ProfileRow, AppError> {
     sqlx::query_as::<_, ProfileRow>(
-        "SELECT id, user_id, name, pin_hash, avatar_color, audio_lang, subtitle_lang, subtitle_mode, remote_bitrate_cap_kbps FROM profiles WHERE id = $1 AND user_id = $2",
+        "SELECT id, user_id, name, pin_hash, avatar_color, audio_lang, subtitle_lang, subtitle_mode, remote_bitrate_cap_kbps, home_rail_order, home_rails_hidden, segment_skip, autoplay_next FROM profiles WHERE id = $1 AND user_id = $2",
     )
     .bind(profile_id)
     .bind(user_id)
@@ -145,6 +230,16 @@ fn validate_mode(mode: &str) -> Result<(), AppError> {
     }
 }
 
+fn validate_segment_skip(mode: &str) -> Result<(), AppError> {
+    if matches!(mode, "button" | "auto" | "off") {
+        Ok(())
+    } else {
+        Err(AppError::BadRequest(
+            "segment_skip must be button, auto or off".into(),
+        ))
+    }
+}
+
 #[derive(Deserialize)]
 struct CreateProfile {
     name: String,
@@ -183,7 +278,7 @@ async fn create_profile(
         None => None,
     };
     let row = sqlx::query_as::<_, ProfileRow>(
-        "INSERT INTO profiles (user_id, name, pin_hash, avatar_color, audio_lang, subtitle_lang, subtitle_mode, remote_bitrate_cap_kbps) VALUES ($1, $2, $3, COALESCE($4, '#7c5cbf'), $5, $6, COALESCE($7, 'auto'), $8) RETURNING id, user_id, name, pin_hash, avatar_color, audio_lang, subtitle_lang, subtitle_mode, remote_bitrate_cap_kbps",
+        "INSERT INTO profiles (user_id, name, pin_hash, avatar_color, audio_lang, subtitle_lang, subtitle_mode, remote_bitrate_cap_kbps) VALUES ($1, $2, $3, COALESCE($4, '#7c5cbf'), $5, $6, COALESCE($7, 'auto'), $8) RETURNING id, user_id, name, pin_hash, avatar_color, audio_lang, subtitle_lang, subtitle_mode, remote_bitrate_cap_kbps, home_rail_order, home_rails_hidden, segment_skip, autoplay_next",
     )
     .bind(user.user_id)
     .bind(body.name.trim())
@@ -217,6 +312,15 @@ struct UpdateProfile {
     remote_bitrate_cap_kbps: Option<i32>,
     #[serde(default)]
     clear_bitrate_cap: bool,
+    /// Back to "no preference" — `null` alone can't say that,
+    /// since an absent field means "leave it".
+    #[serde(default)]
+    clear_audio_lang: bool,
+    #[serde(default)]
+    clear_subtitle_lang: bool,
+    home_rails: Option<Vec<HomeRail>>,
+    segment_skip: Option<String>,
+    autoplay_next: Option<bool>,
 }
 
 async fn update_profile(
@@ -235,6 +339,18 @@ async fn update_profile(
     if let Some(mode) = &body.subtitle_mode {
         validate_mode(mode)?;
     }
+    if let Some(mode) = &body.segment_skip {
+        validate_segment_skip(mode)?;
+    }
+    let rails = body
+        .home_rails
+        .as_deref()
+        .map(split_home_rails)
+        .transpose()?;
+    let (rail_order, rails_hidden) = match rails {
+        Some((order, hidden)) => (Some(order), Some(hidden)),
+        None => (None, None),
+    };
     let pin_hash: Option<Option<String>> = if body.clear_pin {
         Some(None)
     } else if let Some(pin) = &body.pin {
@@ -249,7 +365,7 @@ async fn update_profile(
         body.remote_bitrate_cap_kbps.map(Some)
     };
     let row = sqlx::query_as::<_, ProfileRow>(
-        "UPDATE profiles SET name = COALESCE($3, name), pin_hash = CASE WHEN $4 THEN $5 ELSE pin_hash END, avatar_color = COALESCE($6, avatar_color), audio_lang = COALESCE($7, audio_lang), subtitle_lang = COALESCE($8, subtitle_lang), subtitle_mode = COALESCE($9, subtitle_mode), remote_bitrate_cap_kbps = CASE WHEN $10 THEN $11 ELSE remote_bitrate_cap_kbps END WHERE id = $1 AND user_id = $2 RETURNING id, user_id, name, pin_hash, avatar_color, audio_lang, subtitle_lang, subtitle_mode, remote_bitrate_cap_kbps",
+        "UPDATE profiles SET name = COALESCE($3, name), pin_hash = CASE WHEN $4 THEN $5 ELSE pin_hash END, avatar_color = COALESCE($6, avatar_color), audio_lang = CASE WHEN $16 THEN NULL ELSE COALESCE($7, audio_lang) END, subtitle_lang = CASE WHEN $17 THEN NULL ELSE COALESCE($8, subtitle_lang) END, subtitle_mode = COALESCE($9, subtitle_mode), remote_bitrate_cap_kbps = CASE WHEN $10 THEN $11 ELSE remote_bitrate_cap_kbps END, home_rail_order = COALESCE($12, home_rail_order), home_rails_hidden = COALESCE($13, home_rails_hidden), segment_skip = COALESCE($14, segment_skip), autoplay_next = COALESCE($15, autoplay_next) WHERE id = $1 AND user_id = $2 RETURNING id, user_id, name, pin_hash, avatar_color, audio_lang, subtitle_lang, subtitle_mode, remote_bitrate_cap_kbps, home_rail_order, home_rails_hidden, segment_skip, autoplay_next",
     )
     .bind(id)
     .bind(user.user_id)
@@ -262,6 +378,12 @@ async fn update_profile(
     .bind(&body.subtitle_mode)
     .bind(cap.is_some())
     .bind(cap.flatten())
+    .bind(rail_order)
+    .bind(rails_hidden)
+    .bind(&body.segment_skip)
+    .bind(body.autoplay_next)
+    .bind(body.clear_audio_lang)
+    .bind(body.clear_subtitle_lang)
     .fetch_optional(&state.pool)
     .await
     .map_err(|e| match &e {
@@ -335,4 +457,98 @@ pub fn routes() -> Router<AppState> {
             axum::routing::patch(update_profile).delete(delete_profile),
         )
         .route("/api/v1/profiles/{id}/select", post(select_profile))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ids(rails: &[HomeRail]) -> Vec<&str> {
+        rails.iter().map(|r| r.id.as_str()).collect()
+    }
+
+    fn strings(xs: &[&str]) -> Vec<String> {
+        xs.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn default_rails_are_all_visible_in_default_order() {
+        let rails = home_rails(&[], &[]);
+        assert_eq!(ids(&rails), HOME_RAILS);
+        assert!(rails.iter().all(|r| r.visible));
+    }
+
+    #[test]
+    fn stored_order_wins_and_missing_rails_go_last() {
+        let rails = home_rails(&strings(&["recently_added"]), &strings(&["next_up"]));
+        assert_eq!(
+            ids(&rails),
+            ["recently_added", "continue_watching", "next_up"]
+        );
+        assert!(rails[0].visible);
+        assert!(rails[1].visible);
+        assert!(!rails[2].visible);
+    }
+
+    #[test]
+    fn unknown_and_repeated_stored_ids_are_dropped() {
+        let rails = home_rails(
+            &strings(&["gone_rail", "next_up", "next_up", "continue_watching"]),
+            &strings(&["gone_rail"]),
+        );
+        assert_eq!(
+            ids(&rails),
+            ["next_up", "continue_watching", "recently_added"]
+        );
+        assert!(rails.iter().all(|r| r.visible));
+    }
+
+    #[test]
+    fn split_round_trips_through_home_rails() {
+        let wanted = vec![
+            HomeRail {
+                id: "next_up".into(),
+                visible: true,
+            },
+            HomeRail {
+                id: "recently_added".into(),
+                visible: false,
+            },
+            HomeRail {
+                id: "continue_watching".into(),
+                visible: true,
+            },
+        ];
+        let (order, hidden) = split_home_rails(&wanted).unwrap();
+        assert_eq!(hidden, strings(&["recently_added"]));
+        assert_eq!(home_rails(&order, &hidden), wanted);
+    }
+
+    #[test]
+    fn split_rejects_unknown_and_duplicate_ids() {
+        let unknown = [HomeRail {
+            id: "live_tv".into(),
+            visible: true,
+        }];
+        assert!(split_home_rails(&unknown).is_err());
+        let twice = [
+            HomeRail {
+                id: "next_up".into(),
+                visible: true,
+            },
+            HomeRail {
+                id: "next_up".into(),
+                visible: false,
+            },
+        ];
+        assert!(split_home_rails(&twice).is_err());
+    }
+
+    #[test]
+    fn segment_skip_modes() {
+        for ok in ["button", "auto", "off"] {
+            assert!(validate_segment_skip(ok).is_ok());
+        }
+        assert!(validate_segment_skip("always").is_err());
+    }
 }

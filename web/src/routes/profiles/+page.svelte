@@ -3,6 +3,7 @@
   import { goto } from '$app/navigation';
   import { api } from '$lib/api';
   import { loadSession, selectProfile, session, signOut } from '$lib/session.svelte';
+  import { PROFILE_COLORS as COLORS } from '$lib/preferences';
   import type { Profile } from '$lib/types';
 
   let error = $state<string | null>(null);
@@ -11,8 +12,6 @@
   let manage = $state(false);
   let editing = $state<Profile | 'new' | null>(null);
   let form = $state({ name: '', avatar_color: '#7c5cbf', pin: '', clear_pin: false });
-
-  const COLORS = ['#7c5cbf', '#2f7fc4', '#3d9970', '#c4512f', '#b03a6b', '#8a6d2f', '#4d8091'];
 
   onMount(async () => {
     const state = await loadSession();

@@ -27,13 +27,24 @@
     '/admin/import-export': 'Import / Export',
   };
 
+  const SETTINGS_TITLES: Record<string, string> = {
+    '/settings/display': 'Display',
+    '/settings/home': 'Home Screen',
+    '/settings/playback': 'Playback',
+    '/settings/subtitles': 'Subtitles',
+    '/settings/profile': 'Profile',
+    '/settings/account': 'Account',
+  };
+
   // Top-bar title. Item and player pages carry their own heading
   // in the page body, so the bar stays quiet there.
   const title = $derived.by(() => {
     const path = page.url.pathname;
     if (path === '/') return 'Home';
     if (path === '/search') return 'Search';
-    if (path === '/settings') return 'Settings';
+    if (path === '/settings' || path.startsWith('/settings/')) {
+      return SETTINGS_TITLES[path] ?? 'Preferences';
+    }
     if (path === '/web-settings') return 'Web Settings';
     if (path === '/admin' || path.startsWith('/admin/')) {
       return ADMIN_TITLES[path] ?? 'Server';
@@ -124,7 +135,7 @@
         {#if title}<h1 class="title">{title}</h1>{/if}
         <div class="who">
           {#if session.me?.active_profile}
-            <a class="chip-profile" href="/settings" title="Settings">
+            <a class="chip-profile" href="/settings" title="Preferences">
               <span
                 class="avatar"
                 style={`background: ${session.me.active_profile.avatar_color ?? '#7c5cbf'}`}

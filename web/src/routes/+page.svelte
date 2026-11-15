@@ -5,6 +5,19 @@
   import { session } from '$lib/session.svelte';
   import type { ContinueItem, HomeData, Item } from '$lib/types';
 
+  // Rails in the active profile's order, minus the ones it hid
+  // (Preferences → Home Screen). Before a profile loads, or for a
+  // rail id this build doesn't know, fall back to the defaults.
+  const DEFAULT_RAILS = ['continue_watching', 'next_up', 'recently_added'];
+  const rails = $derived(
+    (
+      session.me?.active_profile?.home_rails ??
+      DEFAULT_RAILS.map((id) => ({ id, visible: true }))
+    )
+      .filter((r) => r.visible)
+      .map((r) => r.id),
+  );
+
   let home = $state<HomeData | null>(null);
   let error = $state<string | null>(null);
 
@@ -33,13 +46,19 @@
       up here.
     </p>
   {/if}
-  <Rail
-    title="Continue watching"
-    items={home.continue_watching as ContinueItem[]}
-    {progressFor}
-  />
-  <Rail title="Next up" items={home.next_up} />
-  <Rail title="Recently added" items={home.recently_added} />
+  {#each rails as id (id)}
+    {#if id === 'continue_watching'}
+      <Rail
+        title="Continue watching"
+        items={home.continue_watching as ContinueItem[]}
+        {progressFor}
+      />
+    {:else if id === 'next_up'}
+      <Rail title="Next up" items={home.next_up} />
+    {:else if id === 'recently_added'}
+      <Rail title="Recently added" items={home.recently_added} />
+    {/if}
+  {/each}
   {#each session.libraries as lib (lib.id)}
     <p><a class="browse-link" href={`/library/${lib.id}`}>Browse {lib.name} →</a></p>
   {/each}
