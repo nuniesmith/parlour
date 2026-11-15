@@ -9,10 +9,14 @@
 //! `CodecUnsupported` — the best Phase 1 can offer, and the UI
 //! says so plainly.
 //!
-//! Also here: the subtitle auto-pick rules (P6), pure so the
-//! server and future clients agree on them.
+//! Also here: the subtitle auto-pick rules (P6) and the segment
+//! precedence rule (SEG1), pure so the server and future clients
+//! agree on them.
 
-use parlour_core::{ClientKind, NetworkKind, PlaybackAction, PlaybackPlan, PlaybackReason};
+use parlour_core::{
+    ClientKind, MediaSegment, NetworkKind, PlaybackAction, PlaybackPlan, PlaybackReason,
+    SegmentKind,
+};
 
 /// Probe facts about one media file (from `media_streams`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -200,6 +204,66 @@ pub fn pick_subtitle(
     }
 }
 
+// ---------------------------------------------------------------------
+// Segment precedence (SEG1, D15)
+
+/// Reduce an item's stored segment rows to what the player gets:
+/// **at most one segment per kind**, ordered by start time.
+///
+/// - A manual row always wins over every automatic source (D15).
+/// - Otherwise the automatic row with the highest confidence wins;
+///   on a tie, the earlier detector in D15's order (chapters before
+///   fingerprint).
+/// - Rows that cannot be a span (`end_ms <= start_ms`, negative
+///   start) are ignored rather than handed to a player.
+pub fn effective_segments(rows: &[MediaSegment]) -> Vec<MediaSegment> {
+    // Lower rank = preferred.
+    fn source_rank(seg: &MediaSegment) -> u8 {
+        match seg.source {
+            parlour_core::SegmentSource::Manual => 0,
+            parlour_core::SegmentSource::Chapters => 1,
+            parlour_core::SegmentSource::Fingerprint => 2,
+        }
+    }
+    fn better(a: &MediaSegment, b: &MediaSegment) -> bool {
+        match (a.source.is_manual(), b.source.is_manual()) {
+            (true, false) => return true,
+            (false, true) => return false,
+            _ => {}
+        }
+        if a.confidence != b.confidence {
+            return a.confidence > b.confidence;
+        }
+        source_rank(a) < source_rank(b)
+    }
+
+    let mut best: Vec<MediaSegment> = Vec::new();
+    for row in rows
+        .iter()
+        .filter(|r| r.start_ms >= 0 && r.end_ms > r.start_ms)
+    {
+        match best.iter_mut().find(|b| b.kind == row.kind) {
+            Some(current) if better(row, current) => *current = *row,
+            Some(_) => {}
+            None => best.push(*row),
+        }
+    }
+    best.sort_by_key(|s| (s.start_ms, s.kind));
+    best
+}
+
+/// The segment of `kind` that contains `position_ms`, if any —
+/// what SEG5's Skip button asks about.
+pub fn segment_at(
+    segments: &[MediaSegment],
+    kind: SegmentKind,
+    position_ms: i64,
+) -> Option<&MediaSegment> {
+    segments
+        .iter()
+        .find(|s| s.kind == kind && s.start_ms <= position_ms && position_ms < s.end_ms)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -300,5 +364,84 @@ mod tests {
         // picture subs are never picked
         let pics = vec![track("en", true, false)];
         assert_eq!(pick_subtitle(&pics, "auto", Some("en"), Some("en")), None);
+    }
+
+    fn seg(
+        kind: SegmentKind,
+        source: parlour_core::SegmentSource,
+        start_ms: i64,
+        end_ms: i64,
+        confidence: f32,
+    ) -> MediaSegment {
+        MediaSegment {
+            kind,
+            start_ms,
+            end_ms,
+            source,
+            confidence,
+        }
+    }
+
+    #[test]
+    fn manual_segment_wins_over_auto() {
+        use parlour_core::SegmentSource::*;
+        let rows = vec![
+            seg(SegmentKind::Intro, Fingerprint, 60_000, 90_000, 0.95),
+            seg(SegmentKind::Intro, Manual, 61_000, 89_000, 1.0),
+            seg(SegmentKind::Intro, Chapters, 0, 30_000, 1.0),
+        ];
+        let out = effective_segments(&rows);
+        assert_eq!(out, vec![rows[1]]);
+        // Even a manual row with a lower stored confidence wins.
+        let rows = vec![
+            seg(SegmentKind::Credits, Chapters, 1_000_000, 1_100_000, 1.0),
+            seg(SegmentKind::Credits, Manual, 1_010_000, 1_100_000, 0.5),
+        ];
+        assert_eq!(effective_segments(&rows), vec![rows[1]]);
+    }
+
+    #[test]
+    fn auto_sources_pick_by_confidence_then_detector_order() {
+        use parlour_core::SegmentSource::*;
+        let rows = vec![
+            seg(SegmentKind::Intro, Chapters, 0, 30_000, 0.6),
+            seg(SegmentKind::Intro, Fingerprint, 5_000, 35_000, 0.9),
+        ];
+        assert_eq!(effective_segments(&rows), vec![rows[1]]);
+        let tie = vec![
+            seg(SegmentKind::Intro, Fingerprint, 5_000, 35_000, 0.9),
+            seg(SegmentKind::Intro, Chapters, 0, 30_000, 0.9),
+        ];
+        assert_eq!(effective_segments(&tie), vec![tie[1]]);
+    }
+
+    #[test]
+    fn one_per_kind_sorted_by_start_and_invalid_dropped() {
+        use parlour_core::SegmentSource::*;
+        let rows = vec![
+            seg(SegmentKind::Credits, Fingerprint, 1_200_000, 1_300_000, 0.8),
+            seg(SegmentKind::Intro, Fingerprint, 90_000, 120_000, 0.8),
+            seg(SegmentKind::Recap, Chapters, 0, 45_000, 1.0),
+            seg(SegmentKind::Recap, Manual, 50_000, 50_000, 1.0), // empty span
+        ];
+        let out = effective_segments(&rows);
+        let kinds: Vec<_> = out.iter().map(|s| s.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![SegmentKind::Recap, SegmentKind::Intro, SegmentKind::Credits]
+        );
+        assert_eq!(out[0].source, Chapters, "invalid manual row is ignored");
+        assert!(effective_segments(&[]).is_empty());
+    }
+
+    #[test]
+    fn segment_at_is_half_open() {
+        use parlour_core::SegmentSource::*;
+        let segs = vec![seg(SegmentKind::Intro, Manual, 10_000, 20_000, 1.0)];
+        assert!(segment_at(&segs, SegmentKind::Intro, 9_999).is_none());
+        assert!(segment_at(&segs, SegmentKind::Intro, 10_000).is_some());
+        assert!(segment_at(&segs, SegmentKind::Intro, 19_999).is_some());
+        assert!(segment_at(&segs, SegmentKind::Intro, 20_000).is_none());
+        assert!(segment_at(&segs, SegmentKind::Credits, 15_000).is_none());
     }
 }

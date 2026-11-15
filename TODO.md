@@ -687,11 +687,15 @@ does NOT depend on Phase 2 transcoding.
 
 ## Phase 9 — Segments: intro/credits detection, skip, autoplay next (`catalog`, `playback`, `web`, D15)
 
-- [ ] SEG1 (M) **`media_segments`**: migration + types —
+- [x] SEG1 (M) **`media_segments`**: migration + types —
   (item_id, kind intro/credits/recap, start_ms, end_ms,
   source chapters/fingerprint/manual, confidence);
   playback-info returns the file's segments; manual source
   always wins over auto.
+  *Done 2026-11-15:* one row per (item, kind, source) so a
+  detector re-run never touches a manual row; playback-info
+  `segments` = at most one per kind, manual first, else
+  highest confidence (tie → chapters before fingerprint).
 - [ ] SEG2 (M) **Cheap detection pass**: `DetectSegments`
   job — ffprobe chapters named intro/opening/credits, plus
   black-frame + silence heuristics at head/tail. Runs on

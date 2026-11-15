@@ -204,7 +204,17 @@ export interface PlaybackInfo {
   subtitles: SubtitleTrackInfo[];
   default_subtitle_id: string | null;
   audio_streams: AudioStreamInfo[];
+  /** SEG1: at most one per kind, start-ordered; manual wins over auto. */
+  segments: MediaSegment[];
   warnings: string[];
+}
+
+export interface MediaSegment {
+  kind: 'intro' | 'credits' | 'recap';
+  start_ms: number;
+  end_ms: number;
+  source: 'chapters' | 'fingerprint' | 'manual';
+  confidence: number;
 }
 
 export interface Job {
