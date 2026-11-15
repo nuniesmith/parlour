@@ -206,3 +206,35 @@ Asked of the owner while building UI5, answered the same day.
   cannot know it changed. The first runtime-editable setting
   (UI6 General) is what will raise it; it clears itself at
   the next start.
+
+## 2026-11-15 — Segment heuristics (SEG2)
+
+Asked of the owner while building SEG2, answered the same
+day: option (b) of the two put to him. The numeric defaults
+below were set by the assistant and are recorded here so
+SEG2's tests can assert against them; the owner can change
+any of them with a word.
+
+- **D17 Heuristic segments get their own source:**
+  black-frame + silence guesses are stored with
+  `source = 'heuristic'`, never as `chapters` — a guess
+  must stay distinguishable from a real chapter marker in
+  the editor and everywhere the source is shown. The
+  `media_segments` source CHECK widens to
+  ('chapters', 'fingerprint', 'manual', 'heuristic') and
+  `SegmentSource` gains a `Heuristic` variant. Tie-break
+  order in `effective_segments` becomes manual →
+  chapters → fingerprint → heuristic. Chapter-named rows
+  from ffprobe are stored at confidence 1.0, with no
+  threshold. A heuristic row is written only when a
+  black-frame run and a silence run align — the runs
+  overlap, or the gap between them is at most 2 s — and
+  the span sits at the head or the tail: an intro span
+  starts within the first 120 s of the file; a credits
+  span ends within the last 120 s. Heuristic rows are
+  stored at a fixed confidence of 0.5. Playback floor:
+  `effective_segments` serves only rows at confidence
+  0.6 or above, so a heuristic row never reaches the
+  player — D15's "no segment, never a guess" still holds
+  for playback. Heuristic rows exist for the SEG4 editor
+  and as starting points SEG3 can confirm or replace.
