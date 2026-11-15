@@ -614,7 +614,7 @@ does NOT depend on Phase 2 transcoding.
 - [x] UI7 (M) **Preferences IA re-org**: Settings splits into
   Display, Home Screen (rail visibility/order), Playback
   (SEG5/SEG6 prefs live here), Subtitles, Profile, Account.
-- [ ] UI8 (S) **Home parity bits**: library tile row +
+- [x] UI8 (S) **Home parity bits**: library tile row +
   per-library Latest rails alongside the existing
   Continue Watching / Next Up / Recently Added rails.
 - [ ] UI9 (S) Search affordances: `/` keyboard shortcut

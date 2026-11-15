@@ -5,17 +5,22 @@
   let {
     title,
     items,
+    href = null,
     progressFor = null,
   }: {
     title: string;
     items: Item[];
+    /** When set, the heading links here (e.g. the library's grid). */
+    href?: string | null;
     progressFor?: ((item: Item) => number | null) | null;
   } = $props();
 </script>
 
 {#if items.length > 0}
   <section class="rail">
-    <h2>{title}</h2>
+    <h2>
+      {#if href}<a class="more" {href}>{title} <span aria-hidden="true">›</span></a>{:else}{title}{/if}
+    </h2>
     <div class="track">
       {#each items as item (item.id)}
         <div class="cell">
@@ -33,6 +38,14 @@
   h2 {
     font-size: 1.15rem;
     margin: 0 0 0.7rem;
+  }
+  .more {
+    color: inherit;
+    text-decoration: none;
+  }
+  .more:hover,
+  .more:focus-visible {
+    color: var(--accent);
   }
   .track {
     display: flex;

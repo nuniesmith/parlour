@@ -132,10 +132,30 @@ export interface ContinueItem extends Item {
   duration_ms: number | null;
 }
 
+/** A tile in Home's library row (UI8). */
+export interface LibraryTile {
+  id: string;
+  name: string;
+  kind: string;
+  item_count: number;
+  /** Item whose backdrop the tile shows; null → a plain tile. */
+  art_item_id: string | null;
+}
+
+/** One per-library Latest rail on Home (UI8). */
+export interface LatestRail {
+  library_id: string;
+  library_name: string;
+  library_kind: string;
+  items: Item[];
+}
+
 export interface HomeData {
   continue_watching: ContinueItem[];
   recently_added: Item[];
   next_up: Item[];
+  libraries: LibraryTile[];
+  latest: LatestRail[];
 }
 
 export interface UserState {

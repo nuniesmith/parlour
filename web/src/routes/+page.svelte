@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api } from '$lib/api';
+  import LibraryTiles from '$lib/LibraryTiles.svelte';
   import Rail from '$lib/Rail.svelte';
   import { session } from '$lib/session.svelte';
   import type { ContinueItem, HomeData, Item } from '$lib/types';
@@ -8,7 +9,7 @@
   // Rails in the active profile's order, minus the ones it hid
   // (Preferences → Home Screen). Before a profile loads, or for a
   // rail id this build doesn't know, fall back to the defaults.
-  const DEFAULT_RAILS = ['continue_watching', 'next_up', 'recently_added'];
+  const DEFAULT_RAILS = ['libraries', 'continue_watching', 'next_up', 'recently_added', 'latest'];
   const rails = $derived(
     (
       session.me?.active_profile?.home_rails ??
@@ -57,15 +58,16 @@
       <Rail title="Next up" items={home.next_up} />
     {:else if id === 'recently_added'}
       <Rail title="Recently added" items={home.recently_added} />
+    {:else if id === 'libraries'}
+      <LibraryTiles libraries={home.libraries} />
+    {:else if id === 'latest'}
+      {#each home.latest as rail (rail.library_id)}
+        <Rail
+          title={`Latest in ${rail.library_name}`}
+          href={`/library/${rail.library_id}`}
+          items={rail.items}
+        />
+      {/each}
     {/if}
   {/each}
-  {#each session.libraries as lib (lib.id)}
-    <p><a class="browse-link" href={`/library/${lib.id}`}>Browse {lib.name} →</a></p>
-  {/each}
 {/if}
-
-<style>
-  .browse-link {
-    color: var(--accent);
-  }
-</style>
