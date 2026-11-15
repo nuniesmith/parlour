@@ -123,12 +123,32 @@ The owner uses subtitles on most playback.
   `media_streams` (ffprobe output, incl. subtitle streams).
 - Segments (Phase 9, D15): `media_segments` holds intro / credits /
   recap spans per item — one row per (item, kind, source), sources
-  `chapters`, `fingerprint`, `manual`, each with a 0–1 confidence.
-  Detectors upsert only their own source's row; the read path
-  (`parlour_playback::effective_segments`) hands the player at most
-  one segment per kind: manual always wins, otherwise the highest
-  confidence, ties going to the earlier detector (chapters before
-  fingerprint). `playback-info` returns the result as `segments`.
+  `chapters`, `fingerprint`, `manual`, `heuristic`, each with a 0–1
+  confidence. Detectors write only their own source's rows; the read
+  path (`parlour_playback::effective_segments`) hands the player at
+  most one segment per kind: manual always wins, whatever its stored
+  confidence; otherwise the highest-confidence automatic row at or
+  above the 0.6 floor (D17), ties going to the earlier detector
+  (chapters, fingerprint, heuristic). `playback-info` returns the
+  result as `segments`.
+- Segment detection, the cheap pass (SEG2, D17/D18;
+  `parlour_catalog::segments`): a finished scan queues
+  `detect_segments` for its library when an episode's playback file
+  is new or changed — `media_files.segments_detected_at` stays NULL
+  until the job has looked at that exact file, and the scanner
+  clears it on every re-probe. The job has a worker of its own, so a
+  long first pass never delays scans. Per file: chapters titled with
+  the whole word intro / opening / credits → source `chapters` at
+  1.0; for a kind the chapters left open, ffmpeg `blackdetect` +
+  `silencedetect` over the first 300 s (intro) and the last 600 s
+  (credits), where a break is a black run and a silence run at most
+  2 s apart and spans follow D18 → source `heuristic` at 0.5: stored
+  for the SEG4 editor and SEG3, never served. Each run replaces its
+  own rows for intro and credits (a changed file loses the old
+  file's spans); manual and fingerprint rows are never touched. A
+  tool that fails on one file is listed on the job and not retried
+  until the file changes; ffmpeg/ffprobe that cannot start at all
+  fails the job and leaves the files queued.
 - Scanner: `notify` watcher for local disks + *arr webhooks/history
   polling for targeted rescans + a periodic full scan. Skip unchanged
   files by (path, size, mtime) fingerprint before probing.

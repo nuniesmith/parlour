@@ -144,6 +144,8 @@ fn failed_job_summary(kind: &str, library: Option<&str>) -> String {
         ("download_artwork", _) => "An artwork download failed".to_string(),
         ("import_emby", _) => "Emby import failed".to_string(),
         ("purge_activity", _) => "Activity clean-up failed".to_string(),
+        ("detect_segments", Some(name)) => format!("Segment detection for {name} failed"),
+        ("detect_segments", None) => "Segment detection failed".to_string(),
         (other, _) => format!("A {} job failed", other.replace('_', " ")),
     }
 }
@@ -437,6 +439,10 @@ mod tests {
         assert_eq!(
             failed_job_summary("import_emby", None),
             "Emby import failed"
+        );
+        assert_eq!(
+            failed_job_summary("detect_segments", Some("Shows")),
+            "Segment detection for Shows failed"
         );
         assert_eq!(
             failed_job_summary("reconcile_requests", None),

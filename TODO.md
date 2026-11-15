@@ -696,11 +696,18 @@ does NOT depend on Phase 2 transcoding.
   detector re-run never touches a manual row; playback-info
   `segments` = at most one per kind, manual first, else
   highest confidence (tie → chapters before fingerprint).
-- [ ] SEG2 (M) **Cheap detection pass**: `DetectSegments`
+- [x] SEG2 (M) **Cheap detection pass**: `DetectSegments`
   job — ffprobe chapters named intro/opening/credits, plus
   black-frame + silence heuristics at head/tail. Runs on
   scan for series episodes; fills SEG1 with source=chapters
   or a low-confidence heuristic row.
+  *Done 2026-11-15:* a scan queues `detect_segments` when an
+  episode's playback file is new or changed (per-file
+  `segments_detected_at`, cleared by the scanner); own
+  worker. Chapters at 1.0; otherwise black + silence per
+  D17/D18, stored as source `heuristic` at 0.5. The 0.6
+  floor in `effective_segments` keeps every guess away from
+  the player; manual rows are exempt.
 - [ ] SEG3 (L) **Audio-fingerprint detection**: fingerprint
   each episode's audio (ffmpeg chromaprint) once, cache by
   file hash; cross-correlate episodes within a season —

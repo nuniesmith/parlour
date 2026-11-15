@@ -205,15 +205,24 @@ pub fn pick_subtitle(
 }
 
 // ---------------------------------------------------------------------
-// Segment precedence (SEG1, D15)
+// Segment precedence (SEG1, D15; floor and heuristic order D17/D18)
+
+/// The lowest confidence an *automatic* segment row may have and
+/// still be handed to a player (D17). Heuristic rows are stored at
+/// 0.5, so they never pass it. Manual rows are exempt (D18): an
+/// admin's edit always wins, whatever its stored confidence.
+pub const PLAYBACK_CONFIDENCE_FLOOR: f32 = 0.6;
 
 /// Reduce an item's stored segment rows to what the player gets:
 /// **at most one segment per kind**, ordered by start time.
 ///
-/// - A manual row always wins over every automatic source (D15).
+/// - A manual row always wins over every automatic source (D15),
+///   whatever its stored confidence (D18).
+/// - Automatic rows below [`PLAYBACK_CONFIDENCE_FLOOR`] are never
+///   served (D17) — a guess is no segment.
 /// - Otherwise the automatic row with the highest confidence wins;
-///   on a tie, the earlier detector in D15's order (chapters before
-///   fingerprint).
+///   on a tie, the earlier detector in D17's order (chapters, then
+///   fingerprint, then heuristic).
 /// - Rows that cannot be a span (`end_ms <= start_ms`, negative
 ///   start) are ignored rather than handed to a player.
 pub fn effective_segments(rows: &[MediaSegment]) -> Vec<MediaSegment> {
@@ -223,7 +232,13 @@ pub fn effective_segments(rows: &[MediaSegment]) -> Vec<MediaSegment> {
             parlour_core::SegmentSource::Manual => 0,
             parlour_core::SegmentSource::Chapters => 1,
             parlour_core::SegmentSource::Fingerprint => 2,
+            parlour_core::SegmentSource::Heuristic => 3,
         }
+    }
+    fn servable(seg: &MediaSegment) -> bool {
+        seg.start_ms >= 0
+            && seg.end_ms > seg.start_ms
+            && (seg.source.is_manual() || seg.confidence >= PLAYBACK_CONFIDENCE_FLOOR)
     }
     fn better(a: &MediaSegment, b: &MediaSegment) -> bool {
         match (a.source.is_manual(), b.source.is_manual()) {
@@ -238,10 +253,7 @@ pub fn effective_segments(rows: &[MediaSegment]) -> Vec<MediaSegment> {
     }
 
     let mut best: Vec<MediaSegment> = Vec::new();
-    for row in rows
-        .iter()
-        .filter(|r| r.start_ms >= 0 && r.end_ms > r.start_ms)
-    {
+    for row in rows.iter().filter(|r| servable(r)) {
         match best.iter_mut().find(|b| b.kind == row.kind) {
             Some(current) if better(row, current) => *current = *row,
             Some(_) => {}
@@ -432,6 +444,64 @@ mod tests {
         );
         assert_eq!(out[0].source, Chapters, "invalid manual row is ignored");
         assert!(effective_segments(&[]).is_empty());
+    }
+
+    #[test]
+    fn automatic_rows_below_the_floor_never_reach_the_player() {
+        use parlour_core::SegmentSource::*;
+        assert_eq!(PLAYBACK_CONFIDENCE_FLOOR, 0.6);
+        // A heuristic guess (stored at 0.5) is no segment at all.
+        let rows = vec![
+            seg(SegmentKind::Intro, Heuristic, 11_000, 31_000, 0.5),
+            seg(SegmentKind::Credits, Heuristic, 51_000, 70_000, 0.5),
+        ];
+        assert!(effective_segments(&rows).is_empty());
+        // The floor holds for every automatic source, and is inclusive.
+        let rows = vec![
+            seg(SegmentKind::Intro, Fingerprint, 0, 30_000, 0.59),
+            seg(SegmentKind::Credits, Chapters, 60_000, 90_000, 0.6),
+        ];
+        assert_eq!(effective_segments(&rows), vec![rows[1]]);
+        // A below-floor row never displaces a servable one, even
+        // when it would otherwise win on confidence or order.
+        let rows = vec![
+            seg(SegmentKind::Intro, Chapters, 1_000, 30_000, 0.4),
+            seg(SegmentKind::Intro, Fingerprint, 2_000, 31_000, 0.7),
+        ];
+        assert_eq!(effective_segments(&rows), vec![rows[1]]);
+    }
+
+    #[test]
+    fn manual_rows_are_exempt_from_the_floor() {
+        use parlour_core::SegmentSource::*;
+        let rows = vec![
+            seg(SegmentKind::Intro, Heuristic, 11_000, 31_000, 0.5),
+            seg(SegmentKind::Intro, Manual, 12_000, 30_000, 0.1),
+        ];
+        assert_eq!(effective_segments(&rows), vec![rows[1]]);
+    }
+
+    #[test]
+    fn heuristic_is_last_in_the_detector_order() {
+        use parlour_core::SegmentSource::*;
+        // Only reachable if the floor ever drops below a heuristic
+        // row's confidence; the order is D17's either way.
+        let tie = vec![
+            seg(SegmentKind::Intro, Heuristic, 0, 30_000, 0.8),
+            seg(SegmentKind::Intro, Fingerprint, 5_000, 35_000, 0.8),
+        ];
+        assert_eq!(effective_segments(&tie), vec![tie[1]]);
+        let tie = vec![
+            seg(SegmentKind::Credits, Heuristic, 60_000, 90_000, 0.9),
+            seg(SegmentKind::Credits, Chapters, 61_000, 90_000, 0.9),
+        ];
+        assert_eq!(effective_segments(&tie), vec![tie[1]]);
+        // Higher confidence still beats detector order.
+        let rows = vec![
+            seg(SegmentKind::Intro, Chapters, 0, 30_000, 0.7),
+            seg(SegmentKind::Intro, Heuristic, 1_000, 29_000, 0.9),
+        ];
+        assert_eq!(effective_segments(&rows), vec![rows[1]]);
     }
 
     #[test]

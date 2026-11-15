@@ -10,6 +10,9 @@
 //! - `scan` — the scanner itself: turns a walk into catalog rows,
 //!   idempotently, as a background job (C6), and marks vanished
 //!   files unavailable instead of deleting anything (C8).
+//! - `segments` — the cheap intro/credits pass over new or changed
+//!   episodes: chapter names, then black-frame + silence at the
+//!   head and tail (SEG2, D17/D18).
 //!
 //! Matching files to TMDB/TVDB metadata is `metadata_sync`
 //! (Milestone 1.4, providers in `parlour-metadata`); artwork
@@ -22,6 +25,7 @@ pub mod metadata_sync;
 pub mod parse;
 pub mod probe;
 pub mod scan;
+pub mod segments;
 pub mod walk;
 
 pub use artwork::{download_item_artwork, download_library_artwork, ArtworkReport};
@@ -30,6 +34,7 @@ pub use metadata_sync::{apply_manual, match_item, match_library, MatchError, Mat
 pub use parse::{parse_file_name, ParsedName};
 pub use probe::{probe_file, ProbeResult};
 pub use scan::{scan_library, ScanReport};
+pub use segments::{detect_library, needs_detection, DetectError, DetectReport};
 pub use walk::{walk_library, DiscoveredVideo, SidecarSubtitle, WalkResult};
 
 use parlour_core::LibraryKind;
