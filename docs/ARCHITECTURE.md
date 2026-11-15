@@ -121,6 +121,14 @@ The owner uses subtitles on most playback.
   `media_items` (deterministic content ID, so rescans are idempotent)
   + `media_files` (one item : many files) +
   `media_streams` (ffprobe output, incl. subtitle streams).
+- Segments (Phase 9, D15): `media_segments` holds intro / credits /
+  recap spans per item — one row per (item, kind, source), sources
+  `chapters`, `fingerprint`, `manual`, each with a 0–1 confidence.
+  Detectors upsert only their own source's row; the read path
+  (`parlour_playback::effective_segments`) hands the player at most
+  one segment per kind: manual always wins, otherwise the highest
+  confidence, ties going to the earlier detector (chapters before
+  fingerprint). `playback-info` returns the result as `segments`.
 - Scanner: `notify` watcher for local disks + *arr webhooks/history
   polling for targeted rescans + a periodic full scan. Skip unchanged
   files by (path, size, mtime) fingerprint before probing.

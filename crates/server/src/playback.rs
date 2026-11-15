@@ -1,6 +1,7 @@
 //! Playback surface (Milestone 1.6).
 //!
-//! - `GET /api/v1/items/{id}/playback-info` — the plan (P1)
+//! - `GET /api/v1/items/{id}/playback-info` — the plan (P1), plus
+//!   the item's intro/credits/recap segments (SEG1)
 //! - `GET /api/v1/stream/{file_id}` — Range streaming (P2)
 //! - `GET /api/v1/stream/{file_id}/hls/{asset}` — remux (P3)
 //! - `POST /api/v1/playback/{start,progress,stopped}` — reporting
@@ -38,8 +39,8 @@ use sqlx::FromRow;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use uuid::Uuid;
 
-use parlour_core::{ClientKind, NetworkKind};
-use parlour_playback::{decide, pick_subtitle, FileFacts, SubtitleChoice};
+use parlour_core::{ClientKind, MediaSegment, NetworkKind, SegmentKind, SegmentSource};
+use parlour_playback::{decide, effective_segments, pick_subtitle, FileFacts, SubtitleChoice};
 
 use crate::auth::{AdminUser, AuthUser, ClientIp};
 
@@ -452,6 +453,53 @@ struct AudioDto {
     is_default: bool,
 }
 
+/// One segment as the player sees it (SEG1): already resolved to
+/// at most one per kind, manual winning over auto.
+#[derive(Serialize)]
+struct SegmentDto {
+    kind: &'static str,
+    start_ms: i64,
+    end_ms: i64,
+    source: &'static str,
+    confidence: f32,
+}
+
+/// The item's effective segments, start-ordered. Unknown kind or
+/// source strings (a newer schema than this binary) are skipped
+/// rather than failing playback.
+async fn load_segments(app: &AppState, item_id: Uuid) -> Result<Vec<SegmentDto>, AppError> {
+    let rows: Vec<(String, i64, i64, String, f32)> = sqlx::query_as(
+        "SELECT kind, start_ms, end_ms, source, confidence
+         FROM media_segments WHERE item_id = $1",
+    )
+    .bind(item_id)
+    .fetch_all(&app.pool)
+    .await
+    .map_err(AppError::from)?;
+    let stored: Vec<MediaSegment> = rows
+        .into_iter()
+        .filter_map(|(kind, start_ms, end_ms, source, confidence)| {
+            Some(MediaSegment {
+                kind: SegmentKind::parse(&kind)?,
+                start_ms,
+                end_ms,
+                source: SegmentSource::parse(&source)?,
+                confidence,
+            })
+        })
+        .collect();
+    Ok(effective_segments(&stored)
+        .into_iter()
+        .map(|s| SegmentDto {
+            kind: s.kind.as_str(),
+            start_ms: s.start_ms,
+            end_ms: s.end_ms,
+            source: s.source.as_str(),
+            confidence: s.confidence,
+        })
+        .collect())
+}
+
 #[derive(Serialize)]
 struct PlaybackInfo {
     item_id: Uuid,
@@ -465,6 +513,7 @@ struct PlaybackInfo {
     subtitles: Vec<SubtitleDto>,
     default_subtitle_id: Option<Uuid>,
     audio_streams: Vec<AudioDto>,
+    segments: Vec<SegmentDto>,
     warnings: Vec<String>,
 }
 
@@ -711,6 +760,7 @@ async fn playback_info(
         Some((pos, played)) => (if played { 0 } else { pos }, played),
         None => (0, false),
     };
+    let segments = load_segments(&app, item_id).await?;
 
     Ok(Json(PlaybackInfo {
         item_id,
@@ -724,6 +774,7 @@ async fn playback_info(
         subtitles,
         default_subtitle_id,
         audio_streams: audio,
+        segments,
         warnings,
     }))
 }
