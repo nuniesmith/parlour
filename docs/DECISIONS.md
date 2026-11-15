@@ -238,3 +238,25 @@ any of them with a word.
   player — D15's "no segment, never a guess" still holds
   for playback. Heuristic rows exist for the SEG4 editor
   and as starting points SEG3 can confirm or replace.
+
+## 2026-11-15 — Segment spans and scanning (SEG2)
+
+Put to the assistant by the SEG2 run as three suggestions,
+accepted the same day under the owner's standing
+instruction to keep the chain moving; recorded here so
+SEG2's tests can assert against them.
+
+- **D18 How SEG2 builds spans and scans:** an intro is
+  the gap between two consecutive breaks (black-frame or
+  silence runs), where the file's start counts as a
+  break: the first break starts within 120 s (D17's head
+  bound), the gap is 15–120 s long, and the first match
+  wins. Credits run from a break to the next break or
+  the end of the file, end within the last 120 s, and
+  are at least 15 s long. Detection scans only the first
+  300 s and the last 600 s of a file. Black-frame runs
+  count from 0.5 s at ffmpeg's built-in pixel
+  thresholds; silence is anything below −50 dB lasting
+  at least 0.5 s. D17's playback floor (0.6) applies to
+  automatic sources only — a manual row always wins,
+  per D15, whatever its stored confidence.
