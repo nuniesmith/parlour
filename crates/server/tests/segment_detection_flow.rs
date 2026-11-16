@@ -6,7 +6,10 @@
 //! serves only rows at or above the 0.6 floor, a manual row
 //! whatever its confidence; an unchanged rescan queues nothing; a
 //! changed file is looked at again and loses its stale rows, while
-//! a manual row survives.
+//! a manual row survives. The same job's fingerprint pass (SEG3)
+//! matches the season but finds nothing in these steady tones; its
+//! counts, cache reuse and clean-up are checked too
+//! (`fingerprint_flow` covers what it finds).
 //!
 //! Ignored by default; needs PARLOUR_TEST_DATABASE_URL (a fresh
 //! database of its own) and ffmpeg/ffprobe on PATH.
@@ -338,6 +341,9 @@ async fn segment_detection_flow() {
     let job = wait_for_job(&app, jobs[0]["id"].as_str().unwrap()).await;
     assert_eq!(job["progress_total"], 4, "{job}");
     assert_eq!(job["errors"], json!([]), "{job}");
+    // The same job's fingerprint pass (SEG3) matched the season, but
+    // a steady tone fingerprints as one repeated value, which D20's
+    // silence guard never lets match: no fingerprint rows.
     assert_eq!(
         job["result"],
         json!({
@@ -348,7 +354,15 @@ async fn segment_detection_flow() {
             "heuristic_credits": 2,
             "nothing_found": 1,
             "failed": 0,
-            "changed_during_detection": 0
+            "changed_during_detection": 0,
+            "seasons_matched": 1,
+            "seasons_skipped": 0,
+            "fingerprinted": 4,
+            "fingerprints_reused": 0,
+            "fingerprint_failed": 0,
+            "fingerprint_intros": 0,
+            "fingerprint_credits": 0,
+            "fingerprints_removed": 0
         }),
         "{job}"
     );
@@ -459,6 +473,12 @@ async fn segment_detection_flow() {
     let job = wait_for_job(&app, jobs[0]["id"].as_str().unwrap()).await;
     assert_eq!(job["result"]["episodes"], 2, "only what changed: {job}");
     assert_eq!(job["result"]["nothing_found"], 2, "{job}");
+    // The season was re-matched as a whole: the two changed files
+    // fingerprinted afresh, the other two from the cache, and the old
+    // files' fingerprints — referenced by nothing now — deleted.
+    assert_eq!(job["result"]["fingerprinted"], 2, "{job}");
+    assert_eq!(job["result"]["fingerprints_reused"], 2, "{job}");
+    assert_eq!(job["result"]["fingerprints_removed"], 2, "{job}");
 
     // The detector removed its own stale rows...
     assert!(rows(&pool, e1).await.is_empty());

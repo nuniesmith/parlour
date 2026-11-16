@@ -501,9 +501,11 @@ pub fn spawn_background(
         });
     }
 
-    // SEG2: segment detection decodes up to 15 minutes of each new
-    // episode, so it has a worker of its own — a long first pass over
-    // a big library must never hold up scans, metadata or clean-up.
+    // SEG2/SEG3: segment detection decodes up to 15 minutes of each
+    // new episode, fingerprints up to 20 minutes of its audio and
+    // re-matches its whole season, so it has a worker of its own — a
+    // long first pass over a big library must never hold up scans,
+    // metadata or clean-up.
     {
         let pool = pool.clone();
         tokio::spawn(async move {
@@ -638,10 +640,12 @@ async fn queue_segment_detection(pool: &parlour_db::PgPool, library_id: Uuid, sc
     }
 }
 
-/// SEG2: run one claimed `detect_segments` job. Per-file trouble is
-/// listed on the job and does not fail it; only a database error or
-/// ffmpeg/ffprobe being impossible to start does (the files it had
-/// not finished stay queued for the next scan's job).
+/// SEG2/SEG3: run one claimed `detect_segments` job — the cheap pass
+/// over new or changed episodes, then the fingerprint re-match of
+/// their seasons. Per-file trouble is listed on the job and does not
+/// fail it; only a database error or ffmpeg/ffprobe being impossible
+/// to start does (the seasons it had not finished stay queued for the
+/// next scan's job).
 pub async fn run_detect_job_claimed(pool: &parlour_db::PgPool, job: parlour_jobs::Job) {
     let Some(library_id) = job.library_id else {
         let _ = parlour_jobs::fail(pool, job.id, "segment detection without a library").await;
@@ -650,7 +654,9 @@ pub async fn run_detect_job_claimed(pool: &parlour_db::PgPool, job: parlour_jobs
     match parlour_catalog::detect_library(pool, library_id, Some(job.id)).await {
         Ok(report) => {
             tracing::info!(job_id = %job.id, %library_id, episodes = report.episodes,
-                failed = report.failed, "segment detection finished");
+                failed = report.failed, seasons = report.seasons_matched,
+                fingerprint_failed = report.fingerprint_failed,
+                "segment detection finished");
             let summary = serde_json::to_value(&report).unwrap_or(serde_json::Value::Null);
             let _ = parlour_jobs::set_result(pool, job.id, summary).await;
             let _ = parlour_jobs::complete(pool, job.id).await;
