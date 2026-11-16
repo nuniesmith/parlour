@@ -277,3 +277,54 @@ here so SEG2's tests can assert against them.
   next-episode autoplay there. When several chapters
   name the same kind, the earliest wins — so "Credits"
   beats a later "Post-Credits Scene".
+
+## 2026-11-15 — Fingerprint matching and cache (SEG3)
+
+Put to the owner by the SEG3 run as a proposed decision
+after measuring on synthetic files, and approved by the
+owner the same day as proposed; recorded here so SEG3's
+tests can assert against it. Measurements behind it:
+with the rules below, intros came out at 44.8–46.3 s
+(true 45 s) and credits at 39.9–40.9 s (true 40 s);
+unrelated audio never matched for more than 1.7 s;
+30 s of silence produced a 28.8 s false match, which
+is why the silence guard exists; and agreement across
+the whole season, not a single pair, is what separates
+the intro from a shared background melody.
+
+- **D20 Fingerprint confidence, matching, windows and
+  cache:** confidence is match quality × season
+  agreement. Quality is the share of the segment's
+  points that match within 6 bits. Agreement is
+  1 − 0.5ⁿ, where n is how many other episodes in the
+  season share the segment. Results below 0.6 are not
+  stored at all. In practice a segment needs at least
+  3 episodes sharing it, so 2-episode seasons never
+  get fingerprint segments. Segment length is a gate
+  (below), not a factor in confidence — this departs
+  from the TODO's "match length/quality" wording and
+  is confirmed. Matching: at most 6 of 32 bits may
+  differ per point; gaps up to 1 s are allowed; at
+  least 80% of points must match; silence guard — at
+  least half the points must be distinct values. Every
+  qualifying shared stretch between two episodes
+  counts as a candidate, not only the longest; each
+  episode keeps the one most of the season agrees on,
+  with edges taken as the median. Search windows: the
+  first 25% of the episode (capped at 10 min) and the
+  last 600 s. Intro is 15–120 s (D18's limits);
+  credits are at least 15 s and end within the last
+  120 s (D17's limit). Fingerprinting runs inside the
+  existing `detect_segments` job, after SEG2's pass. A
+  season with any new or changed episode is
+  re-matched as a whole, replacing only its
+  fingerprint segments; manual, chapter and heuristic
+  segments are never touched. Fingerprint segments
+  are stored only where the chapters left the intro
+  or credits open, as SEG2 does. Seasons with fewer
+  than 3 usable episodes are skipped. Cache: the key
+  is the SHA-256 of the file size plus its first and
+  last 4 MiB. Fingerprints are stored in a new
+  Postgres table (about 40 KB per episode, roughly
+  400 MB per 10k episodes); fingerprints no file
+  references any more are deleted.
