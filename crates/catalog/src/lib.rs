@@ -13,6 +13,9 @@
 //! - `segments` — the cheap intro/credits pass over new or changed
 //!   episodes: chapter names, then black-frame + silence at the
 //!   head and tail (SEG2, D17–D19).
+//! - `fingerprint` — the audio-fingerprint pass in the same job:
+//!   chromaprint over each episode's head and tail, cached by file
+//!   hash, matched across the whole season (SEG3, D20).
 //!
 //! Matching files to TMDB/TVDB metadata is `metadata_sync`
 //! (Milestone 1.4, providers in `parlour-metadata`); artwork
@@ -21,6 +24,7 @@
 
 pub mod artwork;
 pub mod emby;
+pub mod fingerprint;
 pub mod metadata_sync;
 pub mod parse;
 pub mod probe;

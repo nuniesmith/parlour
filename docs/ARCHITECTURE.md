@@ -152,6 +152,39 @@ The owner uses subtitles on most playback.
   rows are never touched. A tool that fails on one file is listed on
   the job and not retried until the file changes; ffmpeg/ffprobe
   that cannot start at all fails the job and leaves the files queued.
+- Segment detection, the fingerprint pass (SEG3, D20;
+  `parlour_catalog::fingerprint`): the same job then re-matches, as
+  a whole, every season with a new or changed episode — the job
+  works season by season, and a season's files are marked as looked
+  at only together with its fingerprint rows, so a job that stops
+  part-way leaves them queued. Each usable episode (an audio stream
+  and a known length) is fingerprinted with ffmpeg's chromaprint
+  muxer (`-ac 1 -ar 11025 -f chromaprint -fp_format raw`: one 32-bit
+  point per 0.124 s) over two windows — the head, the first 25 %
+  capped at 10 minutes, for the intro; the tail, the last 600 s, for
+  the credits. Prints are cached in `audio_fingerprints`, keyed by
+  the SHA-256 of the file's size plus its first and last 4 MiB;
+  `media_files.file_hash` links a file to its print and is cleared
+  by the scanner on re-probe; prints no file row references are
+  deleted at the end of each job. Matching tries every alignment of
+  every pair of episodes: points match within 6 of 32 bits, a shared
+  stretch jumps gaps up to 1 s, needs 80 % of its points matching
+  and — the silence guard — half of them distinct values (silence
+  and steady tones print one repeated value). The same stretch at
+  neighbouring alignments counts once. Intro candidates are 15–120 s
+  long; credits candidates at least 15 s, ending within the last
+  120 s. Each episode keeps the stretch of its own audio the most
+  other episodes share (candidates agree when they overlap by half
+  the shorter one; ties: the earliest intro, the credits nearest the
+  end, after D18/D19), with median edges, at confidence = quality ×
+  (1 − 0.5ⁿ) for n sharing episodes; below 0.6 nothing is stored,
+  and seasons with fewer than 3 usable episodes are not matched — a
+  re-match then clears the season's fingerprint rows. Rows are
+  written as source `fingerprint` only for kinds the chapters left
+  open; manual, chapter and heuristic rows are never touched.
+  Measured on synthetic episodes, edges land within 1.4 s of the
+  truth, nearly always early; release-build matching costs ~26 ms
+  per pair of 600 s windows (a 24-episode season: ~7 s per window).
 - Scanner: `notify` watcher for local disks + *arr webhooks/history
   polling for targeted rescans + a periodic full scan. Skip unchanged
   files by (path, size, mtime) fingerprint before probing.

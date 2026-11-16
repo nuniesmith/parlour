@@ -209,6 +209,26 @@ async fn segments_flow() {
         parlour_catalog::EmbySettings::default(),
     );
     wait_for_job(&app, job["id"].as_str().unwrap()).await;
+    // The scan queued segment detection for the two episodes. Let it
+    // finish before rows are written by hand below: a detection run
+    // replaces its own sources' rows (chapters, heuristic, and — for
+    // this two-episode season, too small to match (D20) — every
+    // fingerprint row), so it must not overlap them.
+    let (_, jobs) = app
+        .req(
+            reqwest::Method::GET,
+            &format!("/api/v1/admin/jobs?library_id={library_id}&limit=100"),
+            None,
+        )
+        .await;
+    let detection = jobs
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|j| j["kind"] == "detect_segments")
+        .unwrap_or_else(|| panic!("the scan queues segment detection: {jobs}"))
+        .clone();
+    wait_for_job(&app, detection["id"].as_str().unwrap()).await;
 
     let (_, items) = app
         .req(

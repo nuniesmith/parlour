@@ -30,12 +30,19 @@
 //! not find this time it deletes, so a replaced file never keeps the
 //! old file's spans. Manual and fingerprint rows are never touched.
 //!
+//! Then, per season with a new or changed episode, the fingerprint
+//! pass (SEG3, D20; `fingerprint`) re-matches the whole season and
+//! replaces its `fingerprint` rows. The job works season by season:
+//! a season's files are marked as looked at only together with its
+//! fingerprint rows, so a job that stops part-way leaves them queued
+//! for the next scan.
+//!
 //! The rules are pure functions over parsed tool output and are
 //! unit-tested below; only `probe_chapters` / `scan_window` run a
 //! subprocess, and only `detect_library` / `needs_detection` touch
 //! the database.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::process::Stdio;
 
 use chrono::{DateTime, Utc};
@@ -43,6 +50,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use parlour_core::{SegmentKind, SegmentSource};
+
+use crate::fingerprint;
 
 // ------------------------------------------------------------ the rules
 
@@ -379,7 +388,7 @@ pub fn credits_span(breaks: &[Span], duration_ms: i64) -> Option<Span> {
 // ------------------------------------------------------------- the tools
 
 /// Why a tool run gave no answer.
-enum ToolError {
+pub(crate) enum ToolError {
     /// The tool could not be started at all (missing binary, …). A
     /// server problem, not a file problem: the job stops, and every
     /// file it had not finished stays queued for the next run.
@@ -390,19 +399,19 @@ enum ToolError {
     Failed(String),
 }
 
-fn tool(env: &str, default: &str) -> String {
+pub(crate) fn tool(env: &str, default: &str) -> String {
     std::env::var(env).unwrap_or_else(|_| default.to_string())
 }
 
 /// The last few non-empty lines of a tool's stderr: the error, not
 /// ffmpeg's whole stream listing.
-fn stderr_tail(stderr: &[u8]) -> String {
+pub(crate) fn stderr_tail(stderr: &[u8]) -> String {
     let text = String::from_utf8_lossy(stderr);
     let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
     lines[lines.len().saturating_sub(3)..].join(" / ")
 }
 
-async fn run(bin: &str, args: &[String]) -> Result<std::process::Output, ToolError> {
+pub(crate) async fn run(bin: &str, args: &[String]) -> Result<std::process::Output, ToolError> {
     tokio::process::Command::new(bin)
         .args(args)
         .stdin(Stdio::null())
@@ -436,7 +445,7 @@ async fn probe_chapters(path: &str) -> Result<Vec<Chapter>, ToolError> {
     parse_chapters_json(&String::from_utf8_lossy(&output.stdout)).map_err(ToolError::Failed)
 }
 
-fn seconds_arg(ms: i64) -> String {
+pub(crate) fn seconds_arg(ms: i64) -> String {
     format!("{}.{:03}", ms / 1000, ms % 1000)
 }
 
@@ -495,16 +504,37 @@ async fn scan_window(path: &str, window: Span, read_to_end: bool) -> Result<Runs
 pub struct DetectReport {
     /// Episodes whose playback file was new or changed.
     pub episodes: i32,
+    /// What the cheap pass stored for those episodes (SEG2).
     pub chapter_intros: i32,
     pub chapter_credits: i32,
     pub heuristic_intros: i32,
     pub heuristic_credits: i32,
+    /// New or changed episodes that ended the job with no segment
+    /// row from either pass.
     pub nothing_found: i32,
-    /// Episodes where a tool failed on the file (errors list why).
+    /// Episodes where a tool failed on the file in the cheap pass
+    /// (errors list why).
     pub failed: i32,
     /// Episodes whose file changed while it was being examined:
     /// nothing was stored; the scan that saw the change queues it.
     pub changed_during_detection: i32,
+    /// Seasons re-matched by audio fingerprint because an episode in
+    /// them was new or changed (SEG3)...
+    pub seasons_matched: i32,
+    /// ...and those left unmatched: fewer than 3 usable episodes
+    /// (D20), so their fingerprint rows were cleared.
+    pub seasons_skipped: i32,
+    /// Episodes whose audio ffmpeg fingerprinted this run...
+    pub fingerprinted: i32,
+    /// ...and those whose cached fingerprint was used instead.
+    pub fingerprints_reused: i32,
+    /// Episodes the fingerprinting failed on (errors list why).
+    pub fingerprint_failed: i32,
+    /// Fingerprint segments stored, over every re-matched season.
+    pub fingerprint_intros: i32,
+    pub fingerprint_credits: i32,
+    /// Cached fingerprints no file references any more, deleted.
+    pub fingerprints_removed: i32,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -513,12 +543,16 @@ pub enum DetectError {
     Db(#[from] sqlx::Error),
     #[error("{0}")]
     ToolUnavailable(String),
+    #[error("fingerprint matching failed: {0}")]
+    Matching(String),
 }
 
 #[derive(Debug, sqlx::FromRow)]
 struct PendingFile {
     id: Uuid,
     item_id: Uuid,
+    /// The episode's season item.
+    season_id: Option<Uuid>,
     path: String,
     relative_path: String,
     duration_ms: Option<i64>,
@@ -613,16 +647,21 @@ fn confidence_of(source: SegmentSource) -> f32 {
     }
 }
 
-/// Write one file's result: upsert what was found, delete this
-/// detector's rows for what was not, and mark the file as looked at
-/// — all or nothing, and only if the file is still the one that was
-/// examined (same size and mtime). Returns false when it had changed.
+/// Write one file's cheap-pass result: upsert what was found and
+/// delete this pass's rows for what was not — all or nothing, and
+/// only if the file is still the one that was examined (same size and
+/// mtime). Returns false when it had changed. The file is marked as
+/// looked at later, together with its season (`finish_season`).
 async fn store(
     pool: &parlour_db::PgPool,
     file: &PendingFile,
     found: &Detection,
 ) -> Result<bool, sqlx::Error> {
     let mut tx = pool.begin().await?;
+    if !unchanged(&mut tx, file.id, file.size_bytes, file.mtime).await? {
+        tx.rollback().await?;
+        return Ok(false);
+    }
     for (kind, slot) in [
         (SegmentKind::Intro, found.intro),
         (SegmentKind::Credits, found.credits),
@@ -661,42 +700,135 @@ async fn store(
             }
         }
     }
-    let marked = sqlx::query(
-        "UPDATE media_files SET segments_detected_at = now()
-         WHERE id = $1 AND size_bytes = $2 AND mtime = $3",
-    )
-    .bind(file.id)
-    .bind(file.size_bytes)
-    .bind(file.mtime)
-    .execute(&mut *tx)
-    .await?
-    .rows_affected();
-    if marked == 0 {
-        tx.rollback().await?;
-        return Ok(false);
-    }
     tx.commit().await?;
     Ok(true)
 }
 
+/// Is the file row still the one that was read (same size and mtime)?
+async fn unchanged(
+    conn: &mut sqlx::PgConnection,
+    file_id: Uuid,
+    size_bytes: i64,
+    mtime: DateTime<Utc>,
+) -> Result<bool, sqlx::Error> {
+    let (same,): (bool,) = sqlx::query_as(
+        "SELECT EXISTS (SELECT 1 FROM media_files
+                        WHERE id = $1 AND size_bytes = $2 AND mtime = $3)",
+    )
+    .bind(file_id)
+    .bind(size_bytes)
+    .bind(mtime)
+    .fetch_one(conn)
+    .await?;
+    Ok(same)
+}
+
+/// One new or changed file's cheap-pass result, waiting for its
+/// season to finish.
+struct Examined<'a> {
+    file: &'a PendingFile,
+    found: Detection,
+    /// No tool failed on the file.
+    clean: bool,
+    /// `store` wrote the result: the file had not changed.
+    stored: bool,
+}
+
+/// Close a season: write the fingerprint match's rows (SEG3) and mark
+/// the season's new or changed files as looked at, in one
+/// transaction; then count what those files ended up with. An episode
+/// whose file changed since the season was read keeps its rows, and a
+/// changed file is not marked: the scan that saw the change queues
+/// the season again.
+async fn finish_season(
+    pool: &parlour_db::PgPool,
+    examined: &[Examined<'_>],
+    outcome: &[fingerprint::EpisodeOutcome],
+    report: &mut DetectReport,
+) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let mut printed: HashSet<Uuid> = HashSet::new();
+    for episode in outcome {
+        if !unchanged(&mut tx, episode.file_id, episode.size_bytes, episode.mtime).await? {
+            continue;
+        }
+        fingerprint::write_rows(&mut tx, episode).await?;
+        report.fingerprint_intros += episode.intro.is_some() as i32;
+        report.fingerprint_credits += episode.credits.is_some() as i32;
+        if episode.intro.is_some() || episode.credits.is_some() {
+            printed.insert(episode.item_id);
+        }
+    }
+    let mut marked = Vec::with_capacity(examined.len());
+    for e in examined {
+        let done = e.stored
+            && sqlx::query(
+                "UPDATE media_files SET segments_detected_at = now()
+                 WHERE id = $1 AND size_bytes = $2 AND mtime = $3",
+            )
+            .bind(e.file.id)
+            .bind(e.file.size_bytes)
+            .bind(e.file.mtime)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected()
+                == 1;
+        marked.push(done);
+    }
+    tx.commit().await?;
+
+    for (e, marked) in examined.iter().zip(marked) {
+        if !marked {
+            report.changed_during_detection += 1;
+            continue;
+        }
+        for (slot, from_chapters, from_heuristic) in [
+            (
+                e.found.intro,
+                &mut report.chapter_intros,
+                &mut report.heuristic_intros,
+            ),
+            (
+                e.found.credits,
+                &mut report.chapter_credits,
+                &mut report.heuristic_credits,
+            ),
+        ] {
+            match slot.map(|f| f.source) {
+                Some(SegmentSource::Chapters) => *from_chapters += 1,
+                Some(_) => *from_heuristic += 1,
+                None => {}
+            }
+        }
+        if e.found == Detection::default() && e.clean && !printed.contains(&e.file.item_id) {
+            report.nothing_found += 1;
+        }
+    }
+    Ok(())
+}
+
 /// Run detection over every episode in the library whose playback
-/// file has not been looked at since it last changed. `job_id`, when
-/// set, receives progress and per-file errors as it goes.
+/// file has not been looked at since it last changed: the cheap pass
+/// per file, then the fingerprint pass per season (SEG3), one season
+/// at a time. `job_id`, when set, receives progress and per-file
+/// errors as it goes. Ends by deleting cached fingerprints no file
+/// references any more (D20).
 pub async fn detect_library(
     pool: &parlour_db::PgPool,
     library_id: Uuid,
     job_id: Option<Uuid>,
 ) -> Result<DetectReport, DetectError> {
     let files: Vec<PendingFile> = sqlx::query_as(
-        "SELECT p.id, p.item_id, p.path, p.relative_path, p.duration_ms, p.size_bytes,
-                p.mtime,
+        "SELECT p.id, p.item_id, p.season_id, p.path, p.relative_path, p.duration_ms,
+                p.size_bytes, p.mtime,
                 EXISTS (SELECT 1 FROM media_streams s
                         WHERE s.file_id = p.id AND s.kind = 'video') AS has_video,
                 EXISTS (SELECT 1 FROM media_streams s
                         WHERE s.file_id = p.id AND s.kind = 'audio') AS has_audio
          FROM (
-             SELECT DISTINCT ON (f.item_id) f.id, f.item_id, f.path, f.relative_path,
-                    f.duration_ms, f.size_bytes, f.mtime, f.segments_detected_at
+             SELECT DISTINCT ON (f.item_id) f.id, f.item_id, i.parent_id AS season_id,
+                    f.path, f.relative_path, f.duration_ms, f.size_bytes, f.mtime,
+                    f.segments_detected_at
              FROM media_files f
              JOIN media_items i ON i.id = f.item_id
              WHERE f.library_id = $1 AND i.kind = 'episode' AND f.available
@@ -717,48 +849,51 @@ pub async fn detect_library(
         episodes: total,
         ..DetectReport::default()
     };
-    for (done, file) in files.iter().enumerate() {
-        let (found, errors) = detect_file(file)
-            .await
-            .map_err(DetectError::ToolUnavailable)?;
-        if !errors.is_empty() {
-            report.failed += 1;
-            if let Some(job) = job_id {
-                for message in &errors {
-                    let _ = parlour_jobs::add_error(pool, job, Some(&file.relative_path), message)
-                        .await;
-                }
-            }
-        }
-        if store(pool, file, &found).await? {
-            for (slot, from_chapters, from_heuristic) in [
-                (
-                    found.intro,
-                    &mut report.chapter_intros,
-                    &mut report.heuristic_intros,
-                ),
-                (
-                    found.credits,
-                    &mut report.chapter_credits,
-                    &mut report.heuristic_credits,
-                ),
-            ] {
-                match slot.map(|f| f.source) {
-                    Some(SegmentSource::Chapters) => *from_chapters += 1,
-                    Some(_) => *from_heuristic += 1,
-                    None => {}
-                }
-            }
-            if found == Detection::default() && errors.is_empty() {
-                report.nothing_found += 1;
-            }
-        } else {
-            report.changed_during_detection += 1;
-        }
-        if let Some(job) = job_id {
-            let _ = parlour_jobs::set_progress(pool, job, done as i32 + 1, total).await;
+    // Group by season, in the order each season's first file sorts.
+    let mut seasons: Vec<(Option<Uuid>, Vec<&PendingFile>)> = Vec::new();
+    for file in &files {
+        match seasons.iter_mut().find(|(id, _)| *id == file.season_id) {
+            Some((_, list)) => list.push(file),
+            None => seasons.push((file.season_id, vec![file])),
         }
     }
+    let mut done = 0;
+    for (season_id, season_files) in seasons {
+        let mut examined = Vec::with_capacity(season_files.len());
+        for file in season_files {
+            let (found, errors) = detect_file(file)
+                .await
+                .map_err(DetectError::ToolUnavailable)?;
+            if !errors.is_empty() {
+                report.failed += 1;
+                if let Some(job) = job_id {
+                    for message in &errors {
+                        let _ =
+                            parlour_jobs::add_error(pool, job, Some(&file.relative_path), message)
+                                .await;
+                    }
+                }
+            }
+            let stored = store(pool, file, &found).await?;
+            examined.push(Examined {
+                file,
+                found,
+                clean: errors.is_empty(),
+                stored,
+            });
+            done += 1;
+            if let Some(job) = job_id {
+                let _ = parlour_jobs::set_progress(pool, job, done, total).await;
+            }
+        }
+        // The whole season, re-matched by fingerprint.
+        let outcome = match season_id {
+            Some(season) => fingerprint::match_season(pool, season, job_id, &mut report).await?,
+            None => Vec::new(),
+        };
+        finish_season(pool, &examined, &outcome, &mut report).await?;
+    }
+    report.fingerprints_removed = fingerprint::remove_unreferenced(pool).await? as i32;
     Ok(report)
 }
 

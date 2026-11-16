@@ -708,7 +708,7 @@ does NOT depend on Phase 2 transcoding.
   D17/D18, stored as source `heuristic` at 0.5; tie-breaks
   per D19. The 0.6 floor in `effective_segments` keeps
   every guess away from the player; manual rows are exempt.
-- [ ] SEG3 (L) **Audio-fingerprint detection**: fingerprint
+- [x] SEG3 (L) **Audio-fingerprint detection**: fingerprint
   each episode's audio (ffmpeg chromaprint) once, cache by
   file hash; cross-correlate episodes within a season —
   the long common segment inside the first ~25% is the
@@ -716,6 +716,18 @@ does NOT depend on Phase 2 transcoding.
   from match length/quality; below threshold → no segment,
   never a guess. This is the Jellyfin intro-skipper method;
   implement from the algorithm description, no borrowed code.
+  *Done 2026-11-15, per D20* (confidence = quality ×
+  agreement; length is a gate): `parlour_catalog::fingerprint`,
+  run by `detect_segments` after SEG2's pass, season by
+  season. Head (first 25 %, ≤ 10 min) and tail (last 600 s)
+  prints cached in `audio_fingerprints` by SHA-256 of size +
+  first/last 4 MiB; every pair of a season's episodes tried
+  at every alignment; each episode keeps what most of the
+  season shares, median edges; stored as source
+  `fingerprint` ≥ 0.6 only where chapters left the kind
+  open. Migration resets `segments_detected_at` once so
+  existing seasons get matched. Evidence is synthetic
+  only — no real episodes on oryx yet.
 - [ ] SEG4 (M) **Segment editor**: on the item admin view —
   list segments, add/edit times/delete, "preview from here"
   seek in the player; saves as source=manual.
