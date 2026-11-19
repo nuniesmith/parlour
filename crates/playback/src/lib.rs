@@ -205,7 +205,8 @@ pub fn pick_subtitle(
 }
 
 // ---------------------------------------------------------------------
-// Segment precedence (SEG1, D15; floor and heuristic order D17/D18)
+// Segment precedence (SEG1, D15; floor and heuristic order D17/D18;
+// the editor's "no segment here" marker D21)
 
 /// The lowest confidence an *automatic* segment row may have and
 /// still be handed to a player (D17). Heuristic rows are stored at
@@ -216,6 +217,11 @@ pub const PLAYBACK_CONFIDENCE_FLOOR: f32 = 0.6;
 /// Reduce an item's stored segment rows to what the player gets:
 /// **at most one segment per kind**, ordered by start time.
 ///
+/// - A kind in `marked_none` gets no segment at all: an admin
+///   deleted its detected segment in the editor (SEG4), which stores
+///   a manual "no segment of this kind here" marker (D21). Like any
+///   manual edit it beats every automatic source, including rows a
+///   later detection run writes.
 /// - A manual row always wins over every automatic source (D15),
 ///   whatever its stored confidence (D18).
 /// - Automatic rows below [`PLAYBACK_CONFIDENCE_FLOOR`] are never
@@ -225,7 +231,7 @@ pub const PLAYBACK_CONFIDENCE_FLOOR: f32 = 0.6;
 ///   fingerprint, then heuristic).
 /// - Rows that cannot be a span (`end_ms <= start_ms`, negative
 ///   start) are ignored rather than handed to a player.
-pub fn effective_segments(rows: &[MediaSegment]) -> Vec<MediaSegment> {
+pub fn effective_segments(rows: &[MediaSegment], marked_none: &[SegmentKind]) -> Vec<MediaSegment> {
     // Lower rank = preferred.
     fn source_rank(seg: &MediaSegment) -> u8 {
         match seg.source {
@@ -253,7 +259,10 @@ pub fn effective_segments(rows: &[MediaSegment]) -> Vec<MediaSegment> {
     }
 
     let mut best: Vec<MediaSegment> = Vec::new();
-    for row in rows.iter().filter(|r| servable(r)) {
+    for row in rows
+        .iter()
+        .filter(|r| servable(r) && !marked_none.contains(&r.kind))
+    {
         match best.iter_mut().find(|b| b.kind == row.kind) {
             Some(current) if better(row, current) => *current = *row,
             Some(_) => {}
@@ -402,14 +411,14 @@ mod tests {
             seg(SegmentKind::Intro, Manual, 61_000, 89_000, 1.0),
             seg(SegmentKind::Intro, Chapters, 0, 30_000, 1.0),
         ];
-        let out = effective_segments(&rows);
+        let out = effective_segments(&rows, &[]);
         assert_eq!(out, vec![rows[1]]);
         // Even a manual row with a lower stored confidence wins.
         let rows = vec![
             seg(SegmentKind::Credits, Chapters, 1_000_000, 1_100_000, 1.0),
             seg(SegmentKind::Credits, Manual, 1_010_000, 1_100_000, 0.5),
         ];
-        assert_eq!(effective_segments(&rows), vec![rows[1]]);
+        assert_eq!(effective_segments(&rows, &[]), vec![rows[1]]);
     }
 
     #[test]
@@ -419,12 +428,12 @@ mod tests {
             seg(SegmentKind::Intro, Chapters, 0, 30_000, 0.6),
             seg(SegmentKind::Intro, Fingerprint, 5_000, 35_000, 0.9),
         ];
-        assert_eq!(effective_segments(&rows), vec![rows[1]]);
+        assert_eq!(effective_segments(&rows, &[]), vec![rows[1]]);
         let tie = vec![
             seg(SegmentKind::Intro, Fingerprint, 5_000, 35_000, 0.9),
             seg(SegmentKind::Intro, Chapters, 0, 30_000, 0.9),
         ];
-        assert_eq!(effective_segments(&tie), vec![tie[1]]);
+        assert_eq!(effective_segments(&tie, &[]), vec![tie[1]]);
     }
 
     #[test]
@@ -436,14 +445,14 @@ mod tests {
             seg(SegmentKind::Recap, Chapters, 0, 45_000, 1.0),
             seg(SegmentKind::Recap, Manual, 50_000, 50_000, 1.0), // empty span
         ];
-        let out = effective_segments(&rows);
+        let out = effective_segments(&rows, &[]);
         let kinds: Vec<_> = out.iter().map(|s| s.kind).collect();
         assert_eq!(
             kinds,
             vec![SegmentKind::Recap, SegmentKind::Intro, SegmentKind::Credits]
         );
         assert_eq!(out[0].source, Chapters, "invalid manual row is ignored");
-        assert!(effective_segments(&[]).is_empty());
+        assert!(effective_segments(&[], &[]).is_empty());
     }
 
     #[test]
@@ -455,20 +464,20 @@ mod tests {
             seg(SegmentKind::Intro, Heuristic, 11_000, 31_000, 0.5),
             seg(SegmentKind::Credits, Heuristic, 51_000, 70_000, 0.5),
         ];
-        assert!(effective_segments(&rows).is_empty());
+        assert!(effective_segments(&rows, &[]).is_empty());
         // The floor holds for every automatic source, and is inclusive.
         let rows = vec![
             seg(SegmentKind::Intro, Fingerprint, 0, 30_000, 0.59),
             seg(SegmentKind::Credits, Chapters, 60_000, 90_000, 0.6),
         ];
-        assert_eq!(effective_segments(&rows), vec![rows[1]]);
+        assert_eq!(effective_segments(&rows, &[]), vec![rows[1]]);
         // A below-floor row never displaces a servable one, even
         // when it would otherwise win on confidence or order.
         let rows = vec![
             seg(SegmentKind::Intro, Chapters, 1_000, 30_000, 0.4),
             seg(SegmentKind::Intro, Fingerprint, 2_000, 31_000, 0.7),
         ];
-        assert_eq!(effective_segments(&rows), vec![rows[1]]);
+        assert_eq!(effective_segments(&rows, &[]), vec![rows[1]]);
     }
 
     #[test]
@@ -478,7 +487,7 @@ mod tests {
             seg(SegmentKind::Intro, Heuristic, 11_000, 31_000, 0.5),
             seg(SegmentKind::Intro, Manual, 12_000, 30_000, 0.1),
         ];
-        assert_eq!(effective_segments(&rows), vec![rows[1]]);
+        assert_eq!(effective_segments(&rows, &[]), vec![rows[1]]);
     }
 
     #[test]
@@ -490,18 +499,48 @@ mod tests {
             seg(SegmentKind::Intro, Heuristic, 0, 30_000, 0.8),
             seg(SegmentKind::Intro, Fingerprint, 5_000, 35_000, 0.8),
         ];
-        assert_eq!(effective_segments(&tie), vec![tie[1]]);
+        assert_eq!(effective_segments(&tie, &[]), vec![tie[1]]);
         let tie = vec![
             seg(SegmentKind::Credits, Heuristic, 60_000, 90_000, 0.9),
             seg(SegmentKind::Credits, Chapters, 61_000, 90_000, 0.9),
         ];
-        assert_eq!(effective_segments(&tie), vec![tie[1]]);
+        assert_eq!(effective_segments(&tie, &[]), vec![tie[1]]);
         // Higher confidence still beats detector order.
         let rows = vec![
             seg(SegmentKind::Intro, Chapters, 0, 30_000, 0.7),
             seg(SegmentKind::Intro, Heuristic, 1_000, 29_000, 0.9),
         ];
-        assert_eq!(effective_segments(&rows), vec![rows[1]]);
+        assert_eq!(effective_segments(&rows, &[]), vec![rows[1]]);
+    }
+
+    #[test]
+    fn a_none_marker_beats_every_detected_row_of_its_kind_only() {
+        use parlour_core::SegmentSource::*;
+        // D21: an admin deleted the detected intro. Whatever the
+        // detectors store for the intro — now or after a re-run, at
+        // any confidence — the player gets no intro; the other kinds
+        // are decided as before.
+        let rows = vec![
+            seg(SegmentKind::Intro, Chapters, 5_000, 20_000, 1.0),
+            seg(SegmentKind::Intro, Fingerprint, 6_000, 21_000, 0.93),
+            seg(SegmentKind::Intro, Heuristic, 4_000, 22_000, 0.5),
+            seg(SegmentKind::Credits, Fingerprint, 600_000, 640_000, 0.9),
+        ];
+        assert_eq!(
+            effective_segments(&rows, &[SegmentKind::Intro]),
+            vec![rows[3]]
+        );
+        // Without the marker the chapter intro is back: deleting the
+        // marker hands the kind straight back to detection.
+        assert_eq!(effective_segments(&rows, &[]), vec![rows[0], rows[3]]);
+        // A marker for a kind with nothing stored changes nothing else.
+        assert_eq!(
+            effective_segments(&rows, &[SegmentKind::Recap]),
+            vec![rows[0], rows[3]]
+        );
+        // Every kind marked: nothing at all.
+        let all = [SegmentKind::Recap, SegmentKind::Intro, SegmentKind::Credits];
+        assert!(effective_segments(&rows, &all).is_empty());
     }
 
     #[test]

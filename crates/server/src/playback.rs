@@ -39,8 +39,8 @@ use sqlx::FromRow;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use uuid::Uuid;
 
-use parlour_core::{ClientKind, MediaSegment, NetworkKind, SegmentKind, SegmentSource};
-use parlour_playback::{decide, effective_segments, pick_subtitle, FileFacts, SubtitleChoice};
+use parlour_core::{ClientKind, NetworkKind};
+use parlour_playback::{decide, pick_subtitle, FileFacts, SubtitleChoice};
 
 use crate::auth::{AdminUser, AuthUser, ClientIp};
 
@@ -454,8 +454,9 @@ struct AudioDto {
 }
 
 /// One segment as the player sees it (SEG1): already resolved to
-/// at most one per kind, manual winning over auto, and automatic
-/// rows below the confidence floor left out (D17).
+/// at most one per kind, manual winning over auto, automatic rows
+/// below the confidence floor left out (D17), and nothing for a kind
+/// an admin marked as having none (D21).
 #[derive(Serialize)]
 struct SegmentDto {
     kind: &'static str,
@@ -465,31 +466,13 @@ struct SegmentDto {
     confidence: f32,
 }
 
-/// The item's effective segments, start-ordered. Unknown kind or
+/// The item's effective segments, start-ordered — the same read path
+/// the SEG4 editor reports from (`crate::segments`). Unknown kind or
 /// source strings (a newer schema than this binary) are skipped
 /// rather than failing playback.
 async fn load_segments(app: &AppState, item_id: Uuid) -> Result<Vec<SegmentDto>, AppError> {
-    let rows: Vec<(String, i64, i64, String, f32)> = sqlx::query_as(
-        "SELECT kind, start_ms, end_ms, source, confidence
-         FROM media_segments WHERE item_id = $1",
-    )
-    .bind(item_id)
-    .fetch_all(&app.pool)
-    .await
-    .map_err(AppError::from)?;
-    let stored: Vec<MediaSegment> = rows
-        .into_iter()
-        .filter_map(|(kind, start_ms, end_ms, source, confidence)| {
-            Some(MediaSegment {
-                kind: SegmentKind::parse(&kind)?,
-                start_ms,
-                end_ms,
-                source: SegmentSource::parse(&source)?,
-                confidence,
-            })
-        })
-        .collect();
-    Ok(effective_segments(&stored)
+    Ok(crate::segments::effective_for(&app.pool, item_id)
+        .await?
         .into_iter()
         .map(|s| SegmentDto {
             kind: s.kind.as_str(),
@@ -548,9 +531,13 @@ async fn playback_info(
         return Err(AppError::NotFound("not found".into()));
     }
 
+    // The playback file: first available by relative path, then path —
+    // the file segment detection (SEG2/SEG3) and the editor (SEG4)
+    // take the item's segment times from.
     let file = sqlx::query_as::<_, FileRow>(
         "SELECT id, library_id, item_id, path, size_bytes, container, duration_ms
-         FROM media_files WHERE item_id = $1 AND available ORDER BY relative_path LIMIT 1",
+         FROM media_files WHERE item_id = $1 AND available
+         ORDER BY relative_path, path LIMIT 1",
     )
     .bind(item_id)
     .fetch_optional(&app.pool)

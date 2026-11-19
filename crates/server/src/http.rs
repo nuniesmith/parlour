@@ -79,6 +79,7 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::metadata::routes())
         .merge(crate::discover::routes())
         .merge(crate::playback::routes())
+        .merge(crate::segments::routes())
         .merge(crate::emby_admin::routes())
         .merge(crate::dashboard::routes())
         .merge(crate::activity::routes())

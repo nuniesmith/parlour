@@ -211,12 +211,38 @@ export interface PlaybackInfo {
   warnings: string[];
 }
 
+export type SegmentKind = 'intro' | 'credits' | 'recap';
+export type SegmentSource = 'chapters' | 'fingerprint' | 'manual' | 'heuristic';
+
 export interface MediaSegment {
-  kind: 'intro' | 'credits' | 'recap';
+  kind: SegmentKind;
   start_ms: number;
   end_ms: number;
-  source: 'chapters' | 'fingerprint' | 'manual' | 'heuristic';
+  source: SegmentSource;
   confidence: number;
+}
+
+/** The SEG4 editor's view of one item (`GET /api/v1/admin/items/{id}/segments`). */
+export interface SegmentEditorView {
+  item_id: string;
+  /** The file playback serves — the times are into it. Null when the
+   *  item has no playable file: nothing can be added then. */
+  file: { id: string; relative_path: string; duration_ms: number | null } | null;
+  /** Every stored row, kind by kind (recap, intro, credits), each
+   *  kind's manual row first, then the detectors. */
+  rows: StoredSegment[];
+}
+
+/** One stored `media_segments` row and what it means for playback now. */
+export interface StoredSegment {
+  kind: SegmentKind;
+  source: SegmentSource;
+  /** Both null on a manual "no segment of this kind here" marker (D21). */
+  start_ms: number | null;
+  end_ms: number | null;
+  confidence: number;
+  status: 'used' | 'no_segment' | 'overridden' | 'hidden' | 'below_floor' | 'outranked';
+  updated_at: string;
 }
 
 export interface Job {
