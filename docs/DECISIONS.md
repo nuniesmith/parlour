@@ -357,3 +357,29 @@ recorded here so SEG4's tests can assert against them.
   the item page (`/item/[id]`), for any item with a playable file,
   movies included — there is no separate item admin view in the
   code.
+
+## 2026-11-19 — Skip in the player (SEG5)
+
+Put to the owner by the SEG5 run as proposed defaults after reading
+the segment and playback code, and recorded the same day under the
+owner's standing instruction to keep the chain moving; recorded here
+so SEG5's tests can assert against them. The owner reviews
+everything afterwards and can amend it.
+
+- **D22 Skip in the player (re-entry, preview, recaps, full
+  screen):** a skip jumps to the segment's end; credits that run
+  to the end of the file end playback there, and the stopped
+  report marks the item played under the usual rules. The player
+  offers skips for recaps as well as intros and credits, under the
+  same per-profile mode. In auto mode a segment is skipped the
+  first time playback reaches it (including when playback starts
+  inside it), with a short "Skipped the intro" notice; seeking back
+  into a segment already skipped plays it and offers the Skip
+  button instead, so there is at most one automatic skip per segment
+  per playback. A preview (D21) never skips by itself and shows the
+  Skip button whatever the profile's mode. So the button can be seen
+  in full screen, F and a new full-screen button put the whole
+  player area in full screen, and the browser's own full-screen
+  button is hidden where the browser allows it (Chromium-based
+  browsers); in Firefox and Safari it stays and shows the video
+  without the button.
