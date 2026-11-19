@@ -3,6 +3,7 @@
   import { page } from '$app/state';
   import Hls from 'hls.js';
   import { api } from '$lib/api';
+  import { formatSegmentTime, previewParam } from '$lib/segments';
   import {
     deviceLabel,
     formatDurationMs,
@@ -22,6 +23,13 @@
 
   const itemId = $derived(page.params.id ?? '');
 
+  // SEG4 "Preview from here" (D21): `?preview=<ms>` opens the player
+  // at that time and reports nothing — no start, progress or stopped
+  // report, so no watch position, played mark, play count, Now Playing
+  // session or activity line. Read once: the mode never changes while
+  // this page plays.
+  const previewMs = previewParam(page.url.searchParams.get('preview'));
+
   // The id the server gave this playback session, sent back on
   // every later report so two tabs on one item stay distinct.
   let sessionId: string | null = null;
@@ -29,6 +37,7 @@
   let stoppedByAdmin = $state(false);
 
   function report(kind: 'start' | 'progress' | 'stopped') {
+    if (previewMs !== null) return;
     if (!info || !video || stoppedByAdmin) return;
     const body: Record<string, unknown> = {
       item_id: info.item_id,
@@ -94,7 +103,9 @@
     video.addEventListener(
       'loadedmetadata',
       () => {
-        if (resumeChoice === 'resume' && info && info.resume_position_ms > 0 && video) {
+        if (previewMs !== null && video) {
+          video.currentTime = previewMs / 1000;
+        } else if (resumeChoice === 'resume' && info && info.resume_position_ms > 0 && video) {
           video.currentTime = info.resume_position_ms / 1000;
         }
         applySubtitleDefault();
@@ -121,6 +132,7 @@
   }
 
   function onPlay() {
+    if (previewMs !== null) return; // a preview reports nothing
     if (!reported) report('start');
     if (!progressTimer) {
       progressTimer = setInterval(() => report('progress'), 10_000);
@@ -174,7 +186,13 @@
     detail = d.data;
     if (p.data) {
       info = p.data;
-      if (p.data.resume_position_ms <= 0) {
+      if (previewMs !== null) {
+        // Straight to the preview time: no resume prompt.
+        started = true;
+        await tick();
+        await attach();
+        video?.play().catch(() => {});
+      } else if (p.data.resume_position_ms <= 0) {
         resumeChoice = 'restart';
         started = true;
         // The <video> only exists once `info` has rendered.
@@ -201,6 +219,13 @@
   <p class="dim">Loading…</p>
 {:else}
   <h1>{detail.title}</h1>
+  {#if previewMs !== null}
+    <p class="preview" role="status">
+      <strong>Preview</strong> from {formatSegmentTime(previewMs)} — nothing you watch here is
+      saved to watch history.
+      <a class="btn small" href={`/item/${detail.id}#segments`}>Back to segments</a>
+    </p>
+  {/if}
   <p class="dim plan">
     {info.action === 'DirectPlay' ? 'Direct play' : 'Remuxed for your browser'}
     · {info.reason}
@@ -283,6 +308,15 @@
   }
   .warn {
     color: var(--accent);
+  }
+  .preview {
+    display: flex;
+    gap: 0.6rem;
+    align-items: center;
+    flex-wrap: wrap;
+    border: 1px solid var(--accent);
+    border-radius: 0.6rem;
+    padding: 0.5rem 0.8rem;
   }
   .keys {
     font-size: 0.85rem;

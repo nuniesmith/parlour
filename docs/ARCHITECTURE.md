@@ -126,11 +126,12 @@ The owner uses subtitles on most playback.
   `chapters`, `fingerprint`, `manual`, `heuristic`, each with a 0–1
   confidence. Detectors write only their own source's rows; the read
   path (`parlour_playback::effective_segments`) hands the player at
-  most one segment per kind: manual always wins, whatever its stored
-  confidence; otherwise the highest-confidence automatic row at or
-  above the 0.6 floor (D17), ties going to the earlier detector
-  (chapters, fingerprint, heuristic). `playback-info` returns the
-  result as `segments`.
+  most one segment per kind: nothing for a kind an admin marked as
+  having none (SEG4, D21); otherwise manual always wins, whatever
+  its stored confidence; otherwise the highest-confidence automatic
+  row at or above the 0.6 floor (D17), ties going to the earlier
+  detector (chapters, fingerprint, heuristic). `playback-info`
+  returns the result as `segments`.
 - Segment detection, the cheap pass (SEG2, D17–D19;
   `parlour_catalog::segments`): a finished scan queues
   `detect_segments` for its library when an episode's playback file
@@ -185,6 +186,41 @@ The owner uses subtitles on most playback.
   Measured on synthetic episodes, edges land within 1.4 s of the
   truth, nearly always early; release-build matching costs ~26 ms
   per pair of 600 s windows (a 24-episode season: ~7 s per window).
+- Segment editor (SEG4, D21; `crates/server/src/segments.rs`,
+  `web/src/lib/SegmentEditor.svelte`): an admin-only Segments
+  section on the item page for any item with a playable file —
+  movies included, though detection only covers episodes.
+  `GET /api/v1/admin/items/{id}/segments` lists every stored row
+  with what it means for playback now (used; overridden by the
+  admin's times; hidden by a marker; below the floor; outranked)
+  and the playback file the times are in — the first available
+  file by relative path, then path, as detection and playback-info
+  pick it. `PUT …/segments/{kind}` `{start_ms, end_ms}` sets the
+  kind's `manual` row (confidence 1.0), checked only for
+  0 ≤ start < end ≤ the file's length (a file of unknown length
+  can't take times); D17/D18's lengths and positions don't apply
+  and kinds may overlap. `DELETE …/segments/{kind}/{source}`
+  deletes one listed row: a manual row — times or marker — is
+  removed, and detection decides that kind again; a detected row
+  is kept (detection owns it and would write it back) and the
+  kind's manual "no segment here" marker is stored instead,
+  unless the admin's own times already override that kind (409).
+  A marker is a manual row with NULL times (migration
+  `20261119000000_segment_markers.sql`: only manual rows may lack
+  times, and then both); since one row per (item, kind, source)
+  exists, a kind holds the admin's times or the admin's "none",
+  never both. It beats every automatic source in
+  `effective_segments`, including rows a later detection run
+  writes. playback-info and the editor read through one path
+  (`segments::effective_for`), so "used by the player" in the
+  editor is what the player gets. Edits write no activity row,
+  like the MD4 manual match. "Preview from here" links to
+  `/watch/[id]?preview=<ms>`: the player opens at that time with
+  no resume prompt and sends no start / progress / stopped
+  report — so no position, played mark, play count, Now Playing
+  session or activity line. The mode only suppresses the
+  viewer's own reports, which a client could always skip; the
+  stream is authorised exactly as for normal playback.
 - Scanner: `notify` watcher for local disks + *arr webhooks/history
   polling for targeted rescans + a periodic full scan. Skip unchanged
   files by (path, size, mtime) fingerprint before probing.

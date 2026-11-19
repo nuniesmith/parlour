@@ -4,6 +4,8 @@
   import { api } from '$lib/api';
   import Poster from '$lib/Poster.svelte';
   import Rail from '$lib/Rail.svelte';
+  import SegmentEditor from '$lib/SegmentEditor.svelte';
+  import { session } from '$lib/session.svelte';
   import {
     backdropUrl,
     formatBytes,
@@ -180,6 +182,12 @@
         </p>
       </div>
     {/each}
+  {/if}
+
+  <!-- SEG4 (D21): admins edit the segments of anything with a playable
+       file, movies included. The API answers 404 to everyone else. -->
+  {#if session.me?.user.is_admin && detail.files.some((f) => f.available)}
+    <SegmentEditor itemId={detail.id} itemKind={detail.kind} />
   {/if}
 
   <Rail title="More like this" items={detail.similar} />

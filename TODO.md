@@ -728,9 +728,22 @@ does NOT depend on Phase 2 transcoding.
   open. Migration resets `segments_detected_at` once so
   existing seasons get matched. Evidence is synthetic
   only — no real episodes on oryx yet.
-- [ ] SEG4 (M) **Segment editor**: on the item admin view —
+- [x] SEG4 (M) **Segment editor**: on the item admin view —
   list segments, add/edit times/delete, "preview from here"
   seek in the player; saves as source=manual.
+  *Done 2026-11-19, per D21:* an admin-only Segments section
+  on `/item/[id]` for anything with a playable file, movies
+  included, backed by `/api/v1/admin/items/{id}/segments`.
+  Lists every stored row with what it means for playback;
+  the admin's times save as the kind's `manual` row (1.0),
+  checked only for 0 ≤ start < end ≤ the file's length.
+  Deleting a detected row stores a manual "no segment of
+  this kind here" marker (a manual row with no times,
+  migration `20261119000000`) that `effective_segments`
+  honours over every detector and every re-run; deleting a
+  manual row — times or marker — hands the kind back to
+  detection. "Preview" opens `/watch/[id]?preview=<ms>`:
+  the player starts there and sends no playback reports.
 - [ ] SEG5 (M) **Skip in the player**: Skip Intro / Skip
   Credits button while the playhead is inside a segment
   (web first); per-profile mode in Preferences → Playback
