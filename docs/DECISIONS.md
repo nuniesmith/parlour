@@ -383,3 +383,35 @@ everything afterwards and can amend it.
   button is hidden where the browser allows it (Chromium-based
   browsers); in Firefox and Safari it stays and shows the video
   without the button.
+
+## 2026-11-19 — Autoplay next episode defaults (SEG6)
+
+Put to the owner by the SEG6 run as six proposed defaults after
+reading the segment and playback code, and recorded the same day
+under the owner's standing instruction to keep the chain moving;
+recorded here so SEG6's tests can assert against them. The owner
+reviews everything afterwards and can amend it.
+
+- **D23 Autoplay next episode (next-episode choice, card vs Skip
+  Credits, played-on-fire, resume, cancel, preview):** the next
+  episode is the next in series order (season, then episode,
+  into later seasons), played or not, skipping episodes with no
+  available file — the 1.6 next-up query's unplayed-only filter
+  would stop a rewatch from rolling, against Phase 9's
+  hands-free goal, and playback-info refuses an item with no
+  playable file. While the countdown card is up it replaces
+  Skip Credits and the automatic skip, so Play now does the
+  skipping; after Cancel, the credits get the Skip button
+  whatever the profile's mode. Firing is treated like D22's
+  Skip Credits: if the credits run to the end of the file the
+  stopped report is at the end so the episode counts as played,
+  otherwise the actual position is reported; then the start
+  report for the next episode is sent. A partly watched next
+  episode resumes from where the viewer left off, with no
+  resume prompt — a prompt would stall the roll; played
+  episodes restart from the beginning. Cancel turns autoplay
+  off for the rest of that viewing: the card does not come
+  back at the end of the file or when going back into the
+  credits. The countdown waits while the video is paused, but
+  keeps running once the video has ended. A preview (D21)
+  gets no card and no autoplay.
