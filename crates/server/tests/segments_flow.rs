@@ -2,7 +2,10 @@
 //! rows come back on playback-info, resolved to one per kind,
 //! start-ordered, with a manual row always winning over the
 //! automatic sources; the schema rejects impossible spans and a
-//! second row for the same (item, kind, source).
+//! second row for the same (item, kind, source). And of SEG5's
+//! server half (D22): playback-info carries the active profile's
+//! skip mode (`segment_skip`), read fresh on every call and kept
+//! per profile.
 //!
 //! Ignored by default; needs PARLOUR_TEST_DATABASE_URL (a fresh
 //! database of its own) and ffmpeg/ffprobe on PATH.
@@ -375,6 +378,80 @@ async fn segments_flow() {
     // Segments are per item: episode 2 is untouched.
     let (_, info) = app.req(reqwest::Method::GET, &info_path(ep2), None).await;
     assert_eq!(segments(&info), vec![]);
+
+    // SEG5 (D22): playback-info also says what the active profile
+    // wants done inside those segments. The default is the Skip
+    // button (UI7), and a change applies to the very next call.
+    let (_, info) = app.req(reqwest::Method::GET, &info_path(ep1), None).await;
+    assert_eq!(info["segment_skip"], "button", "{info}");
+    let set_skip = |profile: String, mode: &'static str| {
+        let app = &app;
+        async move {
+            let (status, body) = app
+                .req(
+                    reqwest::Method::PATCH,
+                    &format!("/api/v1/profiles/{profile}"),
+                    Some(json!({"segment_skip": mode})),
+                )
+                .await;
+            assert_eq!(status, 200, "{body}");
+            assert_eq!(body["segment_skip"], mode, "{body}");
+        }
+    };
+    for mode in ["auto", "off", "button", "auto"] {
+        set_skip(profile_id.clone(), mode).await;
+        let (status, info) = app.req(reqwest::Method::GET, &info_path(ep1), None).await;
+        assert_eq!(status, 200, "{info}");
+        assert_eq!(info["segment_skip"], mode, "{info}");
+    }
+
+    // Per profile: a second profile on the same account keeps its own
+    // choice, sees the same segments (they belong to the item), and the
+    // first profile's choice is untouched by it.
+    let (status, kids) = app
+        .req(
+            reqwest::Method::POST,
+            "/api/v1/profiles",
+            Some(json!({"name": "Kids"})),
+        )
+        .await;
+    assert_eq!(status, 201, "{kids}");
+    assert_eq!(kids["segment_skip"], "button", "{kids}");
+    let kids_id = kids["id"].as_str().unwrap().to_string();
+    let (status, _) = app
+        .req(
+            reqwest::Method::POST,
+            &format!("/api/v1/admin/libraries/{library_id}/access"),
+            Some(json!({"profile_id": kids_id})),
+        )
+        .await;
+    assert_eq!(status, 204);
+    set_skip(kids_id.clone(), "off").await;
+    let select = |profile: String| {
+        let app = &app;
+        async move {
+            let (status, body) = app
+                .req(
+                    reqwest::Method::POST,
+                    &format!("/api/v1/profiles/{profile}/select"),
+                    Some(json!({})),
+                )
+                .await;
+            assert_eq!(status, 200, "{body}");
+        }
+    };
+    select(kids_id.clone()).await;
+    let (status, kids_info) = app.req(reqwest::Method::GET, &info_path(ep1), None).await;
+    assert_eq!(status, 200, "{kids_info}");
+    assert_eq!(kids_info["segment_skip"], "off", "{kids_info}");
+    assert_eq!(
+        segments(&kids_info),
+        segments(&info),
+        "segments are the item's"
+    );
+    select(profile_id.clone()).await;
+    let (_, info) = app.req(reqwest::Method::GET, &info_path(ep1), None).await;
+    assert_eq!(info["segment_skip"], "auto", "{info}");
 
     // The schema refuses what a player could not use.
     assert!(

@@ -744,10 +744,25 @@ does NOT depend on Phase 2 transcoding.
   manual row — times or marker — hands the kind back to
   detection. "Preview" opens `/watch/[id]?preview=<ms>`:
   the player starts there and sends no playback reports.
-- [ ] SEG5 (M) **Skip in the player**: Skip Intro / Skip
+- [x] SEG5 (M) **Skip in the player**: Skip Intro / Skip
   Credits button while the playhead is inside a segment
   (web first); per-profile mode in Preferences → Playback
   (UI7): button / auto-skip / off.
+  *Done 2026-11-19, per D22:* playback-info carries the
+  active profile's `segment_skip`, read fresh every time.
+  The web player (`lib/skip.ts`) offers Skip Recap / Intro /
+  Credits while the playhead is inside one; in auto mode it
+  skips each segment once — the first time playback reaches
+  it, starting inside it included — says "Skipped the
+  intro", and offers the button on the way back in. A skip
+  lands on the segment's end; one ending within 1 s of the
+  file's end ends playback there, with the usual stopped
+  report (so the item counts as played). A preview never
+  skips by itself and always offers the button. F and a new
+  button put the whole player area in full screen;
+  Chromium's own full-screen button is hidden (in Chrome
+  151 `controlslist` alone only greys it out), while Firefox
+  and Safari keep theirs.
 - [ ] SEG6 (M) **Autoplay next episode**: playback-info
   gains `next_episode` (reuse the 1.6 next-up query);
   at credits-start or file end, a countdown card (10 s,
