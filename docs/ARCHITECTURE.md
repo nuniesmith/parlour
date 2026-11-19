@@ -221,6 +221,48 @@ The owner uses subtitles on most playback.
   session or activity line. The mode only suppresses the
   viewer's own reports, which a client could always skip; the
   stream is authorised exactly as for normal playback.
+- Skip in the player (SEG5, D22; `web/src/lib/skip.ts`, the
+  player in `web/src/routes/watch/[id]/+page.svelte`):
+  playback-info also returns the active profile's
+  `segment_skip` (`button` | `auto` | `off`, Preferences →
+  Playback), read on every call like the subtitle pick, so a
+  change made on another device applies to the next playback.
+  The segment at the playhead is the one with start ≤ t < end
+  (kinds may overlap: then the one that started first). At the
+  media's end, as the browser measures it, there is none, even
+  when a stored end lies past it: ffprobe's file length, which
+  bounds manual times and "to the end" spans, can run longer
+  than what the browser plays — an MKV whose subtitles outlast
+  the picture is remuxed without them — and a Skip Credits
+  button must not linger once playback has ended.
+  `button` offers Skip Recap / Skip Intro / Skip Credits while
+  the playhead is inside a segment, paused or playing; `off`
+  offers nothing; `auto` skips a segment the first time
+  playback reaches it — playback starting inside it included;
+  a paused playhead waits for play — shows "Skipped the
+  intro" for 4 s, and never skips that segment by itself again
+  in that playback: back inside, it plays and the button is
+  offered. Nothing is offered or skipped before the opening
+  seek (resume or preview) has happened. A skip lands on the
+  segment's end. A segment ending within 1 s of the media's
+  end runs to the end of the file (its times are on ffprobe's
+  clock, the media's length on the browser's), so the skip
+  ends playback there and the player sends the stopped report
+  itself — Chrome fires `ended` after a seek to the end only
+  while playing — once, whatever `ended` does afterwards; the
+  item is then played under the usual ≥ 90 % rule. A preview
+  never skips by itself and always offers the button. Full
+  screen is the player area, not the `<video>`, so the button
+  stays in view: F and a new corner button toggle it (the
+  button fades with the browser's controls: 3 s after playback
+  starts or the pointer last moved over the player).
+  Where the player area can go full screen, Chromium's own
+  full-screen button is turned off with
+  `controlslist="nofullscreen"` — which in Chrome 151 only
+  greys it out, and also turns off double-click full screen —
+  and hidden with `::-webkit-media-controls-fullscreen-button`.
+  Firefox and Safari keep theirs, which shows the bare video
+  without the Skip button.
 - Scanner: `notify` watcher for local disks + *arr webhooks/history
   polling for targeted rescans + a periodic full scan. Skip unchanged
   files by (path, size, mtime) fingerprint before probing.

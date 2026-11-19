@@ -274,8 +274,11 @@ should show the same anatomy with *its* reasons
   default) and `autoplay_next` (default on, D15). Home
   renders its rails in the profile's order and skips hidden
   ones. Playback holds audio language, the remote bitrate
-  cap, and the two Phase 9 choices — the page says the
-  player doesn't act on those yet; SEG5/SEG6 read them.
+  cap, and the two Phase 9 choices. Since SEG5 the player
+  acts on the skip choice (playback-info carries it as
+  `segment_skip`; the fieldset now says intros, recaps and
+  credits, per D22); the page still says autoplay-next waits
+  for SEG6.
   Subtitles holds mode + language. Profile edits the active
   profile's name, colour and PIN (adding/deleting profiles
   stays on Who's watching). Account holds change password,

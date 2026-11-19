@@ -1,7 +1,8 @@
 //! Playback surface (Milestone 1.6).
 //!
 //! - `GET /api/v1/items/{id}/playback-info` — the plan (P1), plus
-//!   the item's intro/credits/recap segments (SEG1)
+//!   the item's intro/credits/recap segments (SEG1) and what the
+//!   active profile wants done with them (SEG5)
 //! - `GET /api/v1/stream/{file_id}` — Range streaming (P2)
 //! - `GET /api/v1/stream/{file_id}/hls/{asset}` — remux (P3)
 //! - `POST /api/v1/playback/{start,progress,stopped}` — reporting
@@ -498,6 +499,11 @@ struct PlaybackInfo {
     default_subtitle_id: Option<Uuid>,
     audio_streams: Vec<AudioDto>,
     segments: Vec<SegmentDto>,
+    /// The active profile's choice for those segments (SEG5, D22):
+    /// `button`, `auto` or `off` (Preferences → Playback). Read here,
+    /// like the subtitle pick and the bitrate cap, so a change made on
+    /// another device applies to the next playback.
+    segment_skip: String,
     warnings: Vec<String>,
 }
 
@@ -586,8 +592,8 @@ async fn playback_info(
         _ => None,
     };
 
-    let profile: (Option<String>, Option<String>, String, Option<i32>) = sqlx::query_as(
-        "SELECT audio_lang, subtitle_lang, subtitle_mode, remote_bitrate_cap_kbps
+    let profile: (Option<String>, Option<String>, String, Option<i32>, String) = sqlx::query_as(
+        "SELECT audio_lang, subtitle_lang, subtitle_mode, remote_bitrate_cap_kbps, segment_skip
          FROM profiles WHERE id = $1",
     )
     .bind(profile_id)
@@ -763,6 +769,7 @@ async fn playback_info(
         default_subtitle_id,
         audio_streams: audio,
         segments,
+        segment_skip: profile.4,
         warnings,
     }))
 }

@@ -1,7 +1,9 @@
 <script lang="ts">
   // Preferences → Playback: audio language, the remote bitrate
-  // cap, and the intro/credits skip and autoplay-next choices
-  // (D15) that the player reads once Phase 9 lands.
+  // cap, what the player does with intros, recaps and credits
+  // (SEG5, D22 — playback-info hands the player this profile's
+  // choice), and the autoplay-next choice (D15), which the player
+  // reads once SEG6 lands.
   import { session } from '$lib/session.svelte';
   import { updateActiveProfile } from '$lib/preferences';
 
@@ -61,7 +63,7 @@
   </div>
 
   <fieldset>
-    <legend>Intros and credits</legend>
+    <legend>Intros, recaps and credits</legend>
     <label class="check">
       <input type="radio" name="skip" value="button" bind:group={form.segment_skip} />
       Show a Skip button
@@ -75,14 +77,19 @@
       Don't offer to skip
     </label>
   </fieldset>
+  <p class="hint">
+    Skip automatically skips each one the first time playback gets there, and says so. Go back
+    into it and it plays, with the Skip button. Skipping credits that run to the very end finishes
+    the episode, as if you had watched them.
+  </p>
 
   <label class="check">
     <input type="checkbox" bind:checked={form.autoplay_next} />
     Play the next episode automatically, after a short countdown
   </label>
   <p class="hint">
-    The player doesn't detect intros and credits or play the next episode yet. These choices are
-    saved now and apply once it does.
+    The player doesn't play the next episode by itself yet. This choice is saved now and applies
+    once it does.
   </p>
 
   <p><button class="btn primary" type="submit" disabled={saving}>Save</button></p>

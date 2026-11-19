@@ -18,8 +18,8 @@ export interface Profile {
   remote_bitrate_cap_kbps: number | null;
   /** Home Screen rails in display order (UI7). */
   home_rails: HomeRail[];
-  /** Inside an intro/credits segment: button, auto or off (SEG5). */
-  segment_skip: 'button' | 'auto' | 'off';
+  /** Inside an intro, recap or credits segment (SEG5, D22). */
+  segment_skip: SegmentSkip;
   /** Next-episode countdown (SEG6). */
   autoplay_next: boolean;
 }
@@ -208,8 +208,15 @@ export interface PlaybackInfo {
    *  Automatic rows below confidence 0.6 are never sent (D17), so a
    *  `heuristic` guess (stored at 0.5) does not appear here today. */
   segments: MediaSegment[];
+  /** The active profile's choice for those segments (SEG5), read
+   *  fresh with every playback. */
+  segment_skip: SegmentSkip;
   warnings: string[];
 }
+
+/** What the player does inside a segment (SEG5, D22): offer a Skip
+ *  button, skip it automatically, or neither. */
+export type SegmentSkip = 'button' | 'auto' | 'off';
 
 export type SegmentKind = 'intro' | 'credits' | 'recap';
 export type SegmentSource = 'chapters' | 'fingerprint' | 'manual' | 'heuristic';
