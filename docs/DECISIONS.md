@@ -328,3 +328,32 @@ the intro from a shared background melody.
   Postgres table (about 40 KB per episode, roughly
   400 MB per 10k episodes); fingerprints no file
   references any more are deleted.
+
+## 2026-11-19 — Segment editor defaults (SEG4)
+
+Put to the owner by the SEG4 run as four proposed defaults after
+reading the segment and playback code, and recorded the same day
+under the owner's standing instruction to keep the chain moving;
+recorded here so SEG4's tests can assert against them.
+
+- **D21 Segment editor (delete semantics, preview, manual limits,
+  placement):** deleting a detected segment stores a manual "no
+  segment of this kind here" marker that beats detection and
+  survives re-runs; deleting the marker hands control back to
+  detection. Deleting only the manual row would leave a wrong
+  detected intro undeletable, and deleting any row outright would
+  let a deleted fingerprint intro come back when the next episode
+  of an airing show arrives, contradicting D15's "manual edits win
+  over all auto sources". The marker needs a migration and a change
+  to how playback picks segments. "Preview from here" opens the
+  player at that time and reports nothing: today's player cannot
+  seek to a time, any playback report at >=90% marks the item
+  played, and starting playback adds a play — so previewing
+  through the normal path would mark the episode played for the
+  admin's profile. Manual rows are validated only on start before
+  end and both times within the file. The D17/D18 length and
+  position rules do not apply to manual rows, and kinds may
+  overlap. The editor lives as an admin-only Segments section on
+  the item page (`/item/[id]`), for any item with a playable file,
+  movies included — there is no separate item admin view in the
+  code.
