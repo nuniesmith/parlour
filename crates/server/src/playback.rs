@@ -1,8 +1,9 @@
 //! Playback surface (Milestone 1.6).
 //!
 //! - `GET /api/v1/items/{id}/playback-info` — the plan (P1), plus
-//!   the item's intro/credits/recap segments (SEG1) and what the
-//!   active profile wants done with them (SEG5)
+//!   the item's intro/credits/recap segments (SEG1), what the
+//!   active profile wants done with them (SEG5), and the episode
+//!   that follows with the profile's autoplay choice (SEG6)
 //! - `GET /api/v1/stream/{file_id}` — Range streaming (P2)
 //! - `GET /api/v1/stream/{file_id}/hls/{asset}` — remux (P3)
 //! - `POST /api/v1/playback/{start,progress,stopped}` — reporting
@@ -504,7 +505,29 @@ struct PlaybackInfo {
     /// like the subtitle pick and the bitrate cap, so a change made on
     /// another device applies to the next playback.
     segment_skip: String,
+    /// The episode after this one in series order (SEG6, D23), for the
+    /// player's countdown card: season, then episode, on into later
+    /// seasons, watched or not, skipping any with no available file.
+    /// Shaped like a Home Next Up row. Null for a movie and for the
+    /// last episode; sent whatever `autoplay_next` says.
+    next_episode: Option<crate::discover::NextUpDto>,
+    /// Whether the active profile wants that episode played after the
+    /// countdown (SEG6; Preferences → Playback, default on), read here
+    /// like `segment_skip`.
+    autoplay_next: bool,
     warnings: Vec<String>,
+}
+
+/// What playback-info reads from the active profile on every call, so
+/// a change made on another device applies to the next playback.
+#[derive(FromRow)]
+struct ProfilePrefs {
+    audio_lang: Option<String>,
+    subtitle_lang: Option<String>,
+    subtitle_mode: String,
+    remote_bitrate_cap_kbps: Option<i32>,
+    segment_skip: String,
+    autoplay_next: bool,
 }
 
 fn is_text_sub(format: Option<&str>) -> bool {
@@ -592,8 +615,9 @@ async fn playback_info(
         _ => None,
     };
 
-    let profile: (Option<String>, Option<String>, String, Option<i32>, String) = sqlx::query_as(
-        "SELECT audio_lang, subtitle_lang, subtitle_mode, remote_bitrate_cap_kbps, segment_skip
+    let profile = sqlx::query_as::<_, ProfilePrefs>(
+        "SELECT audio_lang, subtitle_lang, subtitle_mode, remote_bitrate_cap_kbps, segment_skip,
+                autoplay_next
          FROM profiles WHERE id = $1",
     )
     .bind(profile_id)
@@ -622,7 +646,7 @@ async fn playback_info(
         },
         client,
         network,
-        profile.3,
+        profile.remote_bitrate_cap_kbps,
     );
 
     let token = make_token(&app.playback, file.id, profile_id);
@@ -719,9 +743,9 @@ async fn playback_info(
         .collect();
     let default_idx = pick_subtitle(
         &choices,
-        &profile.2,
-        profile.1.as_deref(),
-        profile.0.as_deref(),
+        &profile.subtitle_mode,
+        profile.subtitle_lang.as_deref(),
+        profile.audio_lang.as_deref(),
     );
     let default_subtitle_id = default_idx.map(|i| track_rows[i].id);
     let subtitles: Vec<SubtitleDto> = track_rows
@@ -755,6 +779,7 @@ async fn playback_info(
         None => (0, false),
     };
     let segments = load_segments(&app, item_id).await?;
+    let next_episode = crate::discover::next_episode(&app.pool, profile_id, item_id).await?;
 
     Ok(Json(PlaybackInfo {
         item_id,
@@ -769,7 +794,9 @@ async fn playback_info(
         default_subtitle_id,
         audio_streams: audio,
         segments,
-        segment_skip: profile.4,
+        segment_skip: profile.segment_skip,
+        next_episode,
+        autoplay_next: profile.autoplay_next,
         warnings,
     }))
 }

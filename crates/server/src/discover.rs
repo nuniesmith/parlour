@@ -9,6 +9,10 @@
 //! and `poster_item_id` (UI11) so an episode's tile can name its
 //! show and use the show's poster, as the Now Playing card does.
 //!
+//! [`next_episode`] (SEG6, D23) is the episode after a given one in
+//! series order, for playback-info's `next_episode`: unlike Next Up
+//! it ignores what has been watched, so a rewatch rolls on too.
+//!
 //! `GET /api/v1/search?q=` — Postgres full-text over item titles
 //! plus person matches (cast) with the items they appear in.
 //!
@@ -46,14 +50,63 @@ struct ContinueDto {
     poster_item_id: Option<Uuid>,
 }
 
-/// A Next Up row: the episode plus what its tile needs (UI11).
+/// A Next Up row: the episode plus what its tile needs (UI11). Also
+/// playback-info's `next_episode` (SEG6), for the countdown card.
 #[derive(Debug, Serialize, FromRow)]
-struct NextUpDto {
+pub(crate) struct NextUpDto {
     #[sqlx(flatten)]
     #[serde(flatten)]
-    item: ItemDto,
-    series_title: Option<String>,
-    poster_item_id: Option<Uuid>,
+    pub(crate) item: ItemDto,
+    pub(crate) series_title: Option<String>,
+    pub(crate) poster_item_id: Option<Uuid>,
+}
+
+/// The episode after `item_id` in its series (SEG6, D23): the next by
+/// (season, episode), on into later seasons, watched or not — the 1.6
+/// Next Up query keeps only unwatched episodes, which would stop a
+/// rewatch from rolling — and skipping episodes with no available file,
+/// which playback-info would refuse. Episodes without both numbers have
+/// no place in that order, so they neither have a next one nor are one.
+/// `None` for anything but an episode, for the last one, and when the
+/// profile can't reach the item.
+pub(crate) async fn next_episode(
+    pool: &parlour_db::PgPool,
+    profile_id: Uuid,
+    item_id: Uuid,
+) -> Result<Option<NextUpDto>, AppError> {
+    sqlx::query_as::<_, NextUpDto>(
+        "SELECT i.id, i.library_id, i.parent_id, i.kind, i.title, i.sort_title,
+                i.year, i.season_number, i.episode_number, i.overview, i.content_rating,
+                i.available, i.genres, i.vote_average, i.metadata_status, i.metadata_provider,
+                EXISTS (SELECT 1 FROM images im WHERE im.item_id = i.id AND im.kind = 'poster'
+                        AND im.path <> '' AND im.path NOT LIKE 'pending:%') AS has_poster,
+                sr.title AS series_title,
+                (SELECT c.id FROM media_items c
+                  WHERE c.id IN (sr.id, i.id)
+                    AND EXISTS (SELECT 1 FROM images im
+                                 WHERE im.item_id = c.id AND im.kind = 'poster'
+                                   AND im.path <> '' AND im.path NOT LIKE 'pending:%')
+                  ORDER BY (c.id = sr.id) DESC LIMIT 1) AS poster_item_id,
+                i.created_at, i.updated_at
+         FROM media_items cur
+         JOIN media_items csn ON csn.id = cur.parent_id
+         JOIN media_items sr ON sr.id = csn.parent_id
+         JOIN media_items se ON se.parent_id = sr.id AND se.kind = 'season'
+         JOIN media_items i ON i.parent_id = se.id AND i.kind = 'episode'
+         JOIN library_access a ON a.library_id = i.library_id AND a.profile_id = $2
+         WHERE cur.id = $1 AND cur.kind = 'episode'
+           AND cur.season_number IS NOT NULL AND cur.episode_number IS NOT NULL
+           AND i.season_number IS NOT NULL AND i.episode_number IS NOT NULL
+           AND (i.season_number, i.episode_number) > (cur.season_number, cur.episode_number)
+           AND EXISTS (SELECT 1 FROM media_files f WHERE f.item_id = i.id AND f.available)
+         ORDER BY i.season_number, i.episode_number, i.id
+         LIMIT 1",
+    )
+    .bind(item_id)
+    .bind(profile_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(AppError::from)
 }
 
 /// One tile in Home's library row (UI8).

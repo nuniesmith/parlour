@@ -5,6 +5,7 @@
   import '../app.css';
   import Sidebar from '$lib/Sidebar.svelte';
   import { loadSession, session, signOut } from '$lib/session.svelte';
+  import { viewKey } from '$lib/viewKey.svelte';
 
   let { children } = $props();
 
@@ -194,7 +195,9 @@
         </div>
       </header>
       <main>
-        {#key page.url.pathname}
+        <!-- A fresh page per path, except where the player carried its
+             page along to the next episode (SEG6, `$lib/viewKey`). -->
+        {#key viewKey(page.url.pathname)}
           {@render children()}
         {/key}
       </main>

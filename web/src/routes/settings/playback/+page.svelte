@@ -1,9 +1,9 @@
 <script lang="ts">
   // Preferences → Playback: audio language, the remote bitrate
   // cap, what the player does with intros, recaps and credits
-  // (SEG5, D22 — playback-info hands the player this profile's
-  // choice), and the autoplay-next choice (D15), which the player
-  // reads once SEG6 lands.
+  // (SEG5, D22), and whether the next episode plays after a
+  // countdown (SEG6, D23). playback-info hands the player this
+  // profile's two Phase 9 choices with every playback.
   import { session } from '$lib/session.svelte';
   import { updateActiveProfile } from '$lib/preferences';
 
@@ -88,8 +88,11 @@
     Play the next episode automatically, after a short countdown
   </label>
   <p class="hint">
-    The player doesn't play the next episode by itself yet. This choice is saved now and applies
-    once it does.
+    When an episode's credits begin, or when it ends if none are marked, a card counts down 10
+    seconds and then plays the series' next episode — watched or not — from where you stopped if you
+    were partway through, otherwise from the start. The countdown waits while you're paused. Play now
+    goes straight there, skipping the rest of the credits; Cancel stays with this episode, and its
+    credits then get a Skip button.
   </p>
 
   <p><button class="btn primary" type="submit" disabled={saving}>Save</button></p>

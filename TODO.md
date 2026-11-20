@@ -763,13 +763,35 @@ does NOT depend on Phase 2 transcoding.
   Chromium's own full-screen button is hidden (in Chrome
   151 `controlslist` alone only greys it out), while Firefox
   and Safari keep theirs.
-- [ ] SEG6 (M) **Autoplay next episode**: playback-info
+- [x] SEG6 (M) **Autoplay next episode**: playback-info
   gains `next_episode` (reuse the 1.6 next-up query);
   at credits-start or file end, a countdown card (10 s,
   poster + title, Play now / Cancel); on fire: stopped
   report for the old episode + start for the new one, so
   Continue Watching and affinity data stay correct.
   Per-profile toggle (default on), Preferences → Playback.
+  *Done 2026-11-19, per D23:* playback-info carries
+  `next_episode` — the next episode in series order
+  (season, then episode, into later seasons), played or
+  not, skipping any with no available file; not the
+  next-up query, whose unplayed-only filter would stop a
+  rewatch — shaped like a Next Up row, plus the profile's
+  `autoplay_next`, read fresh every time. The web player
+  (`lib/autoplay.ts`, `lib/NextEpisodeCard.svelte`) puts
+  the card up when the credits begin, or at the end of
+  the file, and counts 10 s while the video plays or has
+  ended, waiting while it is paused; the card stands in
+  for Skip Credits and the automatic skip. Play now, or
+  the count running out, rolls into the next episode in
+  the same player, so full screen stays and the URL is
+  replaced without a new history entry: the old
+  episode's stopped report (at the end of the file when
+  the credits run there, so it counts as played; else at
+  the playhead), then the next one's start report from
+  its resume point — a played one from 0 — with no
+  resume prompt. Cancel ends autoplay for that viewing
+  and gives the credits the Skip button whatever the
+  mode. A preview gets no card.
 - [ ] SEG7 (S) **Still-watching prompt** (stretch): after
   3 episodes autoplayed back-to-back, the countdown card
   asks once; resets on any interaction.
