@@ -16,6 +16,7 @@
     runsToEnd,
     skipLanding,
   } from '$lib/skip';
+  import { StillWatching, watchForViewer } from '$lib/stillWatching';
   import { carryView, releaseView } from '$lib/viewKey.svelte';
   import {
     deviceLabel,
@@ -86,6 +87,14 @@
   let rollingTo = $state.raw<RailItem | null>(null);
   let rollError = $state<string | null>(null);
   let destroyed = false;
+
+  // SEG7 still watching (D24): once the countdown has rolled three times
+  // in a row with nobody touching the player, the card asks "Still
+  // watching?" instead of counting down (`asking` while it is up). The
+  // count lives as long as this page — a roll keeps it, a reload or
+  // another item starts it over — and a preview never asks.
+  const still = new StillWatching(previewMs === null);
+  let asking = $state(false);
 
   // D22 full screen: the whole player area, so the Skip button and the
   // notice stay in view. The <video>'s own full-screen button would show
@@ -187,7 +196,8 @@
    *  for Skip Credits and the automatic credits skip; after Cancel the
    *  credits get the button whatever the mode (D23). Once the media has
    *  ended no Skip button is offered: a segment's end can lie a little
-   *  past the browser's end. */
+   *  past the browser's end. While the count says to ask (SEG7, D24),
+   *  the card asks instead of counting down, and nothing fires. */
   function checkPlayhead() {
     if (!video || !skipper || !autoplay || !positioned || stoppedByAdmin || rolling) {
       offer = null;
@@ -197,17 +207,18 @@
     const ms = video.currentTime * 1000;
     const durationMs = mediaDurationMs();
     const atEnd = atMediaEnd();
-    const card = autoplay.step(performance.now(), {
-      ms,
-      playing: !video.paused && !atEnd,
-      atEnd,
-      durationMs,
-    });
+    const card = autoplay.step(
+      performance.now(),
+      { ms, playing: !video.paused && !atEnd, atEnd, durationMs },
+      still.asking,
+    );
     if (card.fire) {
+      // Only the rolls the countdown fires count towards asking (D24).
+      still.countdownFired();
       void rollToNext();
       return;
     }
-    setCard(card.remainingMs);
+    setCard(card.remainingMs, still.asking);
     if (atEnd) {
       offer = null;
       return;
@@ -220,10 +231,12 @@
     offer = step.offer;
   }
 
-  /** Put the countdown card up with this much time left, or take it
-   *  down (null). While it is up a timer keeps the count going. */
-  function setCard(remainingMs: number | null) {
+  /** Put the countdown card up with this much time left — or asking
+   *  "Still watching?" instead (SEG7) — or take it down (null). While it
+   *  is up a timer keeps checking the playhead and the count. */
+  function setCard(remainingMs: number | null, ask = false) {
     nextCard = remainingMs;
+    asking = remainingMs !== null && ask;
     if (remainingMs !== null && countdownTimer === null) {
       countdownTimer = setInterval(checkPlayhead, 250);
     } else if (remainingMs === null && countdownTimer !== null) {
@@ -232,16 +245,38 @@
     }
   }
 
+  /** Play now — Keep watching while the card asks — rolls into the next
+   *  episode at once. It is an interaction (D24): the count starts over,
+   *  and this roll doesn't count. */
   function playNextNow() {
+    still.interaction();
     if (autoplay?.playNow()) void rollToNext();
   }
 
-  /** Cancel (D23): no card again in this playback, and the credits get
-   *  the Skip button whatever the profile's mode. */
+  /** Cancel — Stop while the card asks, which does exactly the same
+   *  (D24) — means no card again in this playback, and the credits get
+   *  the Skip button whatever the profile's mode (D23). It is an
+   *  interaction too, so the count starts over. */
   function cancelAutoplay() {
+    still.interaction();
     autoplay?.cancel();
     checkPlayhead();
   }
+
+  /** Somebody at the player pressed a key, clicked, tapped, turned the
+   *  wheel, or played, paused, moved the playhead or changed the volume
+   *  some way the player itself didn't (`watchForViewer`, D24): the
+   *  count starts over, and a card that was asking turns back into the
+   *  10 s countdown. */
+  function onViewer() {
+    if (still.interaction()) checkPlayhead();
+  }
+
+  // The <video> is there once the item has loaded, and stays for the
+  // life of the page: a roll swaps what plays in it.
+  $effect(() => {
+    if (video) return watchForViewer(video, onViewer);
+  });
 
   /** "S1:E3 · Title" for the next episode, or its title alone. */
   function nextLabel(next: RailItem): string {
@@ -652,6 +687,7 @@
         <NextEpisodeCard
           next={info.next_episode}
           remainingMs={nextCard}
+          {asking}
           onplaynow={playNextNow}
           oncancel={cancelAutoplay}
         />

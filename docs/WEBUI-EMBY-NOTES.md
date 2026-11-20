@@ -280,7 +280,10 @@ should show the same anatomy with *its* reasons
   credits, per D22), and since SEG6 on autoplay-next too
   (playback-info carries it as `autoplay_next`, with the
   `next_episode`; the hint now describes the countdown card,
-  per D23).
+  per D23). Since SEG7 a second hint says the card asks
+  "Still watching?" after three autoplays in a row with
+  nobody touching the player (D24); that prompt has no
+  setting of its own.
   Subtitles holds mode + language. Profile edits the active
   profile's name, colour and PIN (adding/deleting profiles
   stays on Who's watching). Account holds change password,

@@ -2,18 +2,25 @@
   // The next-episode countdown card (SEG6, D23): the episode that plays
   // next — its show's poster (the same pick as a Next Up tile), show,
   // and "S1:E3 · Title" — a 10 s countdown, Play now and Cancel. The
-  // player decides when it shows and what the buttons do.
+  // player decides when it shows and what the buttons do. When it asks
+  // instead (SEG7, D24) it says "Still watching?" in place of the
+  // countdown, and the same two buttons read Keep watching and Stop:
+  // they stay the same elements either way, so a key press that turns
+  // the question back into the countdown never takes the focus away.
   import { COUNTDOWN_MS } from './autoplay';
   import { episodeLabel, posterUrl, type RailItem } from './types';
 
   let {
     next,
     remainingMs,
+    asking = false,
     onplaynow,
     oncancel,
   }: {
     next: RailItem;
     remainingMs: number;
+    /** Ask "Still watching?" rather than count down. */
+    asking?: boolean;
     onplaynow: () => void;
     oncancel: () => void;
   } = $props();
@@ -29,7 +36,7 @@
   const left = $derived(Math.min(1, Math.max(0, remainingMs / COUNTDOWN_MS)));
 </script>
 
-<section class="next-card" aria-label="Next episode">
+<section class="next-card" class:asking aria-label="Next episode">
   <span class="art" aria-hidden="true">
     {#if artId}
       <img src={posterUrl(artId)} alt="" />
@@ -41,13 +48,25 @@
     <p class="eyebrow">Next episode</p>
     <p class="show" class:has-ep={epLine !== null}>{heading}</p>
     {#if epLine}<p class="ep">{epLine}</p>{/if}
-    <p class="count"><span class="lead">Starts in</span> {seconds} s</p>
+    {#if asking}
+      <p class="ask" role="status">Still watching?</p>
+    {:else}
+      <p class="count"><span class="lead">Starts in</span> {seconds} s</p>
+    {/if}
+    <!-- `data-card-button`: these count as an interaction when they act
+         (`CARD_BUTTON` in $lib/stillWatching). -->
     <div class="actions">
-      <button type="button" class="btn primary small" onclick={onplaynow}>Play now</button>
-      <button type="button" class="btn small" onclick={oncancel}>Cancel</button>
+      <button type="button" class="btn primary small" data-card-button onclick={onplaynow}>
+        {asking ? 'Keep watching' : 'Play now'}
+      </button>
+      <button type="button" class="btn small" data-card-button onclick={oncancel}>
+        {asking ? 'Stop' : 'Cancel'}
+      </button>
     </div>
   </div>
-  <span class="bar" aria-hidden="true"><span style={`width: ${left * 100}%`}></span></span>
+  {#if !asking}
+    <span class="bar" aria-hidden="true"><span style={`width: ${left * 100}%`}></span></span>
+  {/if}
 </section>
 
 <style>
@@ -119,6 +138,10 @@
     font-size: 0.85rem;
     color: var(--text-dim);
   }
+  .ask {
+    margin-top: 0.15rem;
+    font-weight: 700;
+  }
   .actions {
     display: flex;
     gap: 0.5rem;
@@ -173,6 +196,20 @@
       grid-column: 2;
       justify-content: flex-end;
       margin-top: 0;
+    }
+    /* Asking: the question takes the episode's row, and the buttons —
+       wider now — get the next row to themselves, where they always sit. */
+    .asking .show,
+    .asking .ep {
+      display: none;
+    }
+    .ask {
+      grid-column: 1 / -1;
+      margin-top: 0;
+      font-size: 0.88rem;
+    }
+    .asking .actions {
+      grid-column: 1 / -1;
     }
   }
 </style>

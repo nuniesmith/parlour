@@ -1,7 +1,9 @@
 // Autoplay next episode (SEG6, D23): when the countdown card is up, how
 // long it has left, when it fires, and what that leaves the credits.
-// Kept free of the DOM like `skip.ts`; the player page
-// (`routes/watch/[id]`) wires it to the <video> and does the roll.
+// While the card asks "Still watching?" instead (SEG7, `stillWatching.ts`)
+// it is held: up, but not counting. Kept free of the DOM like `skip.ts`;
+// the player page (`routes/watch/[id]`) wires it to the <video> and does
+// the roll.
 
 import { runsToEnd, type CreditsRule } from './skip';
 import type { MediaSegment } from './types';
@@ -81,19 +83,22 @@ export class Autoplay {
    *  is now. The time since the last step counts only if the video was
    *  running then — playing, or at its end — so call this on every
    *  play, pause, seek and end as well as on a timer while the card is
-   *  up. */
-  step(now: number, at: Playhead): CountdownStep {
+   *  up. `hold`: the card is asking "Still watching?" (SEG7, D24) — it is
+   *  up at the same moments, but nothing counts and nothing fires, for as
+   *  long as it takes; once the hold ends, the count starts from the full
+   *  10 s. Play now and Cancel work as usual meanwhile. */
+  step(now: number, at: Playhead, hold = false): CountdownStep {
     if (this.creditsRule() !== 'card' || !this.inStretch(at)) {
       this.remaining = null;
       return { remainingMs: null, fire: false };
     }
-    if (this.remaining === null) {
+    if (this.remaining === null || hold) {
       this.remaining = COUNTDOWN_MS;
     } else if (this.lastRunning) {
       this.remaining = Math.max(0, this.remaining - Math.max(0, now - this.lastAt));
     }
     this.lastAt = now;
-    this.lastRunning = at.playing || at.atEnd;
+    this.lastRunning = !hold && (at.playing || at.atEnd);
     if (this.remaining <= 0) {
       this.firedFlag = true;
       this.remaining = null;

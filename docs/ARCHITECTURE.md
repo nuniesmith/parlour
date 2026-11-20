@@ -320,6 +320,54 @@ The owner uses subtitles on most playback.
   an overlay says why; if its stream doesn't start (a remux
   that never becomes ready), the player is left empty under
   the new episode with the same overlay.
+- Still-watching prompt (SEG7, D24; `web/src/lib/stillWatching.ts`,
+  the card and the player — web only, nothing on the server):
+  the player page keeps one count, the rolls its countdown
+  fired since anybody last touched the player. A roll keeps the
+  page, so the count carries across it; a reload, Back /
+  Forward or another item mounts a new page and starts it
+  over. At 3 (fixed; no preference — it applies whenever
+  autoplay does, and never in a preview) the card comes up at
+  its usual moments asking "Still watching?" instead of
+  counting down: `Autoplay.step` is *held* — the card is up,
+  nothing counts, nothing fires — for as long as it takes,
+  while the episode plays out to its end and the usual stopped
+  report (so it counts as played) and nothing else plays. The
+  same two buttons read Keep watching (Play now: rolls at once)
+  and Stop (Cancel), and stay the same elements either way.
+  Play now, Keep watching, Stop and Cancel are interactions:
+  they start the count over, and their rolls don't count. Any
+  other interaction starts it over too, and turns an asking
+  card back into the countdown from a full 10 s. What counts
+  (`watchForViewer`): `keydown`, `pointerdown`, `click` and
+  `wheel` anywhere on the page (window, capture phase) —
+  pointer movement doesn't, so on a TV whose remote moves a
+  cursor only the click counts; `fullscreenchange` (the
+  browser keeps the Esc that leaves full screen from the
+  page); picture-in-picture opening or closing; and `play`,
+  `pause`, `seeking` and `volumechange` on the `<video>` that
+  the page's script didn't cause. To know which those are,
+  `OwnActions.adopt` wraps the element's `play()`, `pause()`,
+  `load()` and its `currentTime` and `src` setters (own
+  properties on that one element, removed when the page goes),
+  so every call from page script — the player's own (the roll's
+  pause and play, automatic skips, the resume seek) and
+  hls.js's, which seeks at a stream's start and over buffer
+  holes and announces only some of it — expects the one event
+  it causes: `play` when it starts paused media, `pause` when it
+  pauses playing media, `seeking` when a seek starts. An
+  unexpected event came from outside page script: the
+  browser's own controls, media keys, picture-in-picture. The
+  `pause` the browser sends when media plays to its end (it
+  has `ended` set) is not an interaction. A new source (`src`,
+  `load()`) drops the element's queued events, so the
+  expectations go with them at that moment — not at `emptied`,
+  which arrives after the roll has already called `play()` on
+  the next episode. A `seeked` with no seek left running
+  clears any seek still expected. A pointer press or Enter on
+  the card's own buttons (`data-card-button`) is left to the
+  button, which counts when it acts, so an asking card never
+  changes under the pointer before the click lands.
 - Scanner: `notify` watcher for local disks + *arr webhooks/history
   polling for targeted rescans + a periodic full scan. Skip unchanged
   files by (path, size, mtime) fingerprint before probing.
