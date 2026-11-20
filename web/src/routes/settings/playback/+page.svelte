@@ -94,6 +94,11 @@
     goes straight there, skipping the rest of the credits; Cancel stays with this episode, and its
     credits then get a Skip button.
   </p>
+  <p class="hint">
+    After the countdown has started three episodes in a row with nobody pressing a key, clicking or
+    tapping, the next card asks "Still watching?" instead of counting down, and waits: this episode
+    plays to its end meanwhile. Keep watching plays the next one; Stop stays with this one.
+  </p>
 
   <p><button class="btn primary" type="submit" disabled={saving}>Save</button></p>
 </form>

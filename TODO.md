@@ -792,9 +792,30 @@ does NOT depend on Phase 2 transcoding.
   resume prompt. Cancel ends autoplay for that viewing
   and gives the credits the Skip button whatever the
   mode. A preview gets no card.
-- [ ] SEG7 (S) **Still-watching prompt** (stretch): after
+- [x] SEG7 (S) **Still-watching prompt** (stretch): after
   3 episodes autoplayed back-to-back, the countdown card
   asks once; resets on any interaction.
+  *Done 2026-11-20, per D24:* the web player counts the
+  rolls its countdown fired (`lib/stillWatching.ts`). After
+  three in a row with no interaction — the episode the
+  viewer started plus three autoplayed ones — the card at
+  the end of the fourth asks "Still watching?" instead of
+  counting down: Keep watching plays the next episode now,
+  Stop does what Cancel does. It waits as long as it takes
+  while the episode plays out to its end and the usual
+  stopped report, and nothing else plays. Any key press,
+  click, tap or wheel turn on the page, or a play, pause,
+  seek or volume change the player didn't make itself,
+  starts the count over and turns an asking card back into
+  the 10 s countdown. Play now, Keep watching and Stop count
+  as interactions too, so their rolls don't count. The
+  player's own actions — the roll's pause and play, the
+  automatic skips, the resume seek and hls.js's own seeks —
+  don't count, and neither does moving the pointer. The
+  count lives only in the open player page: a roll keeps
+  it, while a reload or another item starts it over.
+  Nothing is stored on the server, there is no new
+  preference, and a preview never asks.
 - **Done when:** a season with a shared intro gets Skip
   Intro on every episode with no manual work, episodes roll
   into each other hands-free, and turning it off per profile
