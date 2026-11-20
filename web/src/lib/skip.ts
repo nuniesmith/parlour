@@ -52,6 +52,18 @@ export function segmentAt(segments: MediaSegment[], ms: number): MediaSegment | 
   return found;
 }
 
+/** Whether a segment runs to the end of the file: it ends within
+ *  `END_OF_FILE_SLACK_MS` of the media's end, or past it. `durationMs`
+ *  is the media's length as the browser has it (null while unknown —
+ *  then no segment does). */
+export function runsToEnd(segment: MediaSegment, durationMs: number | null): boolean {
+  return (
+    durationMs !== null &&
+    Number.isFinite(durationMs) &&
+    segment.end_ms >= durationMs - END_OF_FILE_SLACK_MS
+  );
+}
+
 /** Where a skip lands (D22): the segment's end — or, when the segment
  *  runs to the end of the file, the end of the media, so playback ends
  *  there and the usual stopped report goes out. `durationMs` is the
@@ -60,15 +72,17 @@ export function skipLanding(
   segment: MediaSegment,
   durationMs: number | null,
 ): { ms: number; endsPlayback: boolean } {
-  if (
-    durationMs !== null &&
-    Number.isFinite(durationMs) &&
-    segment.end_ms >= durationMs - END_OF_FILE_SLACK_MS
-  ) {
+  if (durationMs !== null && runsToEnd(segment, durationMs)) {
     return { ms: durationMs, endsPlayback: true };
   }
   return { ms: segment.end_ms, endsPlayback: false };
 }
+
+/** What the credits get (SEG6, D23): the profile's mode as usual
+ *  (`mode`); nothing while the next-episode countdown card holds them
+ *  (`card` — its Play now does the skipping); or the Skip button
+ *  whatever the mode, once that card was cancelled (`button`). */
+export type CreditsRule = 'mode' | 'card' | 'button';
 
 /** What the player does with the playhead where it is now. */
 export interface SkipStep {
@@ -99,12 +113,21 @@ export class Skipper {
    *  `durationMs`: the media's length as the browser has it (null while
    *  unknown). At the end of the media there is nothing left to skip,
    *  even when a segment's end — on ffprobe's clock — lies a little past
-   *  it, as it can when credits run to the end of the file. */
-  step(ms: number, playing: boolean, durationMs: number | null = null): SkipStep {
+   *  it, as it can when credits run to the end of the file. `credits`:
+   *  what the credits get while next-episode autoplay is on (SEG6). */
+  step(
+    ms: number,
+    playing: boolean,
+    durationMs: number | null = null,
+    credits: CreditsRule = 'mode',
+  ): SkipStep {
     if (durationMs !== null && Number.isFinite(durationMs) && ms >= durationMs) {
       return { skip: null, offer: null };
     }
     const segment = segmentAt(this.segments, ms);
+    if (segment !== null && segment.kind === 'credits' && credits !== 'mode') {
+      return { skip: null, offer: credits === 'button' ? segment : null };
+    }
     if (segment === null || this.mode === 'off') return { skip: null, offer: null };
     if (this.mode === 'auto' && !this.skipped.has(segment)) {
       if (!playing) return { skip: null, offer: null };

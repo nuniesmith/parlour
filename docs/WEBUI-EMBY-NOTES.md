@@ -277,8 +277,10 @@ should show the same anatomy with *its* reasons
   cap, and the two Phase 9 choices. Since SEG5 the player
   acts on the skip choice (playback-info carries it as
   `segment_skip`; the fieldset now says intros, recaps and
-  credits, per D22); the page still says autoplay-next waits
-  for SEG6.
+  credits, per D22), and since SEG6 on autoplay-next too
+  (playback-info carries it as `autoplay_next`, with the
+  `next_episode`; the hint now describes the countdown card,
+  per D23).
   Subtitles holds mode + language. Profile edits the active
   profile's name, colour and PIN (adding/deleting profiles
   stays on Who's watching). Account holds change password,

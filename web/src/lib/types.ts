@@ -211,6 +211,14 @@ export interface PlaybackInfo {
   /** The active profile's choice for those segments (SEG5), read
    *  fresh with every playback. */
   segment_skip: SegmentSkip;
+  /** The episode after this one in series order (SEG6, D23) — watched
+   *  or not, skipping any with no available file — shaped like a Next
+   *  Up row. Null for a movie and for the last episode. */
+  next_episode: RailItem | null;
+  /** Whether the active profile wants it played after the countdown
+   *  card (SEG6, Preferences → Playback), read fresh with every
+   *  playback. */
+  autoplay_next: boolean;
   warnings: string[];
 }
 

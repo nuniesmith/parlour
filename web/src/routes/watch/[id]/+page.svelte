@@ -1,8 +1,11 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from 'svelte';
+  import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import Hls from 'hls.js';
   import { api } from '$lib/api';
+  import { Autoplay } from '$lib/autoplay';
+  import NextEpisodeCard from '$lib/NextEpisodeCard.svelte';
   import { formatSegmentTime, previewParam } from '$lib/segments';
   import {
     SKIPPED_NOTICE_MS,
@@ -10,14 +13,18 @@
     SKIP_LABELS,
     Skipper,
     playerSkipMode,
+    runsToEnd,
     skipLanding,
   } from '$lib/skip';
+  import { carryView, releaseView } from '$lib/viewKey.svelte';
   import {
     deviceLabel,
+    episodeLabel,
     formatDurationMs,
     type ItemDetail,
     type MediaSegment,
     type PlaybackInfo,
+    type RailItem,
     type SegmentKind,
   } from '$lib/types';
 
@@ -27,11 +34,16 @@
   let video = $state<HTMLVideoElement | null>(null);
   let hls: Hls | null = null;
   let started = $state(false);
-  let resumeChoice = $state<'pending' | 'resume' | 'restart'>('pending');
   let progressTimer: ReturnType<typeof setInterval> | null = null;
+  // The start report for the episode playing now has gone out.
   let reported = false;
 
-  const itemId = $derived(page.params.id ?? '');
+  // The item this page opened on. A roll (SEG6) swaps later episodes
+  // into this same page, so after the first load everything reads
+  // `info` and `detail` instead.
+  const itemId = page.params.id ?? '';
+  // The path the root layout mounted this page under (`$lib/viewKey`).
+  const mountPath = page.url.pathname;
 
   // SEG4 "Preview from here" (D21): `?preview=<ms>` opens the player
   // at that time and reports nothing — no start, progress or stopped
@@ -60,6 +72,21 @@
   // playback starts again.
   let endReported = false;
 
+  // SEG6 autoplay (D23): the countdown card at the credits or the end
+  // of the file, and the roll into the next episode. `nextCard` is the
+  // time the card has left while it is up; a timer keeps checking the
+  // playhead meanwhile, since a paused or ended video sends no
+  // timeupdate.
+  let autoplay: Autoplay | null = null;
+  let nextCard = $state<number | null>(null);
+  let countdownTimer: ReturnType<typeof setInterval> | null = null;
+  // A roll is under way — the old episode has been stopped, the next one
+  // is loading — and where to; or why it could not start.
+  let rolling = $state(false);
+  let rollingTo = $state.raw<RailItem | null>(null);
+  let rollError = $state<string | null>(null);
+  let destroyed = false;
+
   // D22 full screen: the whole player area, so the Skip button and the
   // notice stay in view. The <video>'s own full-screen button would show
   // the bare video, so Chromium-based browsers lose it: `controlslist`
@@ -77,13 +104,22 @@
   let idle = $state(false);
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
-  function report(kind: 'start' | 'progress' | 'stopped') {
-    if (previewMs !== null) return;
-    if (!info || !video || stoppedByAdmin) return;
+  /** Report on the episode playing now; resolves once the server has
+   *  answered, so a roll can send the next start report after this
+   *  episode's stopped one (D23). `positionMs` stands in for the
+   *  playhead: a roll out of credits that run to the end of the file
+   *  reports the end. Progress only ever follows a start report. Never
+   *  rejects: a report that can't reach the server is lost, as before,
+   *  and must not stop a roll. */
+  function report(kind: 'start' | 'progress' | 'stopped', positionMs?: number): Promise<void> {
+    if (previewMs !== null) return Promise.resolve();
+    if (!info || !video || stoppedByAdmin) return Promise.resolve();
+    if (kind === 'progress' && !reported) return Promise.resolve();
+    const sentFor = info.item_id;
     const body: Record<string, unknown> = {
       item_id: info.item_id,
       file_id: info.file_id,
-      position_ms: Math.round((video.currentTime || 0) * 1000),
+      position_ms: positionMs ?? Math.round((video.currentTime || 0) * 1000),
       duration_ms: video.duration ? Math.round(video.duration * 1000) : undefined,
     };
     if (kind === 'start') {
@@ -93,20 +129,36 @@
     } else if (sessionId) {
       body.session_id = sessionId;
     }
-    void api<{ session_id: string }>(`/api/v1/playback/${kind}`, {
+    return api<{ session_id: string }>(`/api/v1/playback/${kind}`, {
       method: 'POST',
       body: JSON.stringify(body),
       keepalive: kind === 'stopped',
-    }).then(({ status, data }) => {
-      if (kind === 'start' && data) sessionId = data.session_id;
-      // 409: the server stopped this session and revoked its stream.
-      if (kind === 'progress' && status === 409) onStoppedByAdmin();
-    });
+    })
+      .then(({ status, data }) => {
+        // Answers about an episode the player has since rolled on from
+        // are stale.
+        if (info?.item_id !== sentFor) return;
+        if (kind === 'start' && data) sessionId = data.session_id;
+        // 409: the server stopped this session and revoked its stream.
+        if (kind === 'progress' && status === 409) onStoppedByAdmin();
+      })
+      .catch(() => {});
+  }
+
+  /** The start report goes out once the episode is at its opening
+   *  position and playing — so a resume, or a roll into a partly
+   *  watched episode, reports where it really starts — then progress
+   *  every 10 s. A preview reports nothing. */
+  function startReports() {
+    if (previewMs !== null || rolling || !positioned || !video || video.paused) return;
+    if (!reported) void report('start');
+    if (!progressTimer) progressTimer = setInterval(() => void report('progress'), 10_000);
   }
 
   function onStoppedByAdmin() {
     stoppedByAdmin = true;
     offer = null;
+    setCard(null);
     if (progressTimer) clearInterval(progressTimer);
     progressTimer = null;
     video?.pause();
@@ -120,21 +172,171 @@
     return video && Number.isFinite(video.duration) ? video.duration * 1000 : null;
   }
 
-  /** Where the playhead is now → the Skip button to show, or (auto
-   *  mode, first time there) the segment to skip. Runs on every
-   *  timeupdate, seek and play. Once the media has ended nothing is
-   *  offered: a segment's end can lie a little past the browser's end. */
-  function checkSegments() {
-    if (!video || !skipper || !positioned || stoppedByAdmin || video.ended) {
+  /** The media is at its end: ended, or the playhead is there — Chrome
+   *  leaves `ended` false after a seek to the end made while paused. */
+  function atMediaEnd(): boolean {
+    if (!video) return false;
+    const durationMs = mediaDurationMs();
+    return video.ended || (durationMs !== null && video.currentTime * 1000 >= durationMs);
+  }
+
+  /** Where the playhead is now → the countdown card (SEG6), the Skip
+   *  button to show, or (auto mode, first time there) the segment to
+   *  skip. Runs on every timeupdate, seek, play, pause and end, and on a
+   *  timer while the card is up. While autoplay is on, the card stands in
+   *  for Skip Credits and the automatic credits skip; after Cancel the
+   *  credits get the button whatever the mode (D23). Once the media has
+   *  ended no Skip button is offered: a segment's end can lie a little
+   *  past the browser's end. */
+  function checkPlayhead() {
+    if (!video || !skipper || !autoplay || !positioned || stoppedByAdmin || rolling) {
+      offer = null;
+      setCard(null);
+      return;
+    }
+    const ms = video.currentTime * 1000;
+    const durationMs = mediaDurationMs();
+    const atEnd = atMediaEnd();
+    const card = autoplay.step(performance.now(), {
+      ms,
+      playing: !video.paused && !atEnd,
+      atEnd,
+      durationMs,
+    });
+    if (card.fire) {
+      void rollToNext();
+      return;
+    }
+    setCard(card.remainingMs);
+    if (atEnd) {
       offer = null;
       return;
     }
-    const step = skipper.step(video.currentTime * 1000, !video.paused, mediaDurationMs());
+    const step = skipper.step(ms, !video.paused, durationMs, autoplay.creditsRule());
     if (step.skip) {
       skipSegment(step.skip);
       showSkipped(step.skip.kind);
     }
     offer = step.offer;
+  }
+
+  /** Put the countdown card up with this much time left, or take it
+   *  down (null). While it is up a timer keeps the count going. */
+  function setCard(remainingMs: number | null) {
+    nextCard = remainingMs;
+    if (remainingMs !== null && countdownTimer === null) {
+      countdownTimer = setInterval(checkPlayhead, 250);
+    } else if (remainingMs === null && countdownTimer !== null) {
+      clearInterval(countdownTimer);
+      countdownTimer = null;
+    }
+  }
+
+  function playNextNow() {
+    if (autoplay?.playNow()) void rollToNext();
+  }
+
+  /** Cancel (D23): no card again in this playback, and the credits get
+   *  the Skip button whatever the profile's mode. */
+  function cancelAutoplay() {
+    autoplay?.cancel();
+    checkPlayhead();
+  }
+
+  /** "S1:E3 · Title" for the next episode, or its title alone. */
+  function nextLabel(next: RailItem): string {
+    return episodeLabel(next.season_number, next.episode_number, next.title) ?? next.title;
+  }
+
+  /** The roll (SEG6, D23), on Play now or when the countdown runs out.
+   *  This episode's stopped report goes first: at the end of the file
+   *  when the credits run there — as D22's Skip Credits reports it, so
+   *  the episode counts as played — otherwise where the playhead is.
+   *  Then the next episode loads into this same player, so full screen
+   *  stays: a partly watched one from where the viewer left off, with no
+   *  resume prompt, a played one from the beginning. Its start report
+   *  goes out once it plays from there. The URL moves to it, replacing
+   *  this history entry, without remounting the page. */
+  async function rollToNext() {
+    const next = info?.next_episode;
+    if (!video || !info || !next || rolling || destroyed) return;
+    rolling = true;
+    rollingTo = next;
+    rollError = null;
+    offer = null;
+    skippedNotice = null;
+    setCard(null);
+    if (progressTimer) clearInterval(progressTimer);
+    progressTimer = null;
+    video.pause();
+
+    const durationMs = mediaDurationMs();
+    const credits = info.segments.find((s) => s.kind === 'credits' && s.end_ms > s.start_ms);
+    const inCreditsToEnd =
+      credits !== undefined &&
+      video.currentTime * 1000 >= credits.start_ms &&
+      runsToEnd(credits, durationMs);
+    if (durationMs !== null && (atMediaEnd() || inCreditsToEnd)) {
+      if (!endReported) {
+        endReported = true;
+        await report('stopped', Math.round(durationMs));
+      }
+    } else if (reported) {
+      await report('stopped');
+    }
+    reported = false;
+    sessionId = null;
+    if (destroyed) return;
+
+    // The next episode, fresh from the server: its stream, its segments,
+    // its own next episode, and the profile's choices as they are now.
+    // If that fails — the server refuses, or can't be reached — this
+    // episode stays, paused, and the overlay says why.
+    const loaded = await Promise.all([
+      api<ItemDetail>(`/api/v1/items/${next.id}`),
+      api<PlaybackInfo>(`/api/v1/items/${next.id}/playback-info?client=web&network=lan`),
+    ]).then(
+      ([d, p]) =>
+        d.data && p.data
+          ? { detail: d.data, info: p.data }
+          : (p.error ?? d.error ?? 'It could not be loaded.'),
+      (e: unknown) => (e instanceof Error ? e.message : String(e)),
+    );
+    if (destroyed) return;
+    if (typeof loaded === 'string') {
+      rolling = false;
+      rollError = loaded;
+      return;
+    }
+    const p = loaded.info;
+    hls?.destroy();
+    hls = null;
+    detail = loaded.detail;
+    info = p;
+    skipper = new Skipper(p.segments, playerSkipMode(p.segment_skip, false));
+    autoplay = new Autoplay(p.segments, p.autoplay_next && p.next_episode !== null);
+    positioned = false;
+    endReported = false;
+    const path = `/watch/${p.item_id}`;
+    carryView(mountPath, path);
+    void goto(path, { replaceState: true, noScroll: true, keepFocus: true });
+    await tick(); // the next episode's subtitle <track>s
+    try {
+      await attach(p.resume_position_ms > 0 ? p.resume_position_ms : null);
+    } catch (e) {
+      if (destroyed) return;
+      // The page is the next episode's now; nothing of the old one may
+      // go on playing under its name.
+      video.removeAttribute('src');
+      video.load();
+      rolling = false;
+      rollError = e instanceof Error ? e.message : String(e);
+      return;
+    }
+    if (destroyed) return;
+    rolling = false;
+    rollingTo = null;
+    video.play().catch(() => {});
   }
 
   /** D22: a skip jumps to the segment's end. Credits that run to the
@@ -188,19 +390,25 @@
 
   async function waitForPlaylist(url: string) {
     // Remux answers 503 + Retry-After until the playlist exists.
-    for (let i = 0; i < 45; i++) {
+    for (let i = 0; i < 45 && !destroyed; i++) {
       const res = await fetch(url, { credentials: 'same-origin' });
       if (res.ok) return;
       await new Promise((r) => setTimeout(r, 2000));
     }
+    if (destroyed) return;
     throw new Error('The remux is taking too long — try again in a bit.');
   }
 
-  async function attach() {
+  /** Load `info`'s stream into the player. Once its metadata is in, seek
+   *  to `startMs` (a resume point or preview time; null for the
+   *  beginning), pick the subtitle, and let skips, the card and the
+   *  start report go. */
+  async function attach(startMs: number | null) {
     if (!video || !info) return;
     const url = info.stream_url;
     if (info.stream_kind === 'hls') {
       await waitForPlaylist(url);
+      if (destroyed || !video) return;
       if (video.canPlayType('application/vnd.apple.mpegurl')) {
         video.src = url;
       } else if (Hls.isSupported()) {
@@ -217,14 +425,11 @@
     video.addEventListener(
       'loadedmetadata',
       () => {
-        if (previewMs !== null && video) {
-          video.currentTime = previewMs / 1000;
-        } else if (resumeChoice === 'resume' && info && info.resume_position_ms > 0 && video) {
-          video.currentTime = info.resume_position_ms / 1000;
-        }
+        if (startMs !== null && startMs > 0 && video) video.currentTime = startMs / 1000;
         applySubtitleDefault();
         positioned = true;
-        checkSegments();
+        checkPlayhead();
+        startReports();
       },
       { once: true },
     );
@@ -242,9 +447,9 @@
   }
 
   function begin(choice: 'resume' | 'restart') {
-    resumeChoice = choice;
     started = true;
-    void attach().then(() => video?.play().catch(() => {}));
+    const startMs = choice === 'resume' && info ? info.resume_position_ms : null;
+    void attach(startMs).then(() => video?.play().catch(() => {}));
   }
 
   function onPlay() {
@@ -252,19 +457,20 @@
     endReported = false;
     wake();
     // Playback starting inside a segment counts as reaching it (D22).
-    checkSegments();
-    if (previewMs !== null) return; // a preview reports nothing
-    if (!reported) report('start');
-    if (!progressTimer) {
-      progressTimer = setInterval(() => report('progress'), 10_000);
-    }
+    checkPlayhead();
+    startReports();
   }
   function onPause() {
     paused = true;
-    report('progress');
+    // The countdown waits while the video is paused (D23).
+    checkPlayhead();
+    if (!rolling) void report('progress');
   }
   function onEnded() {
+    if (rolling) return;
     endPlayback();
+    // ...and keeps running once it has ended.
+    checkPlayhead();
   }
   /** Playback reached the end of the media — by playing there, or by a
    *  skip that ended it (D22): one stopped report per time it gets
@@ -273,7 +479,7 @@
     paused = true;
     if (endReported) return;
     endReported = true;
-    report('stopped');
+    void report('stopped');
   }
 
   function onKey(event: KeyboardEvent) {
@@ -290,6 +496,8 @@
       case 'Space':
       case 'KeyK':
         event.preventDefault();
+        // Mid-roll the old episode is done and the next is loading.
+        if (rolling) break;
         if (video.paused) void video.play();
         else video.pause();
         break;
@@ -317,18 +525,22 @@
     if (p.data) {
       info = p.data;
       skipper = new Skipper(p.data.segments, playerSkipMode(p.data.segment_skip, previewMs !== null));
+      // A preview gets no card and no autoplay (D23).
+      autoplay = new Autoplay(
+        p.data.segments,
+        previewMs === null && p.data.autoplay_next && p.data.next_episode !== null,
+      );
       if (previewMs !== null) {
         // Straight to the preview time: no resume prompt.
         started = true;
         await tick();
-        await attach();
+        await attach(previewMs);
         video?.play().catch(() => {});
       } else if (p.data.resume_position_ms <= 0) {
-        resumeChoice = 'restart';
         started = true;
         // The <video> only exists once `info` has rendered.
         await tick();
-        await attach();
+        await attach(null);
       }
     } else {
       error = p.error ?? 'Playback is not available for this item.';
@@ -336,11 +548,14 @@
   });
 
   onDestroy(() => {
+    destroyed = true;
     if (progressTimer) clearInterval(progressTimer);
+    if (countdownTimer) clearInterval(countdownTimer);
     if (noticeTimer) clearTimeout(noticeTimer);
     if (idleTimer) clearTimeout(idleTimer);
-    if (reported) report('stopped');
+    if (reported) void report('stopped');
     hls?.destroy();
+    releaseView(mountPath);
   });
 </script>
 
@@ -393,8 +608,8 @@
       onplay={onPlay}
       onpause={onPause}
       onended={onEnded}
-      ontimeupdate={checkSegments}
-      onseeked={checkSegments}
+      ontimeupdate={checkPlayhead}
+      onseeked={checkPlayhead}
     >
       {#each info.subtitles.filter((s) => s.text && s.url) as sub (sub.id)}
         <track kind="subtitles" src={sub.url} srclang={sub.language ?? 'und'} label={`${sub.language ?? 'sub'}${sub.is_forced ? ' (forced)' : ''}${sub.is_sdh ? ' SDH' : ''}`} />
@@ -411,6 +626,19 @@
         </div>
       </div>
     {/if}
+    {#if rolling && rollingTo}
+      <div class="rolling" role="status">
+        <p>Starting {nextLabel(rollingTo)}…</p>
+      </div>
+    {:else if rollError && rollingTo}
+      <div class="rolling" role="alert">
+        <p>The next episode, {nextLabel(rollingTo)}, didn't start: {rollError}</p>
+        <div class="row">
+          <a class="btn" href={`/item/${rollingTo.id}`}>Open it</a>
+          <button type="button" class="btn" onclick={() => (rollError = null)}>Close</button>
+        </div>
+      </div>
+    {/if}
     <div class="skip-layer">
       <p class="skipped" class:shown={skippedNotice !== null} role="status">
         {skippedNotice ?? ''}
@@ -419,6 +647,14 @@
         <button type="button" class="btn primary skip" onclick={() => offer && skipSegment(offer)}>
           {SKIP_LABELS[offer.kind]}
         </button>
+      {/if}
+      {#if nextCard !== null && info.next_episode}
+        <NextEpisodeCard
+          next={info.next_episode}
+          remainingMs={nextCard}
+          onplaynow={playNextNow}
+          oncancel={cancelAutoplay}
+        />
       {/if}
     </div>
     {#if canFullscreen}
@@ -481,9 +717,12 @@
   .player-wrap.own-fullscreen video::-webkit-media-controls-fullscreen-button {
     display: none;
   }
-  /* Above the browser's control bar, so neither covers the other. */
+  /* Above the browser's control bar, so neither covers the other. It
+     spans the player, so the next-episode card can size itself to it;
+     what it holds sits at the right. */
   .skip-layer {
     position: absolute;
+    left: 1.25rem;
     right: 1.25rem;
     bottom: 4.5rem;
     display: flex;
@@ -542,7 +781,8 @@
     opacity: 0;
     pointer-events: none;
   }
-  .resume {
+  .resume,
+  .rolling {
     position: absolute;
     inset: 0;
     display: grid;
@@ -551,6 +791,12 @@
     gap: 0.8rem;
     background: rgba(0, 0, 0, 0.72);
     text-align: center;
+  }
+  .rolling {
+    padding: 1rem;
+  }
+  .rolling p {
+    margin: 0;
   }
   .row {
     display: flex;

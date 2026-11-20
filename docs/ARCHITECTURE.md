@@ -263,6 +263,63 @@ The owner uses subtitles on most playback.
   and hidden with `::-webkit-media-controls-fullscreen-button`.
   Firefox and Safari keep theirs, which shows the bare video
   without the Skip button.
+- Autoplay next episode (SEG6, D23; `web/src/lib/autoplay.ts`,
+  `web/src/lib/NextEpisodeCard.svelte`, the player, and
+  `discover::next_episode`): playback-info also returns
+  `next_episode` and the active profile's `autoplay_next`
+  (Preferences → Playback, default on), read on every call
+  like `segment_skip`. `next_episode` is the episode after
+  this one in series order — (season, episode) above the
+  current one, so specials (season 0) lead into season 1 and
+  never follow it — played or not, skipping episodes with no
+  available file (playback-info would refuse them), within
+  the same series and libraries the profile can reach; null
+  for a movie, the last episode, and episodes without both
+  numbers. It is shaped like a Home Next Up row (series
+  title, poster pick) and sent whatever `autoplay_next`
+  says. The 1.6 Next Up query is not used: its
+  unplayed-only filter would stop a rewatch from rolling.
+  In the player, with autoplay on, a next episode, and not
+  a preview, the countdown card is up while the playhead is
+  in the credits — from their start to their end, or on to
+  the end of the file when they run there (1 s slack, as for
+  skips) — and once the media is at its end (ended, or a
+  paused seek to the end, which Chrome doesn't mark ended).
+  It counts 10 s while the video plays or has ended and
+  waits while it is paused; leaving that stretch takes it
+  down, and coming back starts the count again. The card
+  shows the series poster (a Next Up tile's pick, else a
+  letter tile), the show, `S1:E2 · Title`, "Starts in N s"
+  and a draining bar, with Play now and Cancel; on phones
+  (up to 600 px wide) it keeps to two rows — the episode,
+  then the count beside the buttons — so it fits a 16:9
+  player above the browser's controls. While
+  autoplay is on, the credits get neither the Skip button
+  nor the automatic skip — the card's Play now does the
+  skipping. Cancel ends autoplay for that playback: no card
+  again, and the credits get the Skip button whatever the
+  mode. Play now, or the count running out, rolls: the old
+  episode's stopped report goes first, at the end of the
+  file when the playhead is in credits that run there (so
+  the ≥ 90 % rule marks it played, as a Skip Credits would)
+  and otherwise at the playhead; then the next episode's
+  playback-info is fetched and its stream loads into the
+  same `<video>` — so full screen stays — from its resume
+  point with no prompt (played episodes resume at 0), and
+  its start report goes out once it plays from there. The
+  URL moves with `goto(…, { replaceState: true })`; the
+  root layout keys pages on their path, so the player tells
+  it (`web/src/lib/viewKey.svelte.ts`) which paths it has
+  carried its page to, and those keep its key until the
+  page goes away. Back, Forward and reload then land on the
+  episode the URL names, and no history entry is added.
+  Answers to reports about an episode the player has rolled
+  on from are ignored, and a report that can't reach the
+  server never holds a roll up. If the next episode's
+  details can't be fetched, the old one stays, paused, and
+  an overlay says why; if its stream doesn't start (a remux
+  that never becomes ready), the player is left empty under
+  the new episode with the same overlay.
 - Scanner: `notify` watcher for local disks + *arr webhooks/history
   polling for targeted rescans + a periodic full scan. Skip unchanged
   files by (path, size, mtime) fingerprint before probing.
