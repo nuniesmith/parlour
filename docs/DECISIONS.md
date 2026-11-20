@@ -415,3 +415,13 @@ reviews everything afterwards and can amend it.
   credits. The countdown waits while the video is paused, but
   keeps running once the video has ended. A preview (D21)
   gets no card and no autoplay.
+
+## 2026-11-19 — Still-watching prompt defaults (SEG7)
+
+Put to the owner by the SEG7 run as six proposed defaults after
+reading the segment and playback code, and recorded the same day
+under the owner's standing instruction to keep the chain moving;
+recorded here so SEG7's tests can assert against them. The owner
+reviews everything afterwards and can amend it.
+
+- **D24 Still-watching prompt (interaction, counting, asking card, once, scope, wording):** an interaction is a key press, click, tap or scroll-wheel turn anywhere on the player page, including the browser's own controls and the card, Skip and full-screen buttons, or a play, pause, seek or volume change the player didn't make itself (media keys, picture-in-picture). The player's own actions don't count (the roll's pause and play, auto-skip, the resume seek), and moving the pointer alone doesn't count — on a TV browser whose remote only moves an on-screen cursor, only a click counts. Only rolls the countdown fired count: Play now is an interaction, so it starts the count over and its roll doesn't count. With no interaction the viewer gets the episode they started plus three autoplayed ones, and the card at the end of the fourth asks. The asking card comes up at the same moments as the countdown card, says "Still watching?", has no countdown, and offers Keep watching (plays the next episode now) and Stop (exactly what D23's Cancel does). It waits as long as it takes; meanwhile the credits play to the end and stop there with the usual stopped report, so that episode counts as played, as it does today, and nothing else plays. Any other interaction also answers it, and it turns back into the normal 10 s countdown. It asks once and doesn't repeat itself; after an answer the count starts over, so it asks again after three more autoplays. The count is kept only in the open player page: a roll keeps the same page so the count carries across it, while a reload, Back/Forward or opening another item starts it over. Nothing is stored on the server, there's no new preference (it's on whenever autoplay is), the threshold is fixed at 3, and a preview (D21) never asks. Wording is "Still watching?", "Keep watching" and "Stop", avoiding "Continue Watching", which is already the name of a Home rail.
