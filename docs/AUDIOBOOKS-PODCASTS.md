@@ -58,7 +58,7 @@ not. Parlour stays MIT.
 
 ## Phase 10 — Native audiobooks
 
-### What a book is on disk (AB2)
+### What a book is on disk (AB2, built 2026-11-23)
 
 The scanner follows the folder layouts audiobook tools and
 downloaders already produce (`Author/Title/…`,
@@ -82,7 +82,7 @@ scan without renaming:
   the library root. Re-scans are idempotent, and moving a book's
   folder makes it a new book, the same as a movie today.
 
-### Metadata from tags (AB2)
+### Metadata from tags (AB2, built)
 
 ffprobe reads every track's format tags and the chapters. The first
 track that has a tag wins:
@@ -102,7 +102,7 @@ are split. They are stored as `people` linked through `item_people`
 with roles `author` / `narrator`. That is the same table cast uses,
 so a later author page (AB7) is a query, not a migration.
 
-### Chapters (AB2)
+### Chapters (AB2, built)
 
 - A track with embedded chapters (m4b/m4a, some mp3s) contributes
   them, shifted onto the book's timeline by the track's start
@@ -112,7 +112,7 @@ so a later author page (AB7) is a query, not a migration.
 - Chapters live in `book_chapters (item_id, chapter_index, start_ms,
   end_ms, title)`, rebuilt whenever a book's tracks change.
 
-### Progress (AB4 — provisional until D29)
+### Progress (AB4, built — provisional until D29)
 
 - Stored in `book_progress (profile_id, item_id, position_ms,
   duration_ms, finished, finished_at, last_listened_at,
@@ -131,7 +131,7 @@ so a later author page (AB7) is a query, not a migration.
 - Writes are **last-write-wins** in arrival order, as video
   reporting is today. The rule for offline clients is part of D33.
 
-### Native API (AB3/AB4)
+### Native API (AB3/AB4, built)
 
 All under `/api/v1`, cookie session, scoped to the **active
 profile's** library access (no access reads as 404, like items).
@@ -150,7 +150,7 @@ profile's** library access (no access reads as 404, like items).
 with a 6-hour HMAC token. AVPlayer, ExoPlayer and `<audio>` can play
 it without sending cookies.
 
-### Web (AB5)
+### Web (AB5, built)
 
 An audiobooks library's page lists books (cover, title, authors,
 progress). `/book/[id]` plays the book in an `<audio>` element,

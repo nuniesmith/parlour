@@ -79,6 +79,7 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::metadata::routes())
         .merge(crate::discover::routes())
         .merge(crate::playback::routes())
+        .merge(crate::audiobooks::routes())
         .merge(crate::segments::routes())
         .merge(crate::emby_admin::routes())
         .merge(crate::dashboard::routes())
@@ -228,6 +229,10 @@ mod tests {
             "/api/v1/admin/server",
             "/api/v1/admin/activity",
             "/api/v1/admin/notices",
+            "/api/v1/audiobooks",
+            "/api/v1/audiobooks/progress",
+            "/api/v1/audiobooks/00000000-0000-0000-0000-000000000000",
+            "/api/v1/audiobooks/00000000-0000-0000-0000-000000000000/progress",
         ] {
             let (status, _) = get(test_router(), path).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{path}");

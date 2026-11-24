@@ -271,7 +271,7 @@ enum TokenCheck {
     Invalid,
 }
 
-fn make_token(state: &PlaybackState, file_id: Uuid, profile_id: Uuid) -> String {
+pub(crate) fn make_token(state: &PlaybackState, file_id: Uuid, profile_id: Uuid) -> String {
     let claims = TokenClaims {
         fid: file_id,
         pid: profile_id,
@@ -328,7 +328,7 @@ fn revoke_tokens(state: &PlaybackState, profile_id: Uuid, file_id: Uuid) {
 /// Authorise a media request: a valid stream token for this
 /// file, or a signed-in session whose active profile can access
 /// the file's library.
-async fn authorise_media(
+pub(crate) async fn authorise_media(
     app: &AppState,
     file_id: Uuid,
     token: Option<&str>,
@@ -392,7 +392,7 @@ async fn load_file(app: &AppState, file_id: Uuid) -> Result<FileRow, AppError> {
     .ok_or_else(|| AppError::NotFound("file".into()))
 }
 
-fn content_type_for(container: Option<&str>, path: &str) -> &'static str {
+pub(crate) fn content_type_for(container: Option<&str>, path: &str) -> &'static str {
     let ext = path.rsplit('.').next().unwrap_or("").to_lowercase();
     match ext.as_str() {
         "mp4" | "m4v" => "video/mp4",
@@ -403,7 +403,11 @@ fn content_type_for(container: Option<&str>, path: &str) -> &'static str {
         "ts" | "m2ts" => "video/mp2t",
         "mp3" => "audio/mpeg",
         "flac" => "audio/flac",
-        "m4a" => "audio/mp4",
+        "m4a" | "m4b" => "audio/mp4",
+        "ogg" | "oga" | "opus" => "audio/ogg",
+        "aac" => "audio/aac",
+        "wav" => "audio/wav",
+        "wma" => "audio/x-ms-wma",
         _ => match container.unwrap_or("") {
             "mp4" => "video/mp4",
             "webm" => "video/webm",
@@ -827,7 +831,7 @@ async fn stream_file(
     .await
 }
 
-async fn serve_range(
+pub(crate) async fn serve_range(
     path: &str,
     size: i64,
     headers: &HeaderMap,

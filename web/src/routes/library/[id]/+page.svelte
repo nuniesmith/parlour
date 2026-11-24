@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { page } from '$app/state';
   import { api } from '$lib/api';
+  import BookShelf from '$lib/BookShelf.svelte';
   import Poster from '$lib/Poster.svelte';
   import type { Item } from '$lib/types';
 
@@ -53,79 +54,105 @@
     }
   }
 
-  onMount(() => {
-    load();
+  // Audiobooks libraries list books instead (Phase 10, AB5); the
+  // library's kind decides which view this page is.
+  let libraryKind = $state<string | null>(null);
+
+  onMount(async () => {
+    const { data, error: err } = await api<{ kind: string }>(`/api/v1/libraries/${page.params.id}`);
+    if (!data) {
+      loading = false;
+      error = err ?? 'Could not load this library.';
+      return;
+    }
+    libraryKind = data.kind;
+    if (data.kind !== 'audiobooks') await load();
+  });
+
+  // The grid (and its sentinel) only exists once the kind is known.
+  $effect(() => {
+    if (!sentinel) return;
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries.some((e) => e.isIntersecting)) visible += PAGE;
       },
       { rootMargin: '600px' },
     );
-    if (sentinel) observer.observe(sentinel);
+    observer.observe(sentinel);
     return () => observer.disconnect();
   });
 
 </script>
 
-<div class="toolbar" role="group" aria-label="Filters">
-  <label>
-    Type
-    <select bind:value={kind} onchange={load}>
-      <option value="">All</option>
-      <option value="movie">Movies</option>
-      <option value="series">Series</option>
-    </select>
-  </label>
-  <label>
-    Genre
-    <select bind:value={genre} onchange={load}>
-      <option value="">All</option>
-      {#each allGenres as g (g)}<option value={g}>{g}</option>{/each}
-    </select>
-  </label>
-  <label>
-    Rating
-    <select bind:value={rating} onchange={load}>
-      <option value="">All</option>
-      {#each allRatings as r (r)}<option value={r}>{r}</option>{/each}
-    </select>
-  </label>
-  <label>
-    Year
-    <select bind:value={year} onchange={load}>
-      <option value="">All</option>
-      {#each allYears as y (y)}<option value={String(y)}>{y}</option>{/each}
-    </select>
-  </label>
-  <label>
-    Sort
-    <select bind:value={sort} onchange={load}>
-      <option value="title">Title</option>
-      <option value="added">Recently added</option>
-      <option value="year">Year (newest)</option>
-      <option value="rating">Top rated</option>
-    </select>
-  </label>
-  <label class="check">
-    <input type="checkbox" bind:checked={unwatched} onchange={load} /> Unwatched only
-  </label>
-</div>
-
-{#if error}
-  <p class="error" role="alert">{error}</p>
-{:else if loading}
-  <p class="dim">Loading…</p>
-{:else if items.length === 0}
-  <p class="dim">Nothing matches. Try clearing a filter — or scan the library from Server → Library.</p>
+{#if libraryKind === 'audiobooks'}
+  <BookShelf libraryId={page.params.id ?? ''} />
+{:else if libraryKind === null}
+  {#if error}
+    <p class="error" role="alert">{error}</p>
+  {:else}
+    <p class="dim">Loading…</p>
+  {/if}
 {:else}
-  <div class="grid">
-    {#each items.slice(0, visible) as item (item.id)}
-      <Poster {item} />
-    {/each}
+  <div class="toolbar" role="group" aria-label="Filters">
+    <label>
+      Type
+      <select bind:value={kind} onchange={load}>
+        <option value="">All</option>
+        <option value="movie">Movies</option>
+        <option value="series">Series</option>
+      </select>
+    </label>
+    <label>
+      Genre
+      <select bind:value={genre} onchange={load}>
+        <option value="">All</option>
+        {#each allGenres as g (g)}<option value={g}>{g}</option>{/each}
+      </select>
+    </label>
+    <label>
+      Rating
+      <select bind:value={rating} onchange={load}>
+        <option value="">All</option>
+        {#each allRatings as r (r)}<option value={r}>{r}</option>{/each}
+      </select>
+    </label>
+    <label>
+      Year
+      <select bind:value={year} onchange={load}>
+        <option value="">All</option>
+        {#each allYears as y (y)}<option value={String(y)}>{y}</option>{/each}
+      </select>
+    </label>
+    <label>
+      Sort
+      <select bind:value={sort} onchange={load}>
+        <option value="title">Title</option>
+        <option value="added">Recently added</option>
+        <option value="year">Year (newest)</option>
+        <option value="rating">Top rated</option>
+      </select>
+    </label>
+    <label class="check">
+      <input type="checkbox" bind:checked={unwatched} onchange={load} /> Unwatched only
+    </label>
   </div>
-  <div bind:this={sentinel} class="sentinel" aria-hidden="true"></div>
-  {#if visible < items.length}
-    <p class="dim center">Showing {Math.min(visible, items.length)} of {items.length}</p>
+
+  {#if error}
+    <p class="error" role="alert">{error}</p>
+  {:else if loading}
+    <p class="dim">Loading…</p>
+  {:else if items.length === 0}
+    <p class="dim">Nothing matches. Try clearing a filter — or scan the library from Server → Library.</p>
+  {:else}
+    <div class="grid">
+      {#each items.slice(0, visible) as item (item.id)}
+        <Poster {item} />
+      {/each}
+    </div>
+    <div bind:this={sentinel} class="sentinel" aria-hidden="true"></div>
+    {#if visible < items.length}
+      <p class="dim center">Showing {Math.min(visible, items.length)} of {items.length}</p>
+    {/if}
   {/if}
 {/if}
 
