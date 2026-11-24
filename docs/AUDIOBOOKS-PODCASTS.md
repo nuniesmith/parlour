@@ -74,9 +74,10 @@ scan without renaming:
   the earlier discs' files.
 - An audio file sitting directly in the library root is a book on
   its own (typical for single-file `.m4b` books).
-- Track order: tag disc number, then tag track number, then natural
-  file-name order (`Chapter 2` before `Chapter 10`). The order is
-  stored as `media_files.track_index`.
+- Track order: tag disc number, then the disc folder's number, then
+  tag track number, then natural file-name order (`Chapter 2`
+  before `Chapter 10`). The order is stored as
+  `media_files.track_index`.
 - A book's identity (`stable_key`) is its folder path relative to
   the library root. Re-scans are idempotent, and moving a book's
   folder makes it a new book, the same as a movie today.
@@ -89,7 +90,7 @@ track that has a tag wins:
 | Field | Source, first that's present |
 |---|---|
 | title | `album`; for a single-file book, `title`; else the folder or file name |
-| authors | `album_artist`, else `artist`; else the folder above the book when the book is nested (`Author/Title`) |
+| authors | `album_artist`, else `artist`; else the top-level folder when the book sits in one (`Author/Title`, `Author/Series/Title`) |
 | narrators | `composer` (the usual audiobook convention; plenty of files leave it empty) |
 | year | first four digits of `date` / `year` |
 | overview | `description`, else `comment` |
@@ -154,8 +155,8 @@ it without sending cookies.
 An audiobooks library's page lists books (cover, title, authors,
 progress). `/book/[id]` plays the book in an `<audio>` element,
 track after track, with a chapter list. It resumes from the stored
-position and writes progress every 15 s, on pause, and when the
-page closes. It marks the book finished when the last track ends.
+position and writes progress every 15 s, on pause, on a seek, and
+when the page closes, but only once the page has actually played. It marks the book finished when the last track ends.
 Items of kind `audiobook` anywhere else (Home rails, search) link to
 `/book/[id]`.
 
