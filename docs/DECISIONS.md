@@ -425,3 +425,123 @@ recorded here so SEG7's tests can assert against them. The owner
 reviews everything afterwards and can amend it.
 
 - **D24 Still-watching prompt (interaction, counting, asking card, once, scope, wording):** an interaction is a key press, click, tap or scroll-wheel turn anywhere on the player page, including the browser's own controls and the card, Skip and full-screen buttons, or a play, pause, seek or volume change the player didn't make itself (media keys, picture-in-picture). The player's own actions don't count (the roll's pause and play, auto-skip, the resume seek), and moving the pointer alone doesn't count — on a TV browser whose remote only moves an on-screen cursor, only a click counts. Only rolls the countdown fired count: Play now is an interaction, so it starts the count over and its roll doesn't count. With no interaction the viewer gets the episode they started plus three autoplayed ones, and the card at the end of the fourth asks. The asking card comes up at the same moments as the countdown card, says "Still watching?", has no countdown, and offers Keep watching (plays the next episode now) and Stop (exactly what D23's Cancel does). It waits as long as it takes; meanwhile the credits play to the end and stop there with the usual stopped report, so that episode counts as played, as it does today, and nothing else plays. Any other interaction also answers it, and it turns back into the normal 10 s countdown. It asks once and doesn't repeat itself; after an answer the count starts over, so it asks again after three more autoplays. The count is kept only in the open player page: a roll keeps the same page so the count carries across it, while a reload, Back/Forward or opening another item starts it over. Nothing is stored on the server, there's no new preference (it's on whenever autoplay is), the threshold is fixed at 3, and a preview (D21) never asks. Wording is "Still watching?", "Keep watching" and "Stop", avoiding "Continue Watching", which is already the name of a Home rail.
+
+## 2026-11-23 — Audiobooks, podcasts, audio clients (OPEN — owner's calls)
+
+Raised while planning Phases 10–12 (`docs/AUDIOBOOKS-PODCASTS.md`).
+**None of these is decided.** Each entry gives the question, the
+options with their costs, and, where the first audiobook PR had to
+build something meanwhile, what it built and what changing it would
+cost. The owner answers by replacing an entry's "DECISION NEEDED"
+with "DECIDED <date>" and the choice, as D17–D24 were recorded.
+(D25 is held for the XFER1 bundle-scope question put to the owner
+on 2026-11-20, which is still open and isn't touched here.)
+
+- **D26 — DECISION NEEDED: Audiobookshelf compatibility, long
+  term.** Fact: Parlour has **no** ABS-compat endpoints today.
+  Phase 5's X2 was never started, so nothing breaks either way.
+  Options: (a) build X2 as a *bridge*, so the ABS phone app works
+  against Parlour until Parlour's own iOS app ships, then retire it
+  under X3; (b) build X2 and keep it for good, which means tracking
+  ABS's API changes indefinitely; (c) never build it: native API
+  only, and the owner keeps his ABS server until Parlour's app
+  exists. Phase 10 builds no compat surface. If X2 is built, it is
+  a view over Phase 10's tables.
+- **D27 — DECISION NEEDED: import from the running
+  Audiobookshelf.** Should there be a one-off importer, like the
+  Emby importer (1.7), that pulls listening progress and finished
+  flags from the owner's ABS server so nothing is lost at the
+  switch? If yes: match books by relative path (exact, brittle if
+  folders differ), by ASIN/ISBN tags (robust, but needs AB6
+  metadata), or by title + author (fuzzy, needs a review list).
+  Planned as AB9; not started.
+- **D28 — DECISION NEEDED: audiobook catalog model (series,
+  editions, what a book is).** Already settled by ARCHITECTURE
+  §7/§10: books live in the shared catalog. Open within that:
+  (1) **series:** a `series` parent item, like TV, where a book sits
+  in one series; or series as attributes (name + sequence) where a
+  book can sit in several, as ABS does; (2) **editions:** the same
+  book in two formats or narrations (an m4b and an mp3 folder) as
+  one book with alternatives, or two books; (3) **the on-disk
+  rule:** what AB2 builds is "each folder holding audio is one
+  book; `CD 1`/`Disc 2`/`Part 3` folders fold into their parent;
+  loose root files are one book each" (spec in the plan doc). It
+  should be checked against the real library before anything leans
+  on it. What AB1 built: no series at all (AB7 waits on this);
+  authors/narrators as `people` with roles `author`/`narrator`.
+- **D29 — DECISION NEEDED: listening progress — whose, where,
+  and when "finished".** (1) **Whose:** the owner wrote "per-user".
+  Parlour keeps watch state per *profile* (ARCHITECTURE §2), so
+  household members under one login each keep their own place.
+  AB4 follows the profile rule. Per login would mean everyone
+  under one login shares one position. (2) **Where:** AB4 uses its
+  own `book_progress` table, so no Phase 1–9 behaviour moves.
+  Folding it into `user_data` would give books Continue Watching,
+  the unwatched filter and the export draft for free, but every
+  video query would then need a kind filter. Switching is one
+  migration. (3) **Finished:** AB4 marks a book finished only when
+  a client says so (the web player says so when the last track
+  ends). Options: keep it explicit; auto-finish within the last N
+  minutes; or a percentage like video's 90 %. (4) Should a listen
+  count as a play (`play_count`), show in Now Playing and Activity,
+  and feed a Home "Continue listening" rail (AB8)?
+- **D30 — DECISION NEEDED: audiobook metadata sources.** AB2 reads
+  file tags only. Beyond tags: Audnexus (Audible-derived data;
+  check its terms before depending on it), OpenLibrary (open data,
+  thinner for audio editions), Google Books (needs a key), or
+  ABS-style sidecar files next to the books (`metadata.json`,
+  `desc.txt`, `reader.txt`). Also: should embedded cover art be
+  extracted into the artwork cache (AB6), and do provider results
+  override tags or only fill gaps?
+- **D31 — DECISION NEEDED: podcast subscriptions — who owns
+  them.** (a) Server-wide: an admin adds feeds, episodes are stored
+  once, and each profile follows the shows it wants (the Overcast
+  feel per person, with one download per episode); (b) fully
+  per-profile private subscriptions, where every profile's
+  subscribing triggers fetches; (c) any user can add a feed, or only
+  admins, or users request and an admin approves (the D11 requests
+  pattern). Also: should Parlour search a podcast directory
+  (Apple's search API, or Podcast Index, which needs a key), or add
+  by URL and OPML only?
+- **D32 — DECISION NEEDED: podcast episode download, retention
+  and refresh.** (1) Does the server **download** episode audio
+  (offline-proof, costs disk) or only parse the feed and let
+  clients stream from the publisher (no disk, but dead hosts mean
+  dead episodes and the publisher sees every listener's IP)? Or
+  download only on demand or for followed shows? (2) **Retention:**
+  keep the newest N per show, delete after every follower has
+  finished it, delete after X days, or keep forever? Is there a disk
+  cap? (3) **Where:** media mounts are read-only (AGENTS.md), so
+  downloads need a writable store of their own, e.g.
+  `PARLOUR_PODCAST_DIR` beside the artwork and cache dirs. Which
+  disk on sullivan? (4) **Refresh cadence:** a fixed interval (e.g.
+  hourly) for all feeds, per-feed, or honouring the feed's TTL?
+- **D33 — DECISION NEEDED: offline downloads in clients, and the
+  sync conflict rule.** Do the iOS app, the Android phone and the
+  tablet download books and episodes for offline listening? The
+  ABS client and Overcast both do. Fire TV is already
+  streaming-only for video (2026-11-10 "Clients and publishing"),
+  so does that hold for audio? If offline exists, progress recorded
+  offline needs a merge rule: last write to reach the server wins
+  (what AB4 does today, which is fine while every client is
+  online), the newest client timestamp wins, or the furthest
+  position wins (safe against stale devices, wrong after a
+  deliberate rewind).
+- **D34 — DECISION NEEDED: client apps' shape and order for
+  audio.** (1) One Parlour iOS app with video, audiobooks and
+  podcasts, or a separate audio app (Audiobookshelf and Overcast
+  are both audio-only apps)? (2) D12 puts iOS after Android. Does
+  audio, which the owner wants on iOS, pull an iOS audio app ahead
+  of Android? (3) Fire Stick: audio in the planned Android TV
+  flavour, or no audio on the TV? (4) Tablet: is the Android build
+  enough, or is there also an iPad?
+- **D35 — DECISION NEEDED: which listening features sync through
+  the server.** The candidates, from the two reference apps:
+  playback speed per book or show, bookmarks, sleep timer, skip
+  intervals, the Up Next queue and playlists, listening-time
+  statistics, and Overcast-style Smart Speed / Voice Boost.
+  Overcast does Smart Speed and Voice Boost on the device; doing
+  them on the server would cost a transcode per listen. Server-
+  synced means it follows the person across devices and needs API +
+  schema (CL2/CL3, POD8). Device-only means none. AB1–AB5 sync only
+  position and finished.

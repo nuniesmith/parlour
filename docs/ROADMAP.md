@@ -40,7 +40,9 @@ Retires the separate request pipeline when it covers it.
 
 ## Phase 5 — Compatibility APIs (only if still wanted)
 Jellyfin API surface, then Audiobookshelf surface, as translation
-layers over the same catalog.
+layers over the same catalog. (2026-11-23: native audiobooks are
+now Phase 10, so the Audiobookshelf surface is no longer the
+audiobook plan; whether it is built at all is the open D26.)
 
 ## Phase 6 — iOS
 Swift/AVPlayer app (HLS-only, which the Phase 2 ladder
@@ -74,7 +76,39 @@ tracks the owner wants worked next, alongside the Phase 1
 operational cutover; their numbers are labels, not a queue
 order relative to Phases 2–6.
 
+## Phase 10 — Native audiobooks
+Audiobooks as a first-class library in Parlour's own catalog
+instead of leaning on Audiobookshelf-compat: a scanner for audio
+folders (books, ordered tracks, chapters, tag metadata and folder
+covers), per-profile listening progress (position, finished,
+last listened), a native `/api/v1/audiobooks` API with Range
+streaming and progress sync, and a book page with a player in
+the web UI. Metadata providers, series, the ABS importer and
+Continue-listening follow the owner's calls D26–D30.
+Spec: `docs/AUDIOBOOKS-PODCASTS.md`.
+
+## Phase 11 — Podcasts
+The server manages RSS feeds in its own interface, fetches new
+episodes on the Postgres job queue, and stores or links episode
+audio per the owner's retention call. Clients (iOS, Fire Stick,
+tablet, web) sync subscriptions and progress from the server and
+never fetch feeds themselves. Ownership, download and retention
+policy are open (D31, D32).
+
+## Phase 12 — Audio clients: sync contract
+API design for the native audio clients: the iOS audiobook
+experience modelled on the Audiobookshelf client and the podcast
+experience on Overcast (behaviour only, clean-room). Device tokens
+for native apps, one cursor-based sync endpoint, listening
+sessions, and offline download manifests if offline is wanted
+(D33–D35). The client code itself belongs to Phases 3 and 6; app
+shape and order is D34.
+
+**Owner's note (2026-11-23):** the owner added Phases 10–12 and
+asked for Phase 10's first slice (AB1–AB5) to be built along with
+the plan. Podcasts and the client contract are plan only for now.
+
 ## Growth after that
-New library types (audiobooks, ebooks, music, podcasts) as
-catalog + metadata additions; new hardware as a `HwBackend`;
+New library types (ebooks, music) as catalog + metadata
+additions; new hardware as a `HwBackend`;
 new clients against `/api/v1`. See `ARCHITECTURE.md` §11.
