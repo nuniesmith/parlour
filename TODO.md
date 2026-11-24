@@ -25,6 +25,11 @@ autoplay next episode** (D15). These are the owner's priority
 tracks after the Phase 1 operational finish; the phase numbers
 are labels, not a queue order — the owner picks. An in-app
 change-password PR (A8) is in flight separately.
+**2026-11-23:** owner added **Phases 10–12** — native audiobooks
+(first slice AB1–AB5 built with the plan), podcasts (plan only),
+and the audio-client sync contract (API design only). Spec:
+`docs/AUDIOBOOKS-PODCASTS.md`; ten open questions are
+**D26–D35** in `docs/DECISIONS.md`, all the owner's to answer.
 
 ---
 
@@ -543,7 +548,9 @@ go back to Emby for X" moments.
   third-party clients; a view, never a second catalog
 - [ ] X2 (L) Audiobookshelf surface: libraries/items/progress in
   ABS shape so ABS apps work before Parlour grows native
-  audiobook support
+  audiobook support. **2026-11-23:** native audiobooks are now
+  Phase 10; whether X2 is built at all (bridge, permanent, or
+  never) is the open **D26**. Nothing ABS-shaped exists today.
 - [ ] X3 (S) Decide with real usage: keep, freeze, or delete —
   compat that nobody uses gets deleted, not maintained
 
@@ -820,6 +827,116 @@ does NOT depend on Phase 2 transcoding.
   Intro on every episode with no manual work, episodes roll
   into each other hands-free, and turning it off per profile
   actually turns all of it off.
+
+---
+
+## Phase 10 — Native audiobooks (`catalog`, `server`, `web`, D26–D30 open)
+
+Spec: `docs/AUDIOBOOKS-PODCASTS.md`. Audiobooks become a
+first-class library in the shared catalog (ARCHITECTURE §7/§10),
+not an Audiobookshelf-compat story. AB1–AB5 are the first PR;
+the rest wait on the owner's decisions.
+
+- [ ] AB1 (M) **Schema**: item kind `audiobook`;
+  `media_files.track_index`; `book_chapters` (book-global
+  times); `book_progress` per profile + book (position,
+  duration, finished, finished_at, last_listened_at). The
+  progress table and scope are provisional until **D29**.
+- [ ] AB2 (M) **Scanner for audiobooks libraries**: audio
+  allowlist; one book per folder holding audio, disc folders
+  (`CD 1`, `Disc 2`, `Part 3`) folded into their parent, loose
+  root files one book each; track order disc → track tag →
+  natural file name; ffprobe tags → title / authors /
+  narrators / year / overview / genres; chapters from the files
+  or one per track; `cover.jpg`/`folder.jpg` as the poster.
+  Idempotent, missing-marking as for video (C8).
+- [ ] AB3 (M) **Native API**: `GET /api/v1/audiobooks` (list,
+  progress inline), `GET /api/v1/audiobooks/{id}` (tracks with
+  offsets + tokenised stream URLs, chapters),
+  `GET …/tracks/{index}/stream` with HTTP Range.
+- [ ] AB4 (S) **Progress API**: `GET|PUT|DELETE
+  /api/v1/audiobooks/{id}/progress`, bulk
+  `GET /api/v1/audiobooks/progress?since=`. Book-global
+  position, clamped to the book's length; finished only when
+  a client says so; last write wins (D29, D33 open).
+- [ ] AB5 (M) **Minimal web**: an audiobooks library lists
+  books; `/book/[id]` plays track after track in `<audio>`, with
+  chapters, resume, and progress writes; `audiobook` items
+  elsewhere link there.
+- [ ] AB6 (M) **Metadata providers + embedded covers** —
+  after **D30**.
+- [ ] AB7 (M) **Series + author browsing** — after **D28**.
+- [ ] AB8 (S) **Listening in Now Playing / Activity, Home
+  "Continue listening"** — after **D29** / **D35**.
+- [ ] AB9 (M) **Importer from the owner's Audiobookshelf**
+  (progress + finished) — only if **D27** says yes.
+- [ ] AB10 (S) **Transcode fallback** for book codecs a
+  client profile can't play (AAC), using CL5's profiles.
+- **Done when:** the owner's real audiobook folders scan into
+  Parlour with sensible titles, authors and chapters; a book
+  plays in the web UI; and a position written by one client is
+  where another client resumes.
+
+## Phase 11 — Podcasts (`integrations`/`catalog`, `jobs`, `server`, `web`; D31–D32 open)
+
+Plan only so far; no podcast code exists. Spec:
+`docs/AUDIOBOOKS-PODCASTS.md`.
+
+- [ ] POD1 (M) **Schema**: `podcasts` (feed URL, metadata,
+  ETag/Last-Modified, refresh state), `podcast_episodes`
+  (guid, enclosure, published, duration, local file),
+  subscriptions shaped by **D31**, episode progress in the
+  same shape as `book_progress`.
+- [ ] POD2 (M) **Feed fetch + parse**: RSS 2.0 + iTunes
+  namespace (+ Podcasting 2.0 chapter/transcript links), a pure
+  fixture-tested parser, conditional GET, a `refresh_podcasts`
+  job on the Postgres queue at **D32**'s cadence, and a
+  Dashboard notice for feeds failing repeatedly.
+- [ ] POD3 (M) **Episode download + retention** per **D32**,
+  into a writable podcast store (never a media mount).
+- [ ] POD4 (M) **Manage feeds in the UI**: add by URL, OPML
+  import/export, refresh now, per-feed settings; who may add
+  is **D31**.
+- [ ] POD5 (M) **Native API**: podcasts, episodes, episode
+  stream (Range; or redirect to the enclosure if not
+  downloaded), progress get/put/delete, OPML.
+- [ ] POD6 (M) **Web**: podcast pages + the AB5 player.
+- [ ] POD7 (S) **Directory search** (Apple / Podcast Index) —
+  only if **D31** wants it.
+- [ ] POD8 (S) **Up Next queue / playlists synced** — only if
+  **D35** says server-synced.
+- **Done when:** a feed added in the web UI gets new episodes on
+  its own, and an episode started on one client resumes on
+  another.
+
+## Phase 12 — Audio clients: the sync contract (`server`; API design, D33–D35 open)
+
+The server side of the future iOS (audiobooks like the
+Audiobookshelf client, podcasts like Overcast — behaviour only,
+clean-room), Fire Stick and tablet apps. Client code stays in
+Phases 3 and 6; app shape and order is **D34**.
+
+- [ ] CL1 (M) **Device tokens for native apps**:
+  `Authorization: Bearer`, long-lived, stored hashed (D7),
+  listed and revocable under Settings → Devices.
+- [ ] CL2 (M) **One sync endpoint**: `GET /api/v1/sync?cursor=`
+  → changed book/episode progress, subscriptions, new
+  episodes, tombstones, and the next cursor.
+- [ ] CL3 (S) **Listening sessions**: start/progress/stop for
+  audio into the P8 registry (Now Playing, Activity);
+  listening-time stats only if **D35** wants them.
+- [ ] CL4 (M) **Offline**: download manifests + replay of
+  offline progress with client timestamps under **D33**'s
+  conflict rule — only if **D33** says clients download.
+- [ ] CL5 (S) **Audio capability profiles** (AVPlayer,
+  ExoPlayer on Fire OS, browsers) → direct play vs AAC
+  fallback.
+- [ ] CL6 (S) **`docs/API-AUDIO.md`**: the contract with
+  examples, written when CL2 lands.
+- **Done when:** a native client can sign in once, pull
+  everything it needs in one sync call after a week offline,
+  and push its progress back without clobbering newer progress
+  from another device.
 
 ---
 
