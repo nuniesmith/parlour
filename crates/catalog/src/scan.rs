@@ -198,13 +198,56 @@ async fn resolve_item(
     Ok((id, created))
 }
 
+/// C8: mark files that vanished unavailable — only those under a
+/// root that walked cleanly in this run, so an unmounted disk can
+/// never mass-mark a library missing. Rows are never deleted.
+/// Returns how many files were marked.
+pub(crate) async fn mark_missing(
+    pool: &parlour_db::PgPool,
+    library_id: Uuid,
+    seen_paths: &HashSet<String>,
+    walked_roots: &[String],
+) -> Result<i32, sqlx::Error> {
+    let stored: Vec<(Uuid, String)> = sqlx::query_as(
+        "SELECT id, path FROM media_files WHERE library_id = $1 AND available = true",
+    )
+    .bind(library_id)
+    .fetch_all(pool)
+    .await?;
+    let mut missing = 0;
+    for (file_id, path) in stored {
+        if seen_paths.contains(&path) {
+            continue;
+        }
+        let under_walked_root = walked_roots
+            .iter()
+            .any(|r| path.starts_with(&format!("{r}/")));
+        if under_walked_root {
+            sqlx::query("UPDATE media_files SET available = false WHERE id = $1")
+                .bind(file_id)
+                .execute(pool)
+                .await?;
+            missing += 1;
+        }
+    }
+    Ok(missing)
+}
+
 /// Scan one library. `job_id`, when set, receives progress + errors
-/// as the scan runs (C6: progress visible in admin).
+/// as the scan runs (C6: progress visible in admin). Audiobooks
+/// libraries go to their own scanner (Phase 10, AB2).
 pub async fn scan_library(
     pool: &parlour_db::PgPool,
     library_id: Uuid,
     job_id: Option<Uuid>,
 ) -> Result<ScanReport, sqlx::Error> {
+    let kind: Option<(String,)> = sqlx::query_as("SELECT kind FROM libraries WHERE id = $1")
+        .bind(library_id)
+        .fetch_optional(pool)
+        .await?;
+    if matches!(kind, Some((ref k,)) if k == "audiobooks") {
+        return crate::audiobooks::scan_audiobooks(pool, library_id, job_id).await;
+    }
     let mut report = ScanReport::default();
 
     let paths: Vec<(String,)> =
@@ -419,27 +462,7 @@ pub async fn scan_library(
     // C8: mark vanished files unavailable — only under roots that
     // walked cleanly this run. Never delete the row.
     if !walked_roots.is_empty() {
-        let stored: Vec<(Uuid, String)> = sqlx::query_as(
-            "SELECT id, path FROM media_files WHERE library_id = $1 AND available = true",
-        )
-        .bind(library_id)
-        .fetch_all(pool)
-        .await?;
-        for (file_id, path) in stored {
-            if seen_paths.contains(&path) {
-                continue;
-            }
-            let under_walked_root = walked_roots
-                .iter()
-                .any(|r| path.starts_with(&format!("{r}/")));
-            if under_walked_root {
-                sqlx::query("UPDATE media_files SET available = false WHERE id = $1")
-                    .bind(file_id)
-                    .execute(pool)
-                    .await?;
-                report.missing_files += 1;
-            }
-        }
+        report.missing_files += mark_missing(pool, library_id, &seen_paths, &walked_roots).await?;
         // Item availability follows its files (leaves), then rolls up.
         sqlx::query(
             "UPDATE media_items i SET available = EXISTS (

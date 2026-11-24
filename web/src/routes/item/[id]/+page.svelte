@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import { api } from '$lib/api';
   import Poster from '$lib/Poster.svelte';
@@ -34,6 +35,12 @@
     seasons = {};
     openSeason = null;
     const { data, error: err } = await api<ItemDetail>(`/api/v1/items/${id}`);
+    // Books have their own page (Phase 10, AB5); links from Now
+    // Playing or Activity that land here move on to it.
+    if (data?.kind === 'audiobook') {
+      void goto(`/book/${data.id}`, { replaceState: true });
+      return;
+    }
     if (data) detail = data;
     else error = err ?? 'Could not load that item.';
   }

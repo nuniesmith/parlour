@@ -368,6 +368,29 @@ The owner uses subtitles on most playback.
   the card's own buttons (`data-card-button`) is left to the
   button, which counts when it acts, so an asking card never
   changes under the pointer before the click lands.
+- Audiobooks (Phase 10, AB1–AB5; `parlour_catalog::audiobooks`,
+  `crates/server/src/audiobooks.rs`, spec
+  `docs/AUDIOBOOKS-PODCASTS.md`): an `audiobooks` library is
+  scanned into the same catalog — a book is a top-level
+  `media_items` row of kind `audiobook`, its tracks are its
+  `media_files` in `track_index` order, its chapters are
+  `book_chapters` rows on the book-global timeline (ms from the
+  start of track 0), and authors / narrators are `people` with
+  roles `author` / `narrator`. Every folder holding audio is a
+  book; `CD 1` / `Disc 2` / `Part 3` folders fold into their
+  parent; a loose root file is a book. Metadata comes from file
+  tags only (providers wait on D30). A book with any new, changed
+  or missing file is re-probed and rebuilt whole; unchanged books
+  are skipped. Listening progress is `book_progress`, per profile
+  + book: one book-global position (clamped to the book), an
+  explicit `finished` flag, `last_listened_at`; last write wins.
+  Its own table, so no video query changed; scope, storage and
+  the finished rule are the open D29. The native API is
+  `/api/v1/audiobooks` (list, detail with tracks + chapters,
+  Range streaming per track, progress get/put/delete and a bulk
+  `?since=` pull); track URLs reuse `/api/v1/stream/{file_id}`
+  and its tokens. There is no Audiobookshelf-compatible surface
+  (D26).
 - Scanner: `notify` watcher for local disks + *arr webhooks/history
   polling for targeted rescans + a periodic full scan. Skip unchanged
   files by (path, size, mtime) fingerprint before probing.

@@ -13,6 +13,9 @@
 //! - `segments` — the cheap intro/credits pass over new or changed
 //!   episodes: chapter names, then black-frame + silence at the
 //!   head and tail (SEG2, D17–D19).
+//! - `audiobooks` — audiobooks libraries (Phase 10, AB2): audio
+//!   folders grouped into books, ordered tracks, tag metadata,
+//!   chapters on the book's timeline, folder covers.
 //! - `fingerprint` — the audio-fingerprint pass in the same job:
 //!   chromaprint over each episode's head and tail, cached by file
 //!   hash, matched across the whole season (SEG3, D20).
@@ -23,6 +26,7 @@
 //! by ProviderIds, never titles) is Milestone 1.7.
 
 pub mod artwork;
+pub mod audiobooks;
 pub mod emby;
 pub mod fingerprint;
 pub mod metadata_sync;

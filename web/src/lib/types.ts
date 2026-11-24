@@ -507,3 +507,89 @@ export function deviceLabel(ua: string): string {
             : '';
   return os ? `${browser} on ${os}` : browser;
 }
+
+// ------------------------------------------------------------ audiobooks
+// Phase 10 (AB3/AB4): `/api/v1/audiobooks`. Positions are
+// book-global milliseconds from the start of track 0.
+
+export interface BookProgress {
+  position_ms: number;
+  duration_ms: number | null;
+  finished: boolean;
+  finished_at: string | null;
+  last_listened_at: string | null;
+  updated_at: string | null;
+}
+
+export interface Book {
+  id: string;
+  library_id: string;
+  title: string;
+  sort_title: string;
+  year: number | null;
+  overview: string | null;
+  genres: string[];
+  authors: string[];
+  narrators: string[];
+  duration_ms: number;
+  track_count: number;
+  chapter_count: number;
+  has_cover: boolean;
+  available: boolean;
+  created_at: string;
+  progress: BookProgress;
+}
+
+export interface BookTrack {
+  index: number;
+  file_id: string;
+  title: string;
+  start_ms: number;
+  duration_ms: number | null;
+  container: string | null;
+  codec: string | null;
+  content_type: string;
+  size_bytes: number;
+  stream_url: string;
+}
+
+export interface BookChapter {
+  index: number;
+  title: string;
+  start_ms: number;
+  end_ms: number;
+}
+
+export interface BookDetail extends Book {
+  tracks: BookTrack[];
+  chapters: BookChapter[];
+}
+
+/** Where an item opens: books have their own page. */
+export function itemHref(item: { id: string; kind: string }): string {
+  return item.kind === 'audiobook' ? `/book/${item.id}` : `/item/${item.id}`;
+}
+
+/** Which track holds a book-global position, and how far into it:
+ *  the last track starting at or before it (positions past the end
+ *  land at the end of the last track). */
+export function locateInBook(
+  tracks: BookTrack[],
+  positionMs: number,
+): { track: number; offsetMs: number } {
+  if (tracks.length === 0) return { track: 0, offsetMs: 0 };
+  let i = 0;
+  while (i + 1 < tracks.length && tracks[i + 1].start_ms <= positionMs) i++;
+  const len = tracks[i].duration_ms ?? Infinity;
+  return { track: i, offsetMs: Math.max(0, Math.min(positionMs - tracks[i].start_ms, len)) };
+}
+
+/** The chapter playing at a book-global position, or -1. */
+export function chapterAt(chapters: BookChapter[], positionMs: number): number {
+  let found = -1;
+  for (let i = 0; i < chapters.length; i++) {
+    if (chapters[i].start_ms <= positionMs) found = i;
+    else break;
+  }
+  return found;
+}

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { episodeLabel, posterUrl, type RailItem } from './types';
+  import { episodeLabel, itemHref, posterUrl, type RailItem } from './types';
 
   let {
     item,
@@ -23,7 +23,7 @@
   const label = $derived([heading, epLine].filter(Boolean).join(', '));
 </script>
 
-<a class="poster" href={`/item/${item.id}`} aria-label={label}>
+<a class="poster" href={itemHref(item)} aria-label={label}>
   <span class="frame">
     {#if artId}
       <img src={posterUrl(artId)} alt="" loading="lazy" />

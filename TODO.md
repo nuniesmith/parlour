@@ -26,7 +26,7 @@ tracks after the Phase 1 operational finish; the phase numbers
 are labels, not a queue order — the owner picks. An in-app
 change-password PR (A8) is in flight separately.
 **2026-11-23:** owner added **Phases 10–12** — native audiobooks
-(first slice AB1–AB5 built with the plan), podcasts (plan only),
+(first slice AB1–AB5 built 2026-11-23), podcasts (plan only),
 and the audio-client sync contract (API design only). Spec:
 `docs/AUDIOBOOKS-PODCASTS.md`; ten open questions are
 **D26–D35** in `docs/DECISIONS.md`, all the owner's to answer.
@@ -837,32 +837,46 @@ first-class library in the shared catalog (ARCHITECTURE §7/§10),
 not an Audiobookshelf-compat story. AB1–AB5 are the first PR;
 the rest wait on the owner's decisions.
 
-- [ ] AB1 (M) **Schema**: item kind `audiobook`;
+- [x] AB1 (M) **Schema**: item kind `audiobook`;
   `media_files.track_index`; `book_chapters` (book-global
   times); `book_progress` per profile + book (position,
   duration, finished, finished_at, last_listened_at). The
   progress table and scope are provisional until **D29**.
-- [ ] AB2 (M) **Scanner for audiobooks libraries**: audio
+  *Done 2026-11-23:* migration `20261123000000_audiobooks.sql`.
+- [x] AB2 (M) **Scanner for audiobooks libraries**: audio
   allowlist; one book per folder holding audio, disc folders
   (`CD 1`, `Disc 2`, `Part 3`) folded into their parent, loose
-  root files one book each; track order disc → track tag →
+  root files one book each; track order disc tag → disc folder → track tag →
   natural file name; ffprobe tags → title / authors /
   narrators / year / overview / genres; chapters from the files
   or one per track; `cover.jpg`/`folder.jpg` as the poster.
   Idempotent, missing-marking as for video (C8).
-- [ ] AB3 (M) **Native API**: `GET /api/v1/audiobooks` (list,
+  *Done 2026-11-23:* `parlour_catalog::audiobooks`; `scan_library`
+  hands audiobooks libraries to it. A book with any new, changed or
+  missing file is re-probed and rebuilt whole; unchanged books are
+  skipped unprobed. Covers are `images` rows (variant `file`)
+  pointing into the media folder, served by the existing artwork
+  endpoint.
+- [x] AB3 (M) **Native API**: `GET /api/v1/audiobooks` (list,
   progress inline), `GET /api/v1/audiobooks/{id}` (tracks with
   offsets + tokenised stream URLs, chapters),
   `GET …/tracks/{index}/stream` with HTTP Range.
-- [ ] AB4 (S) **Progress API**: `GET|PUT|DELETE
+  *Done 2026-11-23:* `crates/server/src/audiobooks.rs`. Stream URLs
+  reuse `/api/v1/stream/{file_id}` with its 6 h HMAC token.
+- [x] AB4 (S) **Progress API**: `GET|PUT|DELETE
   /api/v1/audiobooks/{id}/progress`, bulk
   `GET /api/v1/audiobooks/progress?since=`. Book-global
   position, clamped to the book's length; finished only when
   a client says so; last write wins (D29, D33 open).
-- [ ] AB5 (M) **Minimal web**: an audiobooks library lists
+  *Done 2026-11-23:* per profile, own table, explicit finished, last
+  write wins. All four are provisional until D29/D33.
+- [x] AB5 (M) **Minimal web**: an audiobooks library lists
   books; `/book/[id]` plays track after track in `<audio>`, with
   chapters, resume, and progress writes; `audiobook` items
   elsewhere link there.
+  *Done 2026-11-23:* `web/src/lib/BookShelf.svelte`,
+  `web/src/routes/book/[id]`. Checked in headless Chromium against
+  a private instance.
 - [ ] AB6 (M) **Metadata providers + embedded covers** —
   after **D30**.
 - [ ] AB7 (M) **Series + author browsing** — after **D28**.
