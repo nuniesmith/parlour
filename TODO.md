@@ -30,6 +30,13 @@ change-password PR (A8) is in flight separately.
 and the audio-client sync contract (API design only). Spec:
 `docs/AUDIOBOOKS-PODCASTS.md`; ten open questions are
 **D26–D35** in `docs/DECISIONS.md`, all the owner's to answer.
+**2026-11-24:** owner decided **D25** (export bundle scope —
+unblocks the XFER chain) and **D26–D35**: no ABS-compat bridge,
+Parlour's own web + mobile clients (D26); no ABS import (D27, AB9
+cancelled); otherwise mirror Audiobookshelf where it has an
+equivalent, and defer what it doesn't until the owner asks
+(D28–D35). Audio UI spec from his Audiobooth / Overcast
+screenshots: `docs/UI-AUDIO-REFERENCE.md`.
 
 ---
 
@@ -546,7 +553,9 @@ go back to Emby for X" moments.
   `AuthenticateByName`, `Items`, `PlaybackInfo`, Sessions
   Playing/Progress/Stopped, UserData writes — enough for mature
   third-party clients; a view, never a second catalog
-- [ ] X2 (L) Audiobookshelf surface: libraries/items/progress in
+- [ ] X2 (L) **CANCELLED 2026-11-24 by D26 — never built** (no
+  ABS-compat bridge; Parlour's own clients instead). Original:
+  Audiobookshelf surface: libraries/items/progress in
   ABS shape so ABS apps work before Parlour grows native
   audiobook support. **2026-11-23:** native audiobooks are now
   Phase 10; whether X2 is built at all (bridge, permanent, or
@@ -654,6 +663,13 @@ does NOT depend on Phase 2 transcoding.
   played, favourites, play counts, last played). Settings
   secrets (API keys, stream secret) are **never** exported.
   Written up in `docs/IMPORT-EXPORT.md` as part of this task.
+  **D25 decided 2026-11-24 — unblocked:** the bundle also
+  carries each profile's **recent searches** (next to its
+  prefs) and the **Activity feed** (keyed by username /
+  stable_key, not ids); hashes may sit in the plain,
+  unencrypted zip (the admin confirm + warning stays). Audio
+  tables weren't in D25: propose `book_progress` under
+  `user_data` in the spec and get the owner's yes.
 - [ ] XFER2 (L) **Export**: admin endpoint + background job
   producing the bundle; optional artwork inclusion (files
   under `artwork/` in the zip, off by default with a size
@@ -830,7 +846,7 @@ does NOT depend on Phase 2 transcoding.
 
 ---
 
-## Phase 10 — Native audiobooks (`catalog`, `server`, `web`, D26–D30 open)
+## Phase 10 — Native audiobooks (`catalog`, `server`, `web`, D26–D30 decided 2026-11-24)
 
 Spec: `docs/AUDIOBOOKS-PODCASTS.md`. Audiobooks become a
 first-class library in the shared catalog (ARCHITECTURE §7/§10),
@@ -870,6 +886,9 @@ the rest wait on the owner's decisions.
   a client says so; last write wins (D29, D33 open).
   *Done 2026-11-23:* per profile, own table, explicit finished, last
   write wins. All four are provisional until D29/D33.
+  *D29/D33 decided 2026-11-24 (mirror ABS): per profile and
+  own table stay; auto-finish, the hide flag and client
+  timestamps are AB11.*
 - [x] AB5 (M) **Minimal web**: an audiobooks library lists
   books; `/book/[id]` plays track after track in `<audio>`, with
   chapters, resume, and progress writes; `audiobook` items
@@ -878,11 +897,27 @@ the rest wait on the owner's decisions.
   `web/src/routes/book/[id]`. Checked in headless Chromium against
   a private instance.
 - [ ] AB6 (M) **Metadata providers + embedded covers** —
-  after **D30**.
+  after **D30**. *D30 (2026-11-24): mirror ABS — per-library
+  precedence list, manual match (Google Books, Open Library;
+  Audnexus after a terms check), embedded covers when no image
+  file.*
 - [ ] AB7 (M) **Series + author browsing** — after **D28**.
+  *D28 (2026-11-24): mirror ABS — `series` records + a book ↔
+  series join with a sequence; series from the
+  `Author/Series/Title` folder.*
+- [ ] AB11 (M) **Align AB1/AB2/AB4 with ABS** (D28/D29): the
+  numbered "Follow-up from D28–D35" list in
+  `docs/AUDIOBOOKS-PODCASTS.md` — disc folders without `Part`,
+  title-folder parsing, nearest-folder author, author
+  splitting, auto-finish under 10 s remaining, the
+  hide-from-Continue flag, client timestamps.
 - [ ] AB8 (S) **Listening in Now Playing / Activity, Home
-  "Continue listening"** — after **D29** / **D35**.
-- [ ] AB9 (M) **Importer from the owner's Audiobookshelf**
+  "Continue listening"** — after **D29** / **D35**. *D29
+  (2026-11-24): ABS's shelves (Continue Listening with a
+  per-item hide, Continue Series, Listen Again, …); listens are
+  sessions, no `play_count` bump.*
+- [ ] AB9 (M) **CANCELLED 2026-11-24 by D27 — not to be
+  built.** Original: importer from the owner's Audiobookshelf
   (progress + finished) — only if **D27** says yes.
 - [ ] AB10 (S) **Transcode fallback** for book codecs a
   client profile can't play (AAC), using CL5's profiles.
@@ -891,7 +926,15 @@ the rest wait on the owner's decisions.
   plays in the web UI; and a position written by one client is
   where another client resumes.
 
-## Phase 11 — Podcasts (`integrations`/`catalog`, `jobs`, `server`, `web`; D31–D32 open)
+## Phase 11 — Podcasts (`integrations`/`catalog`, `jobs`, `server`, `web`; D31–D32 decided 2026-11-24)
+
+**2026-11-24:** D31/D32 mirror Audiobookshelf's podcast model —
+podcasts are a library reached by the normal access grants (no
+per-profile subscriptions), admin-only adding, server downloads
+and plays only downloaded episodes, per-show auto-download (off) /
+hourly check / keep N (0 = all) / 3 new per check. Details:
+`docs/AUDIOBOOKS-PODCASTS.md` → Phase 11. The lines below keep
+their original wording; read them through that.
 
 Plan only so far; no podcast code exists. Spec:
 `docs/AUDIOBOOKS-PODCASTS.md`.
@@ -916,14 +959,22 @@ Plan only so far; no podcast code exists. Spec:
   downloaded), progress get/put/delete, OPML.
 - [ ] POD6 (M) **Web**: podcast pages + the AB5 player.
 - [ ] POD7 (S) **Directory search** (Apple / Podcast Index) —
-  only if **D31** wants it.
+  only if **D31** wants it. *D31: yes, Apple's search API.*
 - [ ] POD8 (S) **Up Next queue / playlists synced** — only if
-  **D35** says server-synced.
+  **D35** says server-synced. *D35: playlists sync (per
+  profile per library); the Up Next queue stays on the device.*
 - **Done when:** a feed added in the web UI gets new episodes on
   its own, and an episode started on one client resumes on
   another.
 
-## Phase 12 — Audio clients: the sync contract (`server`; API design, D33–D35 open)
+## Phase 12 — Audio clients: the sync contract (`server`; API design, D33–D35 decided 2026-11-24)
+
+**2026-11-24:** clients are Parlour's own web UI and mobile apps
+(D26); offline downloads are in (D33, so CL4 goes ahead); sync
+covers progress, bookmarks, sessions + stats, playlists and
+collections, not the queue or speed (D35). UI spec:
+`docs/UI-AUDIO-REFERENCE.md`. App-vs-video shape, iOS order, Fire
+Stick audio and tablet layout: no ABS equivalent, deferred.
 
 The server side of the future iOS (audiobooks like the
 Audiobookshelf client, podcasts like Overcast — behaviour only,

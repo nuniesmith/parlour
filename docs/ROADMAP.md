@@ -42,7 +42,9 @@ Retires the separate request pipeline when it covers it.
 Jellyfin API surface, then Audiobookshelf surface, as translation
 layers over the same catalog. (2026-11-23: native audiobooks are
 now Phase 10, so the Audiobookshelf surface is no longer the
-audiobook plan; whether it is built at all is the open D26.)
+audiobook plan; whether it is built at all is the open D26.
+2026-11-24: D26 — it is never built; Phase 5 is the Jellyfin
+surface only.)
 
 ## Phase 6 — iOS
 Swift/AVPlayer app (HLS-only, which the Phase 2 ladder
@@ -85,6 +87,8 @@ last listened), a native `/api/v1/audiobooks` API with Range
 streaming and progress sync, and a book page with a player in
 the web UI. Metadata providers, series, the ABS importer and
 Continue-listening follow the owner's calls D26–D30.
+(2026-11-24: decided — mirror Audiobookshelf's catalog,
+progress and metadata behaviour; no ABS importer.)
 Spec: `docs/AUDIOBOOKS-PODCASTS.md`.
 
 ## Phase 11 — Podcasts
@@ -93,7 +97,9 @@ episodes on the Postgres job queue, and stores or links episode
 audio per the owner's retention call. Clients (iOS, Fire Stick,
 tablet, web) sync subscriptions and progress from the server and
 never fetch feeds themselves. Ownership, download and retention
-policy are open (D31, D32).
+policy are open (D31, D32). (2026-11-24: decided — mirror
+Audiobookshelf: podcasts are an admin-managed library, the server
+downloads episodes, per-show retention.)
 
 ## Phase 12 — Audio clients: sync contract
 API design for the native audio clients: the iOS audiobook
@@ -102,7 +108,9 @@ experience on Overcast (behaviour only, clean-room). Device tokens
 for native apps, one cursor-based sync endpoint, listening
 sessions, and offline download manifests if offline is wanted
 (D33–D35). The client code itself belongs to Phases 3 and 6; app
-shape and order is D34.
+shape and order is D34. (2026-11-24: Parlour's own web + mobile
+apps, offline downloads in, sync what Audiobookshelf syncs; UI
+spec `docs/UI-AUDIO-REFERENCE.md`.)
 
 **Owner's note (2026-11-23):** the owner added Phases 10–12 and
 asked for Phase 10's first slice (AB1–AB5) to be built along with

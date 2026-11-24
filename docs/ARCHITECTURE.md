@@ -385,12 +385,15 @@ The owner uses subtitles on most playback.
   + book: one book-global position (clamped to the book), an
   explicit `finished` flag, `last_listened_at`; last write wins.
   Its own table, so no video query changed; scope, storage and
-  the finished rule are the open D29. The native API is
+  the finished rule were the open D29 — decided 2026-11-24 to
+  mirror Audiobookshelf (per profile, own table shared later
+  with podcast episodes, auto-finish under a threshold); the
+  changes are follow-up AB11. The native API is
   `/api/v1/audiobooks` (list, detail with tracks + chapters,
   Range streaming per track, progress get/put/delete and a bulk
   `?since=` pull); track URLs reuse `/api/v1/stream/{file_id}`
-  and its tokens. There is no Audiobookshelf-compatible surface
-  (D26).
+  and its tokens. There is no Audiobookshelf-compatible surface,
+  and by D26 (2026-11-24) there never will be.
 - Scanner: `notify` watcher for local disks + *arr webhooks/history
   polling for targeted rescans + a periodic full scan. Skip unchanged
   files by (path, size, mtime) fingerprint before probing.

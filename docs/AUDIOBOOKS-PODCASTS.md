@@ -23,6 +23,19 @@ nothing here answers them. Where the first phase must build
 Phase 10 PR), this doc says what it builds, why that is the easiest
 choice to reverse, and what changing it would cost.
 
+**2026-11-24 — D26–D35 decided** (`DECISIONS.md`). In short:
+**no ABS-compat bridge** — Parlour builds its own audiobook server
+and its **own web and mobile clients**, and the owner stays on
+Audiobookshelf (with the Audiobooth app) until they ship (D26); so
+point 1's "keep the ABS-compat endpoints working" no longer applies.
+**No ABS progress import** (D27, AB9 cancelled). Everything else
+**mirrors what Audiobookshelf does** where ABS has an equivalent
+(D28–D35), and anything without one is **deferred until the owner
+asks**. The sections below are updated to match; where AB1–AB5
+differ from ABS, see "Follow-up from D28–D35". The client UI,
+derived from the owner's Audiobooth and Overcast screenshots, is
+`UI-AUDIO-REFERENCE.md`.
+
 **Clean-room rule, extended.** Audiobookshelf is GPL-3.0 and
 Overcast is proprietary. The AGENTS.md rule for Emby, Jellyfin and
 Silo applies to both: matching their behaviour and information
@@ -38,7 +51,8 @@ not. Parlour stays MIT.
   ABS apps work before Parlour grows native audiobook support"),
   which was never started. "Keep the ABS-compat endpoints working"
   therefore costs nothing now. Whether X2 is ever built, and for how
-  long it lives, is **D26**.
+  long it lives, is **D26**. *2026-11-24: D26 — never built; X2 is
+  cancelled.*
 - The schema already allows `audiobooks` and `podcasts` library
   kinds, and the admin UI already offers them. Before Phase 10, an
   audiobooks library scanned **nothing**: the walker only knows
@@ -52,7 +66,8 @@ not. Parlour stays MIT.
   per profile + item"). The owner wrote "per-user listening
   progress". Phase 10 stores progress per profile, like video, so
   each household member under one login keeps their own place.
-  D29 asks whether that is what he meant.
+  D29 asks whether that is what he meant. *2026-11-24: D29 — yes;
+  ABS's per-user progress maps onto Parlour's profiles.*
 
 ---
 
@@ -112,7 +127,7 @@ so a later author page (AB7) is a query, not a migration.
 - Chapters live in `book_chapters (item_id, chapter_index, start_ms,
   end_ms, title)`, rebuilt whenever a book's tracks change.
 
-### Progress (AB4, built — provisional until D29)
+### Progress (AB4, built — D29 decided 2026-11-24; follow-ups below)
 
 - Stored in `book_progress (profile_id, item_id, position_ms,
   duration_ms, finished, finished_at, last_listened_at,
@@ -168,6 +183,79 @@ Continue-listening rail (D29/D35), AB9 an importer for progress from
 the owner's running Audiobookshelf (D27), AB10 a transcode fallback
 for codecs a client can't play (CL5).
 
+*2026-11-24:* all unblocked except AB9, which is **cancelled**
+(D27: no ABS import). AB6 follows D30, AB7 follows D28, AB8 follows
+D29 + D35; the details are in the list below.
+
+### Follow-up from D28–D35 (where AB1–AB5 differ from ABS)
+
+D28 and D29 say to mirror Audiobookshelf and to write down where the
+first slice already differs. Checked against ABS's docs and server
+source on 2026-11-24 (behaviour only). Each item is follow-up work,
+not yet scheduled in a PR:
+
+1. **Disc folders (AB2).** ABS folds only `CD` / `Disc` / `Disk` +
+   1–3 digits directly inside the book folder. AB2 also folds
+   `Part N`. Drop `Part` from `disc_folder_number`, so a `Part 1`
+   folder is its own folder, as ABS reads it. Check the owner's
+   real library for `Part` folders first: the change moves any
+   such book's identity (`stable_key`).
+2. **Series from the folder (AB2/AB7).** ABS reads
+   `Author/Series/Title`'s middle folder as the series. AB2 ignores
+   it. AB7 adds `series` records and a book ↔ series join with a
+   sequence on the link (a book can be in several series), filled
+   from that folder and from tags.
+3. **Title-folder parsing (AB2).** ABS parses the title folder for
+   an ASIN `[…]`, a narrator `{…}`, a series sequence (`Vol 1 -`,
+   `Book 2 -`, `1.`, decimals), a publish year (`1994 -`,
+   `(1994) -`), and a subtitle after ` - ` (subtitle only behind a
+   setting, off by default). AB2 uses the folder name raw.
+4. **Which folders count (AB2).** ABS looks only at the three
+   folders nearest the book: title, series, author. AB2 takes the
+   *top-level* folder as the author fallback, so a deeper layout
+   (`Genre/Author/Title`) would credit "Genre". Use the nearest
+   author position instead.
+5. **Author splitting (AB2).** ABS splits folder-name authors on
+   `,` `;` `&` and `and`, and accepts `Last, First`. AB2's
+   `split_people` splits on `;` `&` ` / ` and on commas only when
+   every part has a space. Match ABS for folder names; keep tag
+   splitting under review in AB6.
+6. **Which track's tags (AB2/AB6).** ABS reads tags from the first
+   track in disc/track order. AB2 takes each field from the first
+   track that *has* it. Small difference; align in AB6 together
+   with the precedence list (D30).
+7. **Narrators (AB1).** ABS stores narrators as a plain list of
+   names on the book; AB1 stores them as `people` with role
+   `narrator`. The browsing behaviour (list and filter by narrator)
+   is the same either way. Decide in AB7 whether to keep `people`
+   rows; nothing user-visible depends on it.
+8. **Auto-finish (AB4).** ABS marks finished when the remaining time
+   drops below a per-library threshold (default 10 s), or at a
+   per-library percentage when set (off by default). AB4 finishes
+   only when a client says so. Add the server-side rule with those
+   library settings; keep manual mark finished / not finished, and
+   reset the position to 0 on a manual un-finish, as ABS does.
+9. **Hide from Continue Listening (AB4/AB8).** ABS keeps a per-user,
+   per-item hide flag that clears when progress next changes. Add
+   it to `book_progress` and the API.
+10. **Client timestamp (AB4/CL4).** ABS keeps last-arrival-wins but
+    stores the client's own last-update time. AB4 stamps the
+    server's time. Accept and store the client's.
+11. **Podcast progress shares the table (POD1).** ABS keeps one
+    progress model for books and episodes; POD1 puts episode
+    progress in the same table and shape rather than a parallel
+    one (a `kind` column or a generalised name, decided in POD1).
+12. **Metadata precedence and match (AB6, D30).** Per-library
+    precedence, ABS's order (folder → tags → NFO → `desc.txt` /
+    `reader.txt` → OPF → sidecar, later wins), with Parlour's
+    `.parlour.json` (D14) in the sidecar slot and ABS's
+    `metadata.json` read as an input; manual match; embedded covers
+    when the folder has no image. Before building library-wide
+    quick match, confirm ABS's default for "overwrite vs fill gaps"
+    (not confirmed on 2026-11-24).
+13. **No play count (AB8).** ABS keeps no play count; listens are
+    sessions. AB8 must not bump `play_count` for books.
+
 ---
 
 ## Phase 11 — Podcasts (plan only; no code yet)
@@ -175,7 +263,44 @@ for codecs a client can't play (CL5).
 The server owns the feeds. Clients never fetch RSS themselves, which
 is what lets a Fire Stick, a tablet and the phone agree.
 
-**Shape (to be confirmed by D31/D32):**
+### Decided 2026-11-24: mirror Audiobookshelf's podcast model (D31, D32)
+
+This supersedes the "to be confirmed" parts of the original sketch
+kept below it.
+
+- **Podcasts are a library.** A `podcasts` library (the kind already
+  exists) holds shows; profiles reach them through the existing
+  per-library access grants. **No per-profile subscriptions**:
+  everyone with access sees every show in the library, as in ABS.
+  The sketch's "Subscriptions" table is dropped. Progress is per
+  profile per episode, in the book progress table (follow-up 11).
+- **Only admins add shows** — by searching Apple's (iTunes)
+  directory (no key), by RSS URL, or by OPML import (admin-only);
+  OPML export too. POD7 becomes Apple search, not Podcast Index.
+- **The server downloads episodes, and only downloaded episodes
+  play** (ABS is not a pass-through). The "redirect to the
+  enclosure if it isn't downloaded" idea is dropped. An episode not
+  downloaded shows in the feed list and can be downloaded by hand.
+- **Per-show settings**, with ABS's defaults: auto-download new
+  episodes (**off**), check schedule (cron, **hourly**), max
+  episodes to keep (**0 = all**; when over, delete the oldest, at
+  most one per check, regardless of who has heard it), max new
+  episodes to download per check (**3**). A show's schedule turns
+  itself off after **24** failed checks in a row (with the
+  Dashboard notice the sketch already planned). No disk cap.
+- **Where episodes go.** ABS writes into the show's folder inside
+  the library folder. Parlour's media mounts are read-only, so a
+  podcasts library's folder is a **writable folder Parlour owns**,
+  set up as an explicit ops step like XFER5's sidecar opt-in, never
+  a flipped video/book mount. Which disk on sullivan holds it has
+  no ABS equivalent and waits for the owner; it must be answered
+  before POD3 runs in production.
+- **No ABS equivalent — deferred until Jordan asks:** a
+  per-profile follow/hide list (so a show one profile ignores stops
+  counting as current for it), showing transcripts (POD2 still
+  stores the link), and server-side Smart Speed / Voice Boost.
+
+**Original shape sketch (2026-11-23, to be confirmed by D31/D32):**
 
 - `podcasts` — feed URL, title, author, description, artwork,
   `etag` / `last_modified`, refresh state and the last error.
@@ -221,6 +346,34 @@ The iOS app is still Phase 6 and Android/Fire TV is Phase 3. This
 phase fixes the **server API** those apps will sync against, so the
 audiobook and podcast endpoints don't need a v2 the day a native
 client lands. Client code is out of scope here.
+
+### Client scope, decided 2026-11-24 (D26, D33–D35)
+
+- **Parlour's own clients only** (D26): the web UI and Parlour's
+  mobile apps. No ABS-compat surface, so the API below is the only
+  one a client uses. Audiobooks and podcasts live in the same app
+  (as ABS's app handles both). The screens are specified in
+  `UI-AUDIO-REFERENCE.md`: audiobooks modelled on Audiobooth,
+  podcasts on Overcast.
+- **Offline is in** (D33): the mobile app downloads books and
+  episodes, so CL4 goes ahead. Progress pushed later is last
+  arrival wins with the client's own timestamp stored, as ABS does.
+- **What syncs** (D35): progress + finished + the hide flag,
+  **bookmarks** (books), **listening sessions and stats** (CL3),
+  **playlists** (per profile per library, ordered) and
+  **collections** (per library, shared). The CL2 sync feed carries
+  those, plus shows and new episodes from the libraries a profile
+  can reach, instead of "subscriptions". **On the device only:** the
+  Up Next queue (POD8's synced queue is replaced by playlists),
+  playback speed (per book or per show), sleep timer, skip
+  intervals.
+- **No ABS equivalent — deferred until Jordan asks** (D34/D33/D35):
+  one app with video or a separate audio app; iOS before Android
+  for audio (D12's order stands meanwhile); audio on the Fire
+  Stick; a tablet-specific layout; Smart Speed / Voice Boost.
+
+The original text of this phase follows; where it says "only if
+D33/D35 …", read the decisions above.
 
 **Reference experiences** (behaviour only; clean-room rule above):
 
@@ -274,11 +427,23 @@ intervals) and what syncs through the server is **D35**.
   doesn't list. Whether and how the bundle carries them follows the
   owner's still-open **D25** for XFER1. Nothing in Phases 10–12
   decides it.
+  *2026-11-24:* **D25 is decided** (recent searches and the Activity
+  feed are in the bundle; hashes may sit in a plain zip), which
+  **unblocks the XFER chain** — XFER1 (the bundle spec) can start,
+  then XFER2–XFER8 in order. No XFER work is started by this
+  update. D25 did not cover the audio tables. By D14's split,
+  `book_progress` is per-profile state like watch history, and
+  `book_chapters` is rebuilt by every scan, so the natural XFER1
+  proposal is to carry the former under `user_data` and skip the
+  latter. That is XFER1's to propose and the owner's to confirm,
+  not decided here.
 - **Sidecars (Phase 8, D14).** ABS-style `metadata.json` /
   `desc.txt` / `reader.txt` next to books are a possible metadata
   input (D30). Writing sidecars into audiobook folders needs the
   same per-library opt-in as video.
 - **Compat (Phase 5).** X2 is reframed by D26. If built, it is a
   view over Phase 10's tables and never owns data (ARCHITECTURE §10).
+  *2026-11-24: D26 — X2 is cancelled.*
 - **Client order (D12).** Whether audio pulls the iOS app ahead of
-  Android is **D34**.
+  Android is **D34**. *2026-11-24: no ABS equivalent; deferred until
+  the owner asks. D12's order stands.*
