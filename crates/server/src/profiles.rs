@@ -229,8 +229,16 @@ fn validate_color(color: &str) -> Result<(), AppError> {
     }
 }
 
+/// The subtitle modes a profile can hold (`profiles.subtitle_mode`).
+/// The export bundle mirrors this set (`bundle::SubtitleMode`).
+pub const SUBTITLE_MODES: &[&str] = &["auto", "always", "never"];
+
+/// What the player does inside a segment (`profiles.segment_skip`).
+/// The export bundle mirrors this set (`bundle::SegmentSkip`).
+pub const SEGMENT_SKIP_MODES: &[&str] = &["button", "auto", "off"];
+
 fn validate_mode(mode: &str) -> Result<(), AppError> {
-    if matches!(mode, "auto" | "always" | "never") {
+    if SUBTITLE_MODES.contains(&mode) {
         Ok(())
     } else {
         Err(AppError::BadRequest(
@@ -240,7 +248,7 @@ fn validate_mode(mode: &str) -> Result<(), AppError> {
 }
 
 fn validate_segment_skip(mode: &str) -> Result<(), AppError> {
-    if matches!(mode, "button" | "auto" | "off") {
+    if SEGMENT_SKIP_MODES.contains(&mode) {
         Ok(())
     } else {
         Err(AppError::BadRequest(

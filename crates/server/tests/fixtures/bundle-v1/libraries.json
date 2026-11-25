@@ -1,0 +1,65 @@
+{
+  "libraries": [
+    {
+      "name": "Films",
+      "kind": "movies",
+      "created_at": "2026-11-11T22:31:07.416329Z",
+      "paths": [
+        "/media/films"
+      ],
+      "access": [
+        {
+          "username": "ada",
+          "profile": "Ada",
+          "max_rating": null
+        },
+        {
+          "username": "ada",
+          "profile": "Kids",
+          "max_rating": "PG"
+        },
+        {
+          "username": "ben",
+          "profile": "Ben",
+          "max_rating": "PG-13"
+        }
+      ]
+    },
+    {
+      "name": "Series",
+      "kind": "shows",
+      "created_at": "2026-11-11T22:33:41.871204Z",
+      "paths": [
+        "/media/series",
+        "/mnt/extra/series"
+      ],
+      "access": [
+        {
+          "username": "ada",
+          "profile": "Ada",
+          "max_rating": null
+        },
+        {
+          "username": "ben",
+          "profile": "Ben",
+          "max_rating": null
+        }
+      ]
+    },
+    {
+      "name": "Audiobooks",
+      "kind": "audiobooks",
+      "created_at": "2026-11-23T17:05:12.345671Z",
+      "paths": [
+        "/media/audiobooks"
+      ],
+      "access": [
+        {
+          "username": "ada",
+          "profile": "Ada",
+          "max_rating": null
+        }
+      ]
+    }
+  ]
+}

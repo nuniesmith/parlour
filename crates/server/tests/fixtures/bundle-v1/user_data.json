@@ -1,0 +1,227 @@
+{
+  "profiles": [
+    {
+      "username": "ada",
+      "profile": "Ada",
+      "items": [
+        {
+          "item": {
+            "library": "Series",
+            "stable_key": "series:night-harbor:2019:s01:e001"
+          },
+          "position_ms": 0,
+          "duration_ms": 3061000,
+          "played": true,
+          "is_favorite": false,
+          "play_count": 2,
+          "last_played_at": "2026-11-21T21:58:40.117203Z",
+          "created_at": "2026-11-20T20:01:15.401927Z",
+          "updated_at": "2026-11-21T21:58:40.117203Z"
+        },
+        {
+          "item": {
+            "library": "Series",
+            "stable_key": "series:night-harbor:2019:s01:e002"
+          },
+          "position_ms": 812345,
+          "duration_ms": 3063500,
+          "played": false,
+          "is_favorite": false,
+          "play_count": 1,
+          "last_played_at": "2026-11-22T20:44:02.775311Z",
+          "created_at": "2026-11-22T20:30:12.004517Z",
+          "updated_at": "2026-11-22T20:44:02.775311Z"
+        },
+        {
+          "item": {
+            "library": "Series",
+            "stable_key": "series:night-harbor:2019"
+          },
+          "position_ms": 0,
+          "duration_ms": null,
+          "played": false,
+          "is_favorite": true,
+          "play_count": 0,
+          "last_played_at": null,
+          "created_at": "2026-11-20T19:55:01.330157Z",
+          "updated_at": "2026-11-20T19:55:01.330157Z"
+        },
+        {
+          "item": {
+            "library": "Films",
+            "stable_key": "movie:paper-lanterns-2021:paper-lanterns:2021"
+          },
+          "position_ms": 0,
+          "duration_ms": 6262000,
+          "played": true,
+          "is_favorite": true,
+          "play_count": 1,
+          "last_played_at": "2026-11-18T22:10:05.920443Z",
+          "created_at": "2026-11-18T20:25:31.118306Z",
+          "updated_at": "2026-11-18T22:10:05.920443Z"
+        }
+      ]
+    },
+    {
+      "username": "ada",
+      "profile": "Kids",
+      "items": [
+        {
+          "item": {
+            "library": "Films",
+            "stable_key": "movie:paper-lanterns-2021:paper-lanterns:2021"
+          },
+          "position_ms": 1204000,
+          "duration_ms": 6262000,
+          "played": false,
+          "is_favorite": false,
+          "play_count": 1,
+          "last_played_at": "2026-11-19T16:03:27.561009Z",
+          "created_at": "2026-11-19T15:43:01.882214Z",
+          "updated_at": "2026-11-19T16:03:27.561009Z"
+        }
+      ]
+    },
+    {
+      "username": "ben",
+      "profile": "Ben",
+      "items": [
+        {
+          "item": {
+            "library": "Series",
+            "stable_key": "series:night-harbor:2019:s01:e001"
+          },
+          "position_ms": 30000,
+          "duration_ms": 3061000,
+          "played": false,
+          "is_favorite": false,
+          "play_count": 1,
+          "last_played_at": "2026-11-22T22:05:49.233901Z",
+          "created_at": "2026-11-22T22:05:19.004811Z",
+          "updated_at": "2026-11-22T22:05:49.233901Z"
+        }
+      ]
+    }
+  ],
+  "activity": [
+    {
+      "created_at": "2026-11-20T19:00:03.120456Z",
+      "kind": "auth.login",
+      "username": "ada",
+      "profile": null,
+      "item": null,
+      "actor": "ada",
+      "summary": "ada signed in",
+      "detail": {
+        "ip": "192.0.2.10"
+      }
+    },
+    {
+      "created_at": "2026-11-21T03:00:12.512398Z",
+      "kind": "scan.completed",
+      "username": null,
+      "profile": null,
+      "item": null,
+      "actor": null,
+      "summary": "Scan of Series finished",
+      "detail": {
+        "created_items": 0,
+        "errors": 0,
+        "job_id": "00000000-0000-4000-8000-00000000a001",
+        "library_id": "00000000-0000-4000-8000-00000000b002",
+        "missing_files": 0,
+        "probed_files": 0,
+        "seen_files": 2,
+        "trigger": "nightly"
+      }
+    },
+    {
+      "created_at": "2026-11-21T04:10:44.001239Z",
+      "kind": "import.completed",
+      "username": null,
+      "profile": {
+        "username": "ada",
+        "profile": "Ada"
+      },
+      "item": null,
+      "actor": null,
+      "summary": "Emby import finished",
+      "detail": {
+        "ambiguous": 0,
+        "dry_run": false,
+        "job_id": "00000000-0000-4000-8000-00000000a003",
+        "matched": 3,
+        "unmatched": 1
+      }
+    },
+    {
+      "created_at": "2026-11-21T18:30:27.884105Z",
+      "kind": "user.renamed",
+      "username": "ben",
+      "profile": null,
+      "item": null,
+      "actor": "benny",
+      "summary": "benny changed their username to ben",
+      "detail": {
+        "new_username": "ben",
+        "old_username": "benny",
+        "user_id": "00000000-0000-4000-8000-00000000c004"
+      }
+    },
+    {
+      "created_at": "2026-11-22T20:30:12.010442Z",
+      "kind": "playback.start",
+      "username": "ada",
+      "profile": {
+        "username": "ada",
+        "profile": "Ada"
+      },
+      "item": {
+        "library": "Series",
+        "stable_key": "series:night-harbor:2019:s01:e002"
+      },
+      "actor": "ada",
+      "summary": "ada started playing Night Harbor S1:E2 · The Lamp Room",
+      "detail": {
+        "session_id": "00000000-0000-4000-8000-00000000d005"
+      }
+    },
+    {
+      "created_at": "2026-11-22T20:44:02.781230Z",
+      "kind": "playback.stop",
+      "username": "ada",
+      "profile": {
+        "username": "ada",
+        "profile": "Ada"
+      },
+      "item": {
+        "library": "Series",
+        "stable_key": "series:night-harbor:2019:s01:e002"
+      },
+      "actor": "ada",
+      "summary": "ada stopped playing Night Harbor S1:E2 · The Lamp Room",
+      "detail": {
+        "duration_ms": 3063500,
+        "position_ms": 812345
+      }
+    },
+    {
+      "created_at": "2026-11-22T22:05:50.120977Z",
+      "kind": "playback.stopped_by_admin",
+      "username": "ada",
+      "profile": {
+        "username": "ben",
+        "profile": "Ben"
+      },
+      "item": {
+        "library": "Series",
+        "stable_key": "series:night-harbor:2019:s01:e001"
+      },
+      "actor": "ada",
+      "summary": "ada stopped ben's playback of Night Harbor S1:E1 · Low Tide",
+      "detail": {
+        "session_id": "00000000-0000-4000-8000-00000000d006"
+      }
+    }
+  ]
+}

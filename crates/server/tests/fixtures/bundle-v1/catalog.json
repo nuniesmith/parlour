@@ -1,0 +1,395 @@
+{
+  "items": [
+    {
+      "library": "Films",
+      "stable_key": "movie:paper-lanterns-2021:paper-lanterns:2021",
+      "parent": null,
+      "kind": "movie",
+      "title": "Paper Lanterns",
+      "sort_title": "paper lanterns",
+      "year": 2021,
+      "season_number": null,
+      "episode_number": null,
+      "air_date": null,
+      "overview": "Two sisters reopen their grandmother's lantern shop.",
+      "genres": [
+        "Drama",
+        "Family"
+      ],
+      "runtime_minutes": 104,
+      "content_rating": "PG",
+      "vote_average": 7.4,
+      "tmdb_id": 900101,
+      "tvdb_id": null,
+      "imdb_id": "tt9001010",
+      "metadata_status": "matched",
+      "metadata_provider": "tmdb",
+      "last_metadata_at": "2026-11-12T03:14:15.926535Z",
+      "created_at": "2026-11-11T22:40:01.271828Z",
+      "updated_at": "2026-11-12T03:14:15.926535Z",
+      "people": [
+        {
+          "name": "Juniper Hale",
+          "tmdb_id": 5000101,
+          "role": "actor",
+          "character_name": "Mei",
+          "sort_order": 0
+        },
+        {
+          "name": "Tomas Reyes",
+          "tmdb_id": 5000102,
+          "role": "actor",
+          "character_name": "Old Wen",
+          "sort_order": 1
+        }
+      ],
+      "segments": [
+        {
+          "kind": "credits",
+          "source": "chapters",
+          "start_ms": 5940000,
+          "end_ms": 6240000,
+          "confidence": 1.0,
+          "created_at": "2026-11-15T21:02:44.518272Z",
+          "updated_at": "2026-11-15T21:02:44.518272Z"
+        },
+        {
+          "kind": "intro",
+          "source": "heuristic",
+          "start_ms": 31500,
+          "end_ms": 92250,
+          "confidence": 0.5,
+          "created_at": "2026-11-15T21:02:44.518272Z",
+          "updated_at": "2026-11-15T21:02:44.518272Z"
+        }
+      ],
+      "images": [
+        {
+          "kind": "poster",
+          "variant": "original",
+          "source_url": "https://images.example.org/t/p/original/paper-lanterns-poster.jpg",
+          "file": null
+        },
+        {
+          "kind": "poster",
+          "variant": "w300",
+          "source_url": "https://images.example.org/t/p/original/paper-lanterns-poster.jpg",
+          "file": null
+        },
+        {
+          "kind": "backdrop",
+          "variant": "original",
+          "source_url": "https://images.example.org/t/p/original/paper-lanterns-backdrop.jpg",
+          "file": null
+        }
+      ]
+    },
+    {
+      "library": "Films",
+      "stable_key": "movie:the-long-thaw-2017:the-long-thaw:2017",
+      "parent": null,
+      "kind": "movie",
+      "title": "The Long Thaw",
+      "sort_title": "long thaw",
+      "year": 2017,
+      "season_number": null,
+      "episode_number": null,
+      "air_date": null,
+      "overview": null,
+      "genres": [],
+      "runtime_minutes": null,
+      "content_rating": null,
+      "vote_average": null,
+      "tmdb_id": null,
+      "tvdb_id": null,
+      "imdb_id": null,
+      "metadata_status": "needs_review",
+      "metadata_provider": "tmdb",
+      "last_metadata_at": "2026-11-12T03:14:16.104729Z",
+      "created_at": "2026-11-11T22:40:01.355417Z",
+      "updated_at": "2026-11-11T22:40:01.355417Z",
+      "people": [],
+      "segments": [],
+      "images": []
+    },
+    {
+      "library": "Films",
+      "stable_key": "movie::quiet-engines:0",
+      "parent": null,
+      "kind": "movie",
+      "title": "Quiet Engines",
+      "sort_title": "quiet engines",
+      "year": null,
+      "season_number": null,
+      "episode_number": null,
+      "air_date": null,
+      "overview": null,
+      "genres": [],
+      "runtime_minutes": null,
+      "content_rating": null,
+      "vote_average": null,
+      "tmdb_id": null,
+      "tvdb_id": null,
+      "imdb_id": null,
+      "metadata_status": "unmatched",
+      "metadata_provider": null,
+      "last_metadata_at": null,
+      "created_at": "2026-11-11T22:40:01.391806Z",
+      "updated_at": "2026-11-11T22:40:01.391806Z",
+      "people": [],
+      "segments": [],
+      "images": []
+    },
+    {
+      "library": "Series",
+      "stable_key": "series:night-harbor:2019",
+      "parent": null,
+      "kind": "series",
+      "title": "Night Harbor",
+      "sort_title": "night harbor",
+      "year": 2019,
+      "season_number": null,
+      "episode_number": null,
+      "air_date": null,
+      "overview": "A coastal town's lighthouse keepers keep vanishing.",
+      "genres": [
+        "Mystery",
+        "Drama"
+      ],
+      "runtime_minutes": 52,
+      "content_rating": "TV-14",
+      "vote_average": 8.1,
+      "tmdb_id": 900202,
+      "tvdb_id": 700303,
+      "imdb_id": "tt9002020",
+      "metadata_status": "matched",
+      "metadata_provider": "tmdb",
+      "last_metadata_at": "2026-11-12T03:14:19.733914Z",
+      "created_at": "2026-11-11T22:45:20.110387Z",
+      "updated_at": "2026-11-12T03:14:19.733914Z",
+      "people": [
+        {
+          "name": "Juniper Hale",
+          "tmdb_id": 5000101,
+          "role": "actor",
+          "character_name": "Inspector Lark",
+          "sort_order": 0
+        },
+        {
+          "name": "Ines Okafor",
+          "tmdb_id": 5000103,
+          "role": "actor",
+          "character_name": "Dr. Vale",
+          "sort_order": 1
+        }
+      ],
+      "segments": [],
+      "images": [
+        {
+          "kind": "poster",
+          "variant": "original",
+          "source_url": "https://images.example.org/t/p/original/night-harbor-poster.jpg",
+          "file": null
+        },
+        {
+          "kind": "poster",
+          "variant": "w300",
+          "source_url": "https://images.example.org/t/p/original/night-harbor-poster.jpg",
+          "file": null
+        }
+      ]
+    },
+    {
+      "library": "Series",
+      "stable_key": "series:night-harbor:2019:s01",
+      "parent": "series:night-harbor:2019",
+      "kind": "season",
+      "title": "Season 1",
+      "sort_title": "season 1",
+      "year": 2019,
+      "season_number": 1,
+      "episode_number": null,
+      "air_date": null,
+      "overview": null,
+      "genres": [],
+      "runtime_minutes": null,
+      "content_rating": null,
+      "vote_average": null,
+      "tmdb_id": null,
+      "tvdb_id": null,
+      "imdb_id": null,
+      "metadata_status": "unmatched",
+      "metadata_provider": null,
+      "last_metadata_at": null,
+      "created_at": "2026-11-11T22:45:20.118402Z",
+      "updated_at": "2026-11-11T22:45:20.118402Z",
+      "people": [],
+      "segments": [],
+      "images": []
+    },
+    {
+      "library": "Series",
+      "stable_key": "series:night-harbor:2019:s01:e001",
+      "parent": "series:night-harbor:2019:s01",
+      "kind": "episode",
+      "title": "Low Tide",
+      "sort_title": "low tide",
+      "year": 2019,
+      "season_number": 1,
+      "episode_number": 1,
+      "air_date": "2019-03-04",
+      "overview": "The keeper of the north light goes missing.",
+      "genres": [],
+      "runtime_minutes": 51,
+      "content_rating": null,
+      "vote_average": null,
+      "tmdb_id": null,
+      "tvdb_id": null,
+      "imdb_id": null,
+      "metadata_status": "unmatched",
+      "metadata_provider": null,
+      "last_metadata_at": null,
+      "created_at": "2026-11-11T22:45:20.125913Z",
+      "updated_at": "2026-11-12T03:14:20.051836Z",
+      "people": [],
+      "segments": [
+        {
+          "kind": "intro",
+          "source": "fingerprint",
+          "start_ms": 62000,
+          "end_ms": 107000,
+          "confidence": 0.83,
+          "created_at": "2026-11-15T21:04:10.402117Z",
+          "updated_at": "2026-11-15T21:04:10.402117Z"
+        },
+        {
+          "kind": "intro",
+          "source": "manual",
+          "start_ms": null,
+          "end_ms": null,
+          "confidence": 1.0,
+          "created_at": "2026-11-19T18:22:31.776503Z",
+          "updated_at": "2026-11-19T18:22:31.776503Z"
+        },
+        {
+          "kind": "credits",
+          "source": "chapters",
+          "start_ms": 2950000,
+          "end_ms": 3060000,
+          "confidence": 1.0,
+          "created_at": "2026-11-15T21:03:58.660214Z",
+          "updated_at": "2026-11-15T21:03:58.660214Z"
+        }
+      ],
+      "images": [
+        {
+          "kind": "still",
+          "variant": "original",
+          "source_url": "https://images.example.org/t/p/original/night-harbor-s01e01.jpg",
+          "file": null
+        }
+      ]
+    },
+    {
+      "library": "Series",
+      "stable_key": "series:night-harbor:2019:s01:e002",
+      "parent": "series:night-harbor:2019:s01",
+      "kind": "episode",
+      "title": "The Lamp Room",
+      "sort_title": "lamp room",
+      "year": 2019,
+      "season_number": 1,
+      "episode_number": 2,
+      "air_date": "2019-03-11",
+      "overview": null,
+      "genres": [],
+      "runtime_minutes": 51,
+      "content_rating": null,
+      "vote_average": null,
+      "tmdb_id": null,
+      "tvdb_id": null,
+      "imdb_id": null,
+      "metadata_status": "unmatched",
+      "metadata_provider": null,
+      "last_metadata_at": null,
+      "created_at": "2026-11-11T22:45:20.131277Z",
+      "updated_at": "2026-11-12T03:14:20.058102Z",
+      "people": [],
+      "segments": [
+        {
+          "kind": "recap",
+          "source": "manual",
+          "start_ms": 0,
+          "end_ms": 58000,
+          "confidence": 1.0,
+          "created_at": "2026-11-19T18:25:02.339816Z",
+          "updated_at": "2026-11-19T18:25:02.339816Z"
+        },
+        {
+          "kind": "intro",
+          "source": "fingerprint",
+          "start_ms": 60500,
+          "end_ms": 105500,
+          "confidence": 0.83,
+          "created_at": "2026-11-15T21:04:10.402117Z",
+          "updated_at": "2026-11-15T21:04:10.402117Z"
+        },
+        {
+          "kind": "credits",
+          "source": "heuristic",
+          "start_ms": 3001000,
+          "end_ms": 3062000,
+          "confidence": 0.5,
+          "created_at": "2026-11-15T21:03:59.017733Z",
+          "updated_at": "2026-11-15T21:03:59.017733Z"
+        }
+      ],
+      "images": []
+    },
+    {
+      "library": "Audiobooks",
+      "stable_key": "audiobook:M. R. Ellison/The Cartographer's Daughter",
+      "parent": null,
+      "kind": "audiobook",
+      "title": "The Cartographer's Daughter",
+      "sort_title": "cartographer's daughter",
+      "year": 2018,
+      "season_number": null,
+      "episode_number": null,
+      "air_date": null,
+      "overview": "A mapmaker's apprentice charts a coast that will not stay still.",
+      "genres": [
+        "Fiction"
+      ],
+      "runtime_minutes": null,
+      "content_rating": null,
+      "vote_average": null,
+      "tmdb_id": null,
+      "tvdb_id": null,
+      "imdb_id": null,
+      "metadata_status": "unmatched",
+      "metadata_provider": null,
+      "last_metadata_at": null,
+      "created_at": "2026-11-23T17:06:40.902615Z",
+      "updated_at": "2026-11-23T17:06:40.902615Z",
+      "people": [
+        {
+          "name": "M. R. Ellison",
+          "tmdb_id": null,
+          "role": "author",
+          "character_name": null,
+          "sort_order": 0
+        },
+        {
+          "name": "Priya Nandakumar",
+          "tmdb_id": null,
+          "role": "narrator",
+          "character_name": null,
+          "sort_order": 0
+        }
+      ],
+      "segments": [],
+      "images": []
+    }
+  ]
+}

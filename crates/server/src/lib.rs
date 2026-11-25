@@ -5,6 +5,7 @@
 pub mod activity;
 pub mod audiobooks;
 pub mod auth;
+pub mod bundle;
 pub mod catalog;
 pub mod config;
 pub mod dashboard;

@@ -380,6 +380,9 @@ should show the same anatomy with *its* reasons
   suggestions (`<datalist>`). Whether the D14 bundle carries
   them is XFER1's call; they are profile state, so the
   natural home is next to the profile's preferences.
+  *D25 (2026-11-24): they are in the bundle, next to the
+  profile's preferences — `profiles.json` → `recent_searches`,
+  newest first (`docs/IMPORT-EXPORT.md` §5.3).*
 - **Visual QA (UI11)**: screenshot checklist against §1 at
   desktop + phone widths; fix spacing/anatomy drift; empty
   states everywhere.
