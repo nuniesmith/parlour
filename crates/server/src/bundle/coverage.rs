@@ -132,6 +132,13 @@ pub const SCHEMA: &[Table] = &[
             ("name", Value("libraries.json libraries[].name")),
             ("kind", Value("libraries.json libraries[].kind")),
             ("created_at", Value("libraries.json libraries[].created_at")),
+            (
+                "write_sidecars",
+                Left(
+                    "the sidecar-writing opt-in (XFER4/XFER5) depends on the host's mounts; \
+                     an imported library starts with it off",
+                ),
+            ),
         ],
     },
     Table::Carried {
@@ -403,6 +410,11 @@ pub const SCHEMA: &[Table] = &[
     Table::Proposed {
         name: "book_progress",
         proposal: "carried under user_data.json profiles[].books[] like watch state; needs the owner's yes",
+    },
+    Table::LeftOut {
+        name: "item_sidecars",
+        why: "what the scanner last read from the sidecar files (XFER4); the new host reads \
+              the files themselves",
     },
     Table::LeftOut {
         name: "_sqlx_migrations",

@@ -1,0 +1,42 @@
+{
+  "format": "parlour-sidecar",
+  "format_version": 1,
+  "kind": "movie",
+  "title": "The Lantern Keeper",
+  "year": 2019,
+  "overview": "A lighthouse keeper on an invented coast counts the ships that never arrive.",
+  "genres": [
+    "Drama",
+    "Mystery"
+  ],
+  "content_rating": "PG-13",
+  "vote_average": 7.25,
+  "runtime_minutes": 112,
+  "tmdb_id": 900001,
+  "imdb_id": "tt9900001",
+  "people": [
+    {
+      "name": "Wren Halloway",
+      "role": "actor",
+      "character_name": "Keeper",
+      "sort_order": 0,
+      "tmdb_id": 990001
+    },
+    {
+      "name": "Odo Fennick",
+      "role": "actor",
+      "character_name": "Harbourmaster",
+      "sort_order": 1
+    }
+  ],
+  "segments": {
+    "size_bytes": 734003200,
+    "entries": [
+      {
+        "kind": "credits",
+        "start_ms": 6480000,
+        "end_ms": 6720000
+      }
+    ]
+  }
+}

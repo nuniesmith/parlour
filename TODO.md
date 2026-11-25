@@ -738,7 +738,7 @@ does NOT depend on Phase 2 transcoding.
   unavailable until a scan. Artwork is extracted only by the
   reader's names, hash-checked, into the artwork cache. Eleven
   readings for veto are in `docs/IMPORT-EXPORT.md` §12.
-- [ ] XFER4 (L) **Sidecar metadata with the media files**:
+- [x] XFER4 (L) **Sidecar metadata with the media files**:
   per-file `<name>.parlour.json` (series: folder-level
   `series.parlour.json` + per-episode files), versioned,
   holding item metadata (titles, year, provider ids, genres,
@@ -747,6 +747,26 @@ does NOT depend on Phase 2 transcoding.
   authoritative for those fields; a metadata job rewrites
   sidecars when matched metadata changes. Atomic writes
   (temp + rename).
+  *Done 2026-11-25, per D14 (audio proposal §9 / D36 still open —
+  sidecars carry no per-user state either way):* spec
+  `docs/IMPORT-EXPORT.md` §13, format `parlour-sidecar` v1 (strict:
+  version first, unknown fields are errors; present = authoritative,
+  absent = from the provider). Code `crates/catalog/src/sidecar/`.
+  `<video stem>.parlour.json` per movie/episode file,
+  `series.parlour.json` in the series folder. The scan applies new
+  or changed sidecars (fingerprinted in the new `item_sidecars`) and
+  re-applies them when a video is re-read; the matcher's new rule 0
+  fetches the sidecar's provider id, and every automatic match puts
+  the sidecar's fields back over the provider's. An admin's
+  fix-match wins over the sidecar (rewrites it, or marks it
+  overridden until the file changes). The `fetch_metadata` job (and
+  manual apply) rewrites matched items' sidecars only where
+  `libraries.write_sidecars` is on — a new column, **default off,
+  with no API or UI yet** (XFER5 turns it on); byte-identical files
+  are left alone, writes are temp + rename. Segments: manual rows
+  only, tied to the video's byte size. Neither the column nor
+  `item_sidecars` is in the bundle (format v1 unchanged). Twelve
+  readings for veto are in §13.9.
 - [ ] XFER5 (M) **Sidecar write opt-in**: per-library
   `write_sidecars` flag (default off — media mounts are
   read-only today); when on, XFER4 writes + optionally

@@ -1,6 +1,11 @@
 //! The matcher + apply step (MD2).
 //!
 //! Rules, in order:
+//! 0. The item's sidecar (XFER4) names the provider record — fetch
+//!    that one, confidence 1.0. Whatever a match applies, the
+//!    sidecar's own fields are then put back over it: a sidecar is
+//!    authoritative over automatic provider lookups (D14). An admin's
+//!    manual fix (MD4) is not automatic, so it wins over the sidecar.
 //! 1. A provider id written into a folder/file name by an *arr
 //!    tool (`{tmdb-603}`, `[tvdbid=78804]`) wins outright — fetch
 //!    that record, confidence 1.0.
@@ -283,6 +288,21 @@ pub async fn match_item<P: MetadataProvider>(
     let item = load_item(pool, item_id).await?;
     let kind = media_kind(&item.kind)?;
 
+    // Rule 0 (XFER4): the sidecar names the record.
+    if let Some(doc) = crate::sidecar::stored_document(pool, item_id).await? {
+        if let Some(id) = doc.provider_id(provider.name()) {
+            let details = provider.details(kind, id).await?;
+            apply_details(pool, provider, item_id, &details).await?;
+            crate::sidecar::reapply_stored(pool, item_id).await?;
+            return Ok(MatchOutcome {
+                status: "matched".into(),
+                provider: Some(provider.name().into()),
+                provider_id: Some(id),
+                confidence: Some(1.0),
+            });
+        }
+    }
+
     // Rule 1: explicit provider ids in the file/folder names.
     let rel_paths: Vec<(String,)> =
         sqlx::query_as("SELECT relative_path FROM media_files WHERE item_id = $1")
@@ -304,6 +324,7 @@ pub async fn match_item<P: MetadataProvider>(
     if let Some(id) = explicit {
         let details = provider.details(kind, id).await?;
         apply_details(pool, provider, item_id, &details).await?;
+        crate::sidecar::reapply_stored(pool, item_id).await?;
         return Ok(MatchOutcome {
             status: "matched".into(),
             provider: Some(provider.name().into()),
@@ -335,6 +356,7 @@ pub async fn match_item<P: MetadataProvider>(
     if best_score >= AUTO_MATCH_THRESHOLD && best_score - runner_up >= AUTO_MATCH_MARGIN {
         let details = provider.details(kind, best.provider_id).await?;
         apply_details(pool, provider, item_id, &details).await?;
+        crate::sidecar::reapply_stored(pool, item_id).await?;
         return Ok(MatchOutcome {
             status: "matched".into(),
             provider: Some(provider.name().into()),
@@ -385,6 +407,9 @@ pub async fn match_item<P: MetadataProvider>(
 }
 
 /// Manual fix (MD4): fetch this exact provider record and apply.
+/// The admin's choice wins over the item's sidecars (XFER4): they
+/// are marked overridden until a sidecar file changes or the caller
+/// rewrites them (`sidecar::write_item_sidecars`).
 pub async fn apply_manual<P: MetadataProvider>(
     pool: &parlour_db::PgPool,
     provider: &P,
@@ -394,7 +419,9 @@ pub async fn apply_manual<P: MetadataProvider>(
     let item = load_item(pool, item_id).await?;
     let kind = media_kind(&item.kind)?;
     let details = provider.details(kind, provider_id).await?;
-    apply_details(pool, provider, item_id, &details).await
+    apply_details(pool, provider, item_id, &details).await?;
+    crate::sidecar::mark_overridden(pool, item_id).await?;
+    Ok(())
 }
 
 /// Match every top-level item in a library; summary JSON counts
@@ -418,7 +445,8 @@ pub async fn match_library<P: MetadataProvider>(
         let _ = parlour_jobs::set_progress(pool, job, 0, total).await;
     }
     let mut counts = serde_json::json!({
-        "matched": 0, "needs_review": 0, "unmatched": 0, "failed": 0, "total": total
+        "matched": 0, "needs_review": 0, "unmatched": 0, "failed": 0, "total": total,
+        "sidecars_written": 0
     });
     let mut done = 0i32;
     for (item_id,) in &items {
@@ -427,6 +455,17 @@ pub async fn match_library<P: MetadataProvider>(
             Ok(outcome) => {
                 if let Some(n) = counts.get_mut(outcome.status.as_str()) {
                     *n = serde_json::json!(n.as_i64().unwrap_or(0) + 1);
+                }
+                // XFER4: rewrite the item's sidecars where the library
+                // opted in (a no-op otherwise, and for unmatched items).
+                let written = crate::sidecar::write_item_sidecars(pool, *item_id).await?;
+                counts["sidecars_written"] = serde_json::json!(
+                    counts["sidecars_written"].as_i64().unwrap_or(0) + written.written as i64
+                );
+                if let Some(job) = job_id {
+                    for e in &written.errors {
+                        let _ = parlour_jobs::add_error(pool, job, None, e).await;
+                    }
                 }
             }
             Err(e) => {

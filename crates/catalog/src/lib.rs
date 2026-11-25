@@ -19,6 +19,10 @@
 //! - `fingerprint` — the audio-fingerprint pass in the same job:
 //!   chromaprint over each episode's head and tail, cached by file
 //!   hash, matched across the whole season (SEG3, D20).
+//! - `sidecar` — per-item metadata stored with the media files
+//!   (`*.parlour.json`, XFER4, D14): read by the scanner before any
+//!   provider lookup and authoritative over it; rewritten by the
+//!   metadata job where a library opted in.
 //!
 //! Matching files to TMDB/TVDB metadata is `metadata_sync`
 //! (Milestone 1.4, providers in `parlour-metadata`); artwork
@@ -34,6 +38,7 @@ pub mod parse;
 pub mod probe;
 pub mod scan;
 pub mod segments;
+pub mod sidecar;
 pub mod walk;
 
 pub use artwork::{download_item_artwork, download_library_artwork, ArtworkReport};
@@ -43,6 +48,7 @@ pub use parse::{parse_file_name, ParsedName};
 pub use probe::{probe_file, ProbeResult};
 pub use scan::{scan_library, ScanReport};
 pub use segments::{detect_library, needs_detection, DetectError, DetectReport};
+pub use sidecar::{write_item_sidecars, SidecarWriteReport};
 pub use walk::{walk_library, DiscoveredVideo, SidecarSubtitle, WalkResult};
 
 use parlour_core::LibraryKind;
