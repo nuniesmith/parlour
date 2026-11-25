@@ -786,3 +786,45 @@ on 2026-11-20, which is still open and isn't touched here.)
   synced means it follows the person across devices and needs API +
   schema (CL2/CL3, POD8). Device-only means none. AB1–AB5 sync only
   position and finished.
+
+- **D37 — DECIDED 2026-11-25: users imported without a password
+  hash are created locked, and an admin can set their password.**
+  Jordan approved option (b) in his own words ("Approve D37(b) and
+  D38(b)", 2026-11-25). A bundle may carry users with no password
+  hash (D25 keeps hashes optional in the export). Such a user is
+  imported with an unusable hash — the account exists with its
+  library access and state, but nobody can sign in as them — and a
+  new admin "set password" action (built in the XFER3 PR) lets an
+  admin give them a working password. Not (a) refusing to create
+  them, not (c) a one-time random password shown to the admin, not
+  (d) set-password links tied to invites.
+
+  *Question as put (2026-11-24, XFER3 run 1):* **D37 — DECISION
+  NEEDED: what happens to users a bundle carries without a
+  password hash.** IMPORT-EXPORT.md §12: a hash-less imported user
+  can't sign in, and there is no admin password reset today (admin
+  user routes are list and rename only). Options: (a) refuse to
+  create them; (b) unusable hash plus a new admin "set password";
+  (c) a one-time random password shown to the admin; (d)
+  set-password links tied to invites. Recommended: (b).
+
+- **D38 — DECIDED 2026-11-25: on import, the bundle's admin
+  automatically adopts a pristine bootstrap admin.** Jordan
+  approved option (b) in his own words (2026-11-25). A fresh
+  install's first admin is a generic bootstrap account; when an
+  import brings a user whose username clashes with it and the
+  bootstrap admin is untouched (never renamed, no state of its
+  own), the imported user takes that account over instead of
+  failing as a username conflict. Any other username conflict is
+  still reported, never merged (the XFER3 rule stands). Not (a)
+  strict-with-an-ops-step, not (c) admin-mapped conflicts onto
+  existing accounts.
+
+  *Question as put (2026-11-24, XFER3 run 1):* **D38 — DECISION
+  NEEDED: the first-admin username clash on import.**
+  IMPORT-EXPORT.md §12: a fresh install's first admin clashes
+  with the bundle's username. Options: (a) strict, plus an ops
+  step (bootstrap under another name, or rename before import);
+  (b) automatically adopt a *pristine* bootstrap admin; (c) the
+  admin maps any conflict onto an existing account. Recommended:
+  (b).
