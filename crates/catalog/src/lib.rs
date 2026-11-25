@@ -48,7 +48,7 @@ pub use parse::{parse_file_name, ParsedName};
 pub use probe::{probe_file, ProbeResult};
 pub use scan::{scan_library, ScanReport};
 pub use segments::{detect_library, needs_detection, DetectError, DetectReport};
-pub use sidecar::{write_item_sidecars, SidecarWriteReport};
+pub use sidecar::{copy_item_artwork, write_item_sidecars, ArtworkCopyReport, SidecarWriteReport};
 pub use walk::{walk_library, DiscoveredVideo, SidecarSubtitle, WalkResult};
 
 use parlour_core::LibraryKind;

@@ -13,8 +13,9 @@ downloads it. Import exists as an API and a job (XFER3, §12):
 upload, dry-run report, apply. The admin page that drives both is
 XFER8, and nightly backups are XFER7. The per-item sidecars stored
 with the media files are a separate format, `parlour-sidecar` v1,
-specified in §13 (XFER4). The write opt-in and poster copy are XFER5,
-and NFO interop is XFER6.
+specified in §13 (XFER4). The per-library write opt-in, the mount
+step and the poster / backdrop copy are XFER5 (§13.10–§13.12), and
+NFO interop is XFER6.
 
 **What it rests on.**
 
@@ -358,7 +359,7 @@ must be accounted for, and the mirrored CHECK sets must match. A
 migration that adds a table, a column or a value fails that test
 until the format and this doc say where it goes.
 
-At 2026-11-25 the schema has 27 tables, 13 of them carried:
+At 2026-11-26 the schema has 28 tables, 13 of them carried:
 
 | table | lands in |
 |---|---|
@@ -392,6 +393,7 @@ the Activity feed. The rest of the schema stays on the old host:
 | `notices`, `notice_dismissals` | reconciled from live conditions once a minute on the new host |
 | `audio_fingerprints` | a cache keyed by file content; segment detection rebuilds it |
 | `item_sidecars` | what this host's scanner last read from the sidecar files (§13); the new host reads the files |
+| `sidecar_artwork` | which `poster.jpg` / `backdrop.jpg` files this host wrote beside its own media (§13.10) |
 | `_sqlx_migrations` | the new host keeps its own ledger |
 | `book_chapters`, `book_progress` | **open — §9** |
 
@@ -959,8 +961,9 @@ metadata job, so the sidecar is read **before** any lookup.
   sidecar's carried fields and credits are put back over it, on the
   item and, for a series, on its episodes (a series lookup enriches
   them too). Fields the sidecar doesn't carry keep the provider's
-  values. Artwork always comes from the provider; poster and backdrop
-  files beside the media are XFER5's.
+  values. Artwork always comes from the provider. Parlour doesn't
+  read `poster.jpg` / `backdrop.jpg` beside the media; it only
+  writes them, where the library opted in (§13.10).
 - **The admin's fix-match over the sidecar.** A manual apply (MD4)
   is an explicit choice, not a lookup, so it wins:
   - In a library that writes sidecars, the fix rewrites them at once,
@@ -985,9 +988,9 @@ rewrites that item's sidecars from what the database now holds:
 - **Only where the library opted in.** The opt-in is
   `libraries.write_sidecars`, off by default (D14: media mounts stay
   read-only). With it off, nothing is written, and the media folders
-  aren't even looked at for writing. XFER4 adds the column and obeys
-  it. Turning it on (API, admin UI, and the mount change) is XFER5's
-  task, so until then no library writes.
+  aren't even looked at for writing. XFER4 added the column and obeys
+  it. XFER5 lets an admin turn it on, and documents the mount change
+  that must go with it (§13.11).
 - **Only matched items.** The item must be `matched`: a movie, or a
   series with its series-folder sidecars and its episodes' sidecars.
   An unmatched or needs-review item gets nothing, so a file-name guess
@@ -1020,6 +1023,10 @@ rewrites that item's sidecars from what the database now holds:
   with it off.
 - `item_sidecars` **stays behind.** It is what one host read from its
   own files; the new host reads the files.
+- `sidecar_artwork` (XFER5) **stays behind.** It records which poster
+  and backdrop files one host wrote beside its own media. On a new
+  host, files it finds there are treated as not Parlour's until it
+  writes them itself (§13.10).
 
 Format v1 of the bundle doesn't change.
 
@@ -1032,6 +1039,7 @@ TODO where they don't spell the detail out.
    `libraries.write_sidecars` (default off) and obeys it. XFER5 owns
    turning it on (API, UI, the documented mount change) and the
    poster/backdrop copy. Until XFER5, the writer only runs in tests.
+   *(XFER5 has since added those: §13.10–§13.12.)*
 2. **"Authoritative" means over automatic lookups.** An admin's
    fix-match beats the sidecar, and rewrites it where the library
    writes (§13.6). Without that, a wrong id in a sidecar could never
@@ -1066,6 +1074,207 @@ TODO where they don't spell the detail out.
     sidecars either way: audiobook progress is per-user state, so it
     lives only in the bundle, never in a sidecar.
 
+### 13.10 Poster and backdrop beside the media (XFER5)
+
+Where a library has opted in, the artwork step copies a matched
+item's cached poster and backdrop next to its media, so they travel
+with the files like its sidecar does. Code:
+`crates/catalog/src/sidecar/artwork.rs`.
+
+**When.** The copy runs at the end of the artwork step for an item,
+`download_item_artwork`: the `download_artwork` job, for one item or
+a whole library, and an admin's manual apply (MD4), which caches the
+new artwork at once. That is when the cache holds the item's current
+artwork. A metadata match on its own doesn't copy, because a match
+resets the item's artwork to "to be downloaded" (MD3). So after a
+match, run **Download artwork** on the library.
+
+**What and where.**
+
+| item | files | folder |
+|---|---|---|
+| movie | `poster.jpg`, `backdrop.jpg` | the folder of each of its video files |
+| series | `poster.jpg`, `backdrop.jpg` | each of its series folders (where `series.parlour.json` goes, §13.1) |
+
+- Seasons and episodes get none.
+- **Only a folder that belongs to the item.** Every available video
+  anywhere under the folder must belong to that item (for a series:
+  to its episodes), and the folder must not be a library root. So a
+  movie loose in the root, or two movies sharing a folder, get no
+  copy: a single `poster.jpg` there can't say whose it is. Their
+  sidecars are still written.
+- The bytes are the cached file, unchanged: the original size, not
+  the w300 grid copy (unless only that is cached). The generated
+  placeholder tile is never copied.
+- **JPEG only.** The files are named `.jpg`. Cached artwork that
+  isn't a JPEG (it doesn't start with `FF D8 FF`) isn't copied, and
+  the job lists it as left alone. TMDB and TVDB serve JPEGs.
+
+**The same rules as the sidecar writer (§13.7):**
+
+- **Only where the library opted in**, and only for **matched**
+  movies and series in a video library. With the opt-in off, the
+  media folders aren't looked at.
+- **Atomic.** Written to a hidden temp file in the same folder
+  (`.poster.jpg.<random>.tmp`), synced, then renamed. On a failure
+  the temp file is removed and the old file stays.
+- **A file that already holds the same bytes is left alone**, mtime
+  included. So re-running the job writes nothing.
+- **A failed write doesn't fail the job.** Each file that can't be
+  written is listed on the job (path and reason), and the rest carry
+  on.
+
+**Never over someone else's file.** Parlour records each file it
+writes, with the SHA-256 of its bytes, in `sidecar_artwork`. It
+replaces a file only while the file still holds exactly what Parlour
+recorded. A `poster.jpg` that Parlour didn't write (another media
+server saved it, or someone put it there by hand) is left alone and
+listed on the job's result as `copies_left_alone`, with the reason.
+The same goes for one of Parlour's copies that someone has since
+replaced: from then on it's theirs. To hand a folder back to
+Parlour, delete the file; the next artwork run writes its own.
+
+**No artwork.** An item with no cached poster (or backdrop) gets no
+file of that kind. A copy Parlour wrote earlier stays where it is:
+Parlour never deletes anything beside the media.
+
+**Refreshed when the cached artwork changes.** After a fix-match or a
+provider's new image, the next artwork run downloads the new bytes
+and replaces Parlour's own copies with them (they still hold the
+recorded hash). A file that isn't Parlour's is not refreshed.
+
+**The scanner ignores them.** `.jpg` isn't a video extension, and
+the files aren't `*.parlour.json`, so a scan neither catalogues nor
+reads them. The filesystem watcher sees the write and queues a scan,
+which finds nothing new.
+
+### 13.11 Turning it on: the flag and the mount step (XFER5)
+
+Two things must both be true before Parlour writes anything next to
+a library's media: **the library's `write_sidecars` is on**, and
+**the folders are mounted writable** for the Parlour process. Either
+one alone writes nothing. The flag is off for every library until an
+admin turns it on, and no other step turns it on.
+
+**The flag.**
+
+- `GET /api/v1/admin/libraries/{id}` answers with `write_sidecars`
+  and `folders`: each root path with `writable` and, when it isn't,
+  `problem` (the system's reason, e.g. `Read-only file system (os
+  error 30)`). Writability is asked of the kernel (`access(2)`,
+  `W_OK`) without writing anything.
+- `PUT /api/v1/admin/libraries/{id}/write-sidecars` with
+  `{"enabled": true}` or `{"enabled": false}` is the **only** way the
+  flag changes. Admins only, and the body is strict (an unknown field
+  is refused). It answers with the library as above. It can be turned
+  on only for `movies` and `shows` libraries, the ones whose items
+  get sidecars today. Turning it off is always allowed. Each change
+  goes in the Activity feed (`library.sidecars_on` /
+  `library.sidecars_off`, category "Library settings") with the
+  admin's name. Setting it to what it already is changes nothing and
+  records nothing.
+- Creating a library (`POST /api/v1/admin/libraries`) or editing one
+  (`PATCH …/{id}`) with a `write_sidecars` field is refused (400). A
+  new library starts with it off. An import never sets it (§13.8).
+- **Server → Library** has a "Writing next to the media" card per
+  movie or show library. It shows the flag, and each folder as
+  writable or not writable (with the reason). Turning it on asks for
+  a confirmation that says what will be written, that nothing is
+  deleted, and that the mount must also be writable. The table has a
+  **Download artwork** action per library next to Match metadata.
+- **A read-only mount fails cleanly.** The flag can be on while the
+  mount is still read-only, for example while the ops change is
+  pending. Then:
+  - each write fails onto its job (metadata or artwork) as a listed
+    error, and the job still succeeds;
+  - the old files stay and no temp files are left;
+  - the library card shows the folders that can't be written;
+  - a warning notice ("Films may write sidecars, but Parlour can't
+    write in /media/films") appears on the Dashboard and in Alerts.
+    It is reconciled every minute, and it clears when the folders can
+    be written or the flag is turned off.
+
+**The mount step (ops, outside Parlour).** The compose file mounts
+all media read-only (`${PARLOUR_MEDIA_PATH}:/media:ro`), and it
+stays that way. For each library that opts in, the operator:
+
+1. **Mounts that library's folder writable, and only that folder.**
+   Add a second, writable bind mount for it on top of the read-only
+   one, in the `parlour` service's `volumes:`, e.g. for a library
+   whose root is `/media/films`:
+
+   ```yaml
+   volumes:
+     - ${PARLOUR_MEDIA_PATH:-./media}:/media:ro
+     - /srv/media/films:/media/films:rw   # Films writes sidecars (XFER5)
+   ```
+
+   A nested bind mount like this is writable while the rest of
+   `/media` stays read-only. Don't flip the whole `/media` mount to
+   `:rw` (AGENTS.md: "don't just flip the mount"). The library's root
+   path in Parlour doesn't change.
+2. **Lets the container's user write there.** The image runs as root
+   today, so files appear on the host owned by root. If the host
+   folder belongs to another user, set the service's `user:` to that
+   uid:gid, or grant write access to the folder; otherwise the
+   writes fail with "Permission denied", cleanly as above.
+3. **Recreates the container** (`docker compose up -d parlour`) so
+   the new mount applies. This is the deliberate, owner-run step;
+   Parlour can't change its own mounts.
+4. **Checks Server → Library.** The library's folders should now
+   read "writable". Then turn the library on, run **Match metadata**
+   (writes the sidecars), then **Download artwork** (writes the
+   copies). Each job lists what it wrote or couldn't write.
+
+To stop: turn the flag off first (nothing more is written), then
+remove the extra mount if wanted. Files already written stay. They
+are ordinary files, and the scanner keeps reading the `.parlour.json`
+ones (§13.5).
+
+### 13.12 Readings made in XFER5 — for the owner's veto
+
+None of these is a new decision. Each is how XFER5 read D14 and the
+TODO where they don't spell the detail out.
+
+1. **"Optionally copies" = part of the same opt-in.** The copy has no
+   switch of its own: a library that writes sidecars also gets
+   poster / backdrop copies. A separate toggle would be a second
+   decision.
+2. **The copy runs with the artwork step, not the metadata job.** A
+   match resets artwork to "to be downloaded", so only the artwork
+   step has the current image. A library-wide **Download artwork**
+   action (`POST /api/v1/admin/libraries/{id}/artwork`, the existing
+   `download_artwork` job) was added so the copy can be run per
+   library; before XFER5 only per-item artwork runs had an endpoint.
+3. **Only folders that belong to one item get a copy:** never a
+   library root, never a folder shared by two movies (or two
+   series). Emby / Kodi-style `<name>-poster.jpg` names for shared
+   folders are not written. The TODO names only `poster.jpg` /
+   `backdrop.jpg`.
+4. **Never over a file Parlour didn't write.** The TODO says a file
+   with the same bytes is left alone. XFER5 also leaves alone a file
+   with *different* bytes unless Parlour wrote it (the
+   `sidecar_artwork` hash). An existing Emby-saved `poster.jpg` is
+   therefore kept, never replaced.
+5. **Refresh yes, delete never.** Parlour's own copies follow the
+   cached artwork; a missing image leaves the old copy in place.
+6. **JPEG only**, because the names say `.jpg`. Other formats are
+   listed as left alone, not converted.
+7. **The flag can be on while the mount is read-only.** Refusing it
+   would force the ops step to come first. Instead the library card
+   shows each folder's state, every failed write is listed on its
+   job, and a notice stays up until the mount is fixed or the flag is
+   off.
+8. **Only `movies` and `shows` libraries can turn it on.** These are
+   the ones the writer covers (§13.9 reading 11). AB6 widens this for
+   audiobooks.
+9. **Changes are audited** in the Activity feed under a new
+   "Library settings" category, because the flag lets Parlour write
+   on the media disks.
+10. **The audio proposal (§9, D36) is still open.** XFER5 doesn't
+    touch it: no `book_progress` / `book_chapters` anywhere, and
+    audiobook progress, being per-user state, never goes in a sidecar.
+
 ## 14. In the code
 
 - **`crates/server/src/bundle/`:**
@@ -1088,6 +1297,14 @@ TODO where they don't spell the detail out.
   `scan.rs` (the pass), `metadata_sync.rs` (rule 0, re-apply,
   override), and `crates/server/src/metadata.rs` (the job and manual
   apply write).
+- **XFER5:** `crates/catalog/src/sidecar/artwork.rs` — the poster /
+  backdrop copy, called from `artwork.rs`'s `download_item_artwork`;
+  `crates/server/src/libraries.rs` — `write_sidecars` on the admin
+  library view, the folders' writability, and
+  `PUT …/write-sidecars`; `crates/server/src/notices.rs` — the
+  "can't write" notice; `crates/server/src/metadata.rs` — the
+  library-wide artwork route; `web/src/routes/admin/library/` — the
+  card and the toggle. Migration `20261126000000_sidecar_artwork.sql`.
 - **Fixtures:** `crates/server/tests/fixtures/bundle-v1/`;
   `crates/catalog/tests/fixtures/sidecar-v1/`.
 - **Unit tests** in `bundle/tests.rs` (run in CI):
@@ -1122,3 +1339,12 @@ TODO where they don't spell the detail out.
     record), a re-probe, a refused sidecar, segments for another
     encode, a fix-match with and without writing, and a removed
     sidecar.
+  - `tests/sidecar_optin_flow.rs` (XFER5): over HTTP with stub TMDB.
+    It checks that the flag is off by default and can't be set by
+    creating or editing a library, and that with it off neither job
+    writes. Turned on, it checks the sidecars and the copies (not in a
+    root, not in a shared folder, not over someone else's
+    `poster.jpg`), that re-runs touch nothing, the refresh of
+    Parlour's own copies, a folder that can't be written (job
+    succeeds, paths listed, no temp files), the library's folder
+    report and the notice, and that turning it off stops all writes.

@@ -15,6 +15,8 @@
 //!   fix-match flow
 //! - `POST /admin/items/{id}/metadata/apply` — apply a chosen
 //!   provider record (manual fix; it wins over the item's sidecars)
+//! - `POST /admin/libraries/{id}/artwork` — cache a library's
+//!   artwork (job)
 //! - `POST /admin/items/{id}/artwork` — cache artwork (job)
 //!
 //! Users: `GET /items/{id}/artwork/{kind}` serves the cached file.
@@ -22,6 +24,8 @@
 //! Sidecars (XFER4): after a match, the job (and a manual fix)
 //! rewrites the item's `*.parlour.json` files when its library has
 //! `write_sidecars` on; with it off nothing touches the media.
+//! Where it is on, the artwork step also copies a matched item's
+//! poster / backdrop beside its media (XFER5).
 
 use std::path::PathBuf;
 
@@ -180,10 +184,20 @@ pub async fn run_artwork_job_claimed(
         .and_then(|v| v.as_str())
         .and_then(|s| Uuid::parse_str(s).ok());
     let result = if let Some(item_id) = item_id {
-        parlour_catalog::download_item_artwork(&pool, &http, &settings.artwork_dir, item_id)
+        match parlour_catalog::download_item_artwork(&pool, &http, &settings.artwork_dir, item_id)
             .await
-            .map(|r| serde_json::to_value(r).unwrap_or(serde_json::Value::Null))
-            .map_err(|e| e.to_string())
+        {
+            Ok(r) => {
+                // Failed downloads and copies (a read-only media
+                // mount, say) are listed on the job; the job still
+                // succeeds (XFER5).
+                for e in &r.errors {
+                    let _ = parlour_jobs::add_error(&pool, job.id, None, e).await;
+                }
+                Ok(serde_json::to_value(r).unwrap_or(serde_json::Value::Null))
+            }
+            Err(e) => Err(e.to_string()),
+        }
     } else if let Some(library_id) = job.library_id {
         parlour_catalog::download_library_artwork(
             &pool,
@@ -295,6 +309,33 @@ async fn match_item_endpoint(
         parlour_jobs::JobKind::FetchMetadata,
         Some(library_id),
         serde_json::json!({ "trigger": "manual", "item_id": item_id }),
+    )
+    .await?;
+    Ok((StatusCode::ACCEPTED, Json(job)))
+}
+
+/// Cache a whole library's artwork (and, where the library writes
+/// sidecars, copy each matched item's poster / backdrop beside its
+/// media — XFER5).
+async fn artwork_library_endpoint(
+    State(state): State<AppState>,
+    _admin: AdminUser,
+    Path(id): Path<String>,
+) -> Result<(StatusCode, Json<parlour_jobs::Job>), AppError> {
+    let library_id = parse_id(&id)?;
+    let exists: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM libraries WHERE id = $1")
+        .bind(library_id)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(AppError::from)?;
+    if exists.is_none() {
+        return Err(AppError::NotFound("no such library".into()));
+    }
+    let job = enqueue_and_spawn(
+        &state,
+        parlour_jobs::JobKind::DownloadArtwork,
+        Some(library_id),
+        serde_json::json!({ "trigger": "manual" }),
     )
     .await?;
     Ok((StatusCode::ACCEPTED, Json(job)))
@@ -444,18 +485,28 @@ async fn apply_endpoint(
     for e in &sidecars.errors {
         tracing::warn!(%item_id, error = %e, "sidecar write failed");
     }
-    // Cache the new artwork right away so the fix is visible.
+    // Cache the new artwork right away so the fix is visible; where
+    // the library writes sidecars this also refreshes Parlour's own
+    // poster.jpg / backdrop.jpg beside the media (XFER5).
     let http = reqwest::Client::new();
-    let _ = parlour_catalog::download_item_artwork(
+    let artwork = parlour_catalog::download_item_artwork(
         &state.pool,
         &http,
         &state.metadata.artwork_dir,
         item_id,
     )
-    .await;
-    Ok(Json(
-        serde_json::json!({ "status": "matched", "sidecars": sidecars }),
-    ))
+    .await
+    .ok();
+    if let Some(a) = &artwork {
+        for e in &a.errors {
+            tracing::warn!(%item_id, error = %e, "artwork download or copy failed");
+        }
+    }
+    Ok(Json(serde_json::json!({
+        "status": "matched",
+        "sidecars": sidecars,
+        "artwork": artwork,
+    })))
 }
 
 /// Serve a cached artwork file for an item the profile can access.
@@ -521,6 +572,10 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/api/v1/admin/items/{id}/metadata/apply",
             post(apply_endpoint),
+        )
+        .route(
+            "/api/v1/admin/libraries/{id}/artwork",
+            post(artwork_library_endpoint),
         )
         .route(
             "/api/v1/admin/items/{id}/artwork",

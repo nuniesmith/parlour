@@ -1,6 +1,8 @@
 <script lang="ts">
   // Server → Library: library definitions, their folders, and
-  // the scan / metadata-match actions.
+  // the scan / metadata-match / artwork actions. Also the per-library
+  // opt-in to writing next to the media (XFER5, D14): off by default,
+  // turned on only here, behind a confirm that says what gets written.
   import { onMount } from 'svelte';
   import { api } from '$lib/api';
   import { loadSession } from '$lib/session.svelte';
@@ -20,7 +22,7 @@
     libraries = await Promise.all(
       base.map(async (lib) => {
         const detail = await api<LibraryDetail>(`/api/v1/admin/libraries/${lib.id}`);
-        return detail.data ?? { ...lib, paths: [] };
+        return detail.data ?? { ...lib, paths: [], write_sidecars: false, folders: [] };
       }),
     );
     loaded = true;
@@ -63,6 +65,35 @@
     void loadSession();
   }
 
+  // Video libraries only: the writer covers movies and shows today.
+  const SIDECAR_KINDS = ['movies', 'shows'];
+
+  async function setWriteSidecars(lib: LibraryDetail, enabled: boolean) {
+    error = null;
+    notice = null;
+    if (enabled) {
+      const sure = confirm(
+        `Let Parlour write files next to the media of "${lib.name}"?\n\n` +
+          'It will write a .parlour.json beside each matched video, series.parlour.json in ' +
+          'each series folder, and poster.jpg / backdrop.jpg in folders that hold one item. ' +
+          "It never deletes anything and never replaces a poster.jpg it didn't write.\n\n" +
+          "Nothing is written until the library's folders are also mounted writable on the " +
+          'server host. That is a change you make outside Parlour.',
+      );
+      if (!sure) return;
+    }
+    const { data, error: err } = await api<LibraryDetail>(
+      `/api/v1/admin/libraries/${lib.id}/write-sidecars`,
+      { method: 'PUT', body: JSON.stringify({ enabled }) },
+    );
+    if (data) {
+      libraries = libraries.map((l) => (l.id === data.id ? data : l));
+      notice = enabled
+        ? `${lib.name} may now write next to its media. Sidecars are written by the next metadata match, poster and backdrop copies by the next artwork download.`
+        : `${lib.name} no longer writes next to its media. Files already written stay where they are.`;
+    } else error = err ?? 'Could not change that setting.';
+  }
+
   async function runJob(path: string, done: string) {
     error = null;
     notice = null;
@@ -102,12 +133,73 @@
               runJob(`/api/v1/admin/libraries/${lib.id}/metadata`, 'Metadata match started.')}
             >Match metadata</button
           >
+          <button
+            class="btn small"
+            onclick={() =>
+              runJob(`/api/v1/admin/libraries/${lib.id}/artwork`, 'Artwork download started.')}
+            >Download artwork</button
+          >
           <button class="btn small danger" onclick={() => deleteLibrary(lib)}>Delete</button>
         </div></td>
       </tr>
     {/each}
   </tbody>
 </table></div>
+{/if}
+
+{#if libraries.some((l) => SIDECAR_KINDS.includes(l.kind))}
+  <h2>Writing next to the media</h2>
+  <p class="dim">
+    Off by default: Parlour only reads your media folders. A library that is turned on gets
+    its metadata saved beside its files (<span class="mono">.parlour.json</span>, plus
+    <span class="mono">poster.jpg</span> / <span class="mono">backdrop.jpg</span>), so it travels
+    when the files move. Two things must both be true before anything is written: the switch
+    here is on, and the server host mounts that library's folders writable.
+  </p>
+  <div class="sidecar-list">
+    {#each libraries.filter((l) => SIDECAR_KINDS.includes(l.kind)) as lib (lib.id)}
+      <section class="sidecar-card" aria-label={`Writing next to the media of ${lib.name}`}>
+        <div class="sidecar-head">
+          <h3>{lib.name}</h3>
+          <span class={lib.write_sidecars ? 'state on' : 'state off'}
+            >{lib.write_sidecars ? 'Writes next to the media' : 'Read-only (default)'}</span
+          >
+          {#if lib.write_sidecars}
+            <button class="btn small" onclick={() => setWriteSidecars(lib, false)}>Turn off</button>
+          {:else}
+            <button class="btn small" onclick={() => setWriteSidecars(lib, true)}
+              >Let Parlour write here…</button
+            >
+          {/if}
+        </div>
+        {#if lib.folders.length === 0}
+          <p class="dim">This library has no folders yet.</p>
+        {:else}
+          <ul class="folders">
+            {#each lib.folders as f (f.path)}
+              <li>
+                <span class="mono">{f.path}</span>
+                {#if f.writable}
+                  <span class="ok">writable</span>
+                {:else}
+                  <span class={lib.write_sidecars ? 'bad' : 'dim'}
+                    >not writable{f.problem ? ` (${f.problem})` : ''}</span
+                  >
+                {/if}
+              </li>
+            {/each}
+          </ul>
+          {#if lib.write_sidecars && lib.folders.some((f) => !f.writable)}
+            <p class="error" role="alert">
+              Nothing can be written in the folders marked not writable. Mount them writable on
+              the server host (docs/IMPORT-EXPORT.md §13.11, "The mount step"), or turn this off.
+              Failed writes are listed on the job that tried them.
+            </p>
+          {/if}
+        {/if}
+      </section>
+    {/each}
+  </div>
 {/if}
 
 <form class="form" onsubmit={saveLibrary}>
@@ -152,5 +244,55 @@
 <style>
   .link {
     color: var(--accent);
+  }
+  .sidecar-list {
+    display: grid;
+    gap: 0.75rem;
+    margin-bottom: 1.5rem;
+  }
+  .sidecar-card {
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--bg-card);
+    padding: 0.75rem 1rem;
+  }
+  .sidecar-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem;
+  }
+  .sidecar-head h3 {
+    margin: 0;
+    font-size: 1rem;
+  }
+  .state {
+    font-size: 0.85rem;
+  }
+  .state.on {
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .state.off {
+    color: var(--text-dim);
+  }
+  .folders {
+    list-style: none;
+    margin: 0.5rem 0 0;
+    padding: 0;
+    display: grid;
+    gap: 0.25rem;
+  }
+  .folders li {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    overflow-wrap: anywhere;
+  }
+  .ok {
+    color: var(--ok);
+  }
+  .bad {
+    color: var(--danger);
   }
 </style>

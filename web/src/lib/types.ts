@@ -43,6 +43,17 @@ export interface Library {
 
 export interface LibraryDetail extends Library {
   paths: string[];
+  /** Sidecar opt-in (D14, XFER5): may Parlour write next to the
+   *  media? Off by default; set only by its own endpoint. */
+  write_sidecars: boolean;
+  /** Whether Parlour can write in each root folder right now. */
+  folders: FolderAccess[];
+}
+
+export interface FolderAccess {
+  path: string;
+  writable: boolean;
+  problem: string | null;
 }
 
 export interface Item {

@@ -12,6 +12,7 @@
   const LINKS: Record<string, { href: string; label: string }> = {
     job_failed: { href: '/admin/jobs', label: 'Open jobs' },
     metadata_review: { href: '/admin/metadata', label: 'Review matches' },
+    sidecars_unwritable: { href: '/admin/library', label: 'Open libraries' },
   };
 
   const SEVERITY_LABEL: Record<string, string> = {

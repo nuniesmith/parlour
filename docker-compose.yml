@@ -46,6 +46,11 @@ services:
       - "${PARLOUR_PORT:-8585}:${PARLOUR_PORT:-8585}"
     volumes:
       - ${PARLOUR_MEDIA_PATH:-./media}:/media:ro
+      # A library that opts into writing sidecars + poster/backdrop
+      # next to its media (XFER5) also needs ITS folder writable — a
+      # second bind mount on top of the read-only one, never `:rw`
+      # on all of /media. See docs/IMPORT-EXPORT.md §13.11. Example:
+      # - /srv/media/films:/media/films:rw
       - parlour-artwork:/artwork
       - parlour-cache:/cache
     # GPU transcoding (Phase 2) — enable ONE block for your host:

@@ -767,12 +767,36 @@ does NOT depend on Phase 2 transcoding.
   only, tied to the video's byte size. Neither the column nor
   `item_sidecars` is in the bundle (format v1 unchanged). Twelve
   readings for veto are in §13.9.
-- [ ] XFER5 (M) **Sidecar write opt-in**: per-library
+- [x] XFER5 (M) **Sidecar write opt-in**: per-library
   `write_sidecars` flag (default off — media mounts are
   read-only today); when on, XFER4 writes + optionally
   copies poster/backdrop as `poster.jpg` / `backdrop.jpg`
   next to the media. The flag + mount change is an explicit
   ops step, documented in the task PR.
+  *Done 2026-11-26, per D14 (audio proposal §9 / D36 still open —
+  untouched):* spec `docs/IMPORT-EXPORT.md` §13.10–§13.12. The flag
+  changes only through `PUT /api/v1/admin/libraries/{id}/write-sidecars`
+  (admins; `movies` / `shows` libraries; logged in Activity under
+  "Library settings"). Creating or editing a library with the field
+  is refused, and an import never sets it. The admin library view
+  reports each root folder's writability (`access(2)`, nothing
+  written). **Server → Library** has a per-library card with the
+  state, the folders, and a confirmed "Let Parlour write here…", plus
+  a library-wide **Download artwork** action (new
+  `POST …/libraries/{id}/artwork`). Nothing is written until the flag
+  is on **and** the folder is mounted writable. The mount step (a
+  writable bind mount for just that library's folder, the container
+  user, recreate) is in §13.11. A read-only mount fails cleanly: the
+  job lists each path and still succeeds, and a warning notice stays
+  up until the folder can be written or the flag is off. The artwork
+  step (`download_item_artwork`) copies a matched movie's or series'
+  cached JPEG poster and backdrop as `poster.jpg` / `backdrop.jpg`
+  into folders that belong to that item alone (never a library root
+  or a shared folder). Writes are atomic, identical files are left
+  alone, and a file Parlour didn't write is never replaced (new
+  `sidecar_artwork` table, LeftOut of the bundle). Parlour's own
+  copies refresh when the cache changes and are never deleted. Ten
+  readings for veto are in §13.12.
 - [ ] XFER6 (S) **NFO interop**: scanner also reads
   Kodi/Emby-style `.nfo` (ids + title) as an input source;
   XFER4 can optionally write `.nfo` alongside the JSON.
