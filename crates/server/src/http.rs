@@ -42,6 +42,9 @@ pub struct AppState {
     /// UI2 Dashboard facts (name, port, access URLs). Defaults to
     /// unconfigured; `main` fills it from `Config`.
     pub server: crate::dashboard::ServerSettings,
+    /// XFER2: where finished export bundles wait for their download
+    /// (`<PARLOUR_CACHE_DIR>/exports`; `main` sets it from `Config`).
+    pub export_dir: PathBuf,
 }
 
 impl AppState {
@@ -55,6 +58,7 @@ impl AppState {
             playback: std::sync::Arc::new(crate::playback::PlaybackState::new()),
             emby: parlour_catalog::EmbySettings::default(),
             server: crate::dashboard::ServerSettings::default(),
+            export_dir: crate::export::export_dir(std::path::Path::new("cache")),
         }
     }
 }
@@ -85,6 +89,7 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::dashboard::routes())
         .merge(crate::activity::routes())
         .merge(crate::notices::routes())
+        .merge(crate::export::routes())
         .fallback(fallback)
         .layer(PropagateRequestIdLayer::x_request_id())
         .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))

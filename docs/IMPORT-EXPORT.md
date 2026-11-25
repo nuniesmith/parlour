@@ -7,9 +7,10 @@ from one install to another. It defines the zip layout, the six JSON
 documents and their fields, and the rules a valid bundle follows.
 
 **Status.** The format exists in code (`crates/server/src/bundle/`)
-with fixtures and tests, but nothing produces or applies a bundle
-yet: export is XFER2, import is XFER3, the admin page is XFER8 and
-nightly backups are XFER7. The per-item sidecars stored with the
+with fixtures and tests. Export exists too (XFER2, §11): an admin
+endpoint and background job write a bundle, and the Jobs page
+downloads it. Nothing applies a bundle yet: import is XFER3, the
+admin page is XFER8 and nightly backups are XFER7. The per-item sidecars stored with the
 media files (XFER4–XFER6) are a separate format, specified when
 XFER4 is built.
 
@@ -430,7 +431,10 @@ says yes.**
   - move `book_progress` in `coverage.rs` from `Proposed` to `Carried`;
   - extend the fixture.
 
-  Before XFER2 ships, that amends v1 in place (§3). Podcast-episode
+  Before XFER2 ships, that amends v1 in place (§3). **At XFER2
+  (2026-11-24) the proposal was still open**, so the exporter writes
+  v1 without either table: a yes before XFER2 merges amends v1 in
+  place, a yes after it bumps the format to version 2. Podcast-episode
   progress (POD1) shares `book_progress`'s shape (D29), so it would
   follow the same answer when it exists.
 - **Audiobook items themselves are not part of the question.** They
@@ -480,34 +484,105 @@ owner can overturn any of them.
 11. **The format is strict:** an unknown field is an error, and the
     version is checked first (§3).
 
-## 11. Notes for XFER2 (export)
+## 11. Export (XFER2)
 
-- **What to read:** each `Value` column in `coverage.rs`. Resolve
-  each `Reference` column to the names above. Read everything in one
-  `REPEATABLE READ` transaction, so the references agree with each
-  other.
-- **Writing:** fill the types in `bundle/mod.rs`, then call
-  `Manifest::new(...)`. Next, `BundleWriter::new(writer, &bundle)`
-  checks the bundle and writes the documents. Then call
-  `add_artwork(name, reader)` for each named file, and `finish()`.
-- **The hash confirm** is an explicit per-export flag, and it is off
-  by default.
-- **Write in a fixed order,** so two exports of an unchanged server
-  are identical:
+Built 2026-11-24 to the notes XFER1 left here. Code:
+`crates/server/src/export/`.
+
+**The API** (admin only; anyone else gets a 404, like every admin
+route):
+
+| route | does |
+|---|---|
+| `GET /api/v1/admin/export/estimate` | what the artwork opt-in would add right now: `artwork_files`, `artwork_bytes`, and `artwork_unavailable` (cached images whose file is gone or can't be named). The size warning's numbers |
+| `POST /api/v1/admin/export` | queues an export job and starts it; 202 with the job. Body `{"include_hashes": bool, "include_artwork": bool}`, both **off by default**; an empty body means both off, and an unknown field is refused |
+| `GET /api/v1/admin/export/{job}/download` | the finished bundle, `application/zip`, as `parlour-export-<UTC time>.zip`. 409 while the job runs, 404 for a failed job, a deleted bundle or a job that isn't an export |
+| `DELETE /api/v1/admin/export/{job}` | removes the bundle from the server's disk; the job's result gains `"deleted": true` |
+
+- **The hash confirm** is `include_hashes`, an explicit per-export
+  flag, off by default. A job payload missing it, or holding
+  anything but `true`, reads as off. The Jobs page never sets it;
+  the warning that goes with it is XFER8's page (§6).
+- **The job** (`export_bundle`) runs as soon as it is queued. A worker
+  of its own picks up any export left queued, for example after a
+  restart, so a long export with artwork never holds up scans or
+  metadata. It:
+  - reads every `Value` column of `coverage.rs` in one read-only
+    `REPEATABLE READ` transaction, and takes `exported_at` from that
+    transaction's `now()`;
+  - turns ids into names, and fails with a message if a reference
+    leads nowhere or the database holds a value outside a closed set;
+  - writes the zip as `<PARLOUR_CACHE_DIR>/exports/<job id>.zip.part`,
+    then renames it into place, so a download never sees half a
+    bundle. The cache directory is the compose stack's `/cache`
+    volume;
+  - records the counts on the job's result: users, profiles,
+    libraries, items, watch state rows, recent searches, Activity
+    rows, artwork files, artwork left out, duplicate images left
+    out, the file's name and its bytes;
+  - adds an `export.completed` or `export.failed` Activity row by the
+    requesting admin. A completed row's summary says when hashes
+    went in.
+- **The Jobs page** offers "Export the server" under *Run now*. It
+  has one option, the artwork opt-in, and shows the estimate as its
+  size warning. A finished export's row has **Download** and
+  **Delete from server**, and is marked when the bundle holds hashes.
+- **Order:** this is the order the notes asked for. Names compare
+  byte by byte, so uppercase sorts before lowercase.
   - users by username;
-  - profiles by username, then `created_at`;
-  - libraries by name;
+  - profiles by username, then `created_at`, then name;
+  - libraries by name, with paths sorted and grants by username, then
+    profile;
   - items by library, then `stable_key`;
-  - people by `sort_order`, then name; segments by kind, then
-    source; images by kind, then variant;
-  - watch state by profile, then item;
+  - people by `sort_order`, then name, then role;
+  - segments and images by kind (and source or variant), in the order
+    §2 lists the values (`intro` `credits` `recap`; `poster`
+    `backdrop` `logo` `still`), not alphabetically;
+  - watch state by username, profile, then item;
   - recent searches newest first;
-  - Activity oldest first.
+  - Activity oldest first, with the row id breaking a tie in the same
+    microsecond.
 
-  Readers don't rely on order.
-- **Artwork:** only cached images (a real `path` and a `hash`) can
-  have a `file`. The name is `artwork_file_name(hash, extension of
-  the cached path)`.
+  So two exports of an unchanged server write the same documents.
+  Only the manifest's `exported_at` (and the zip entries' times)
+  differ, plus the Activity rows the earlier export added. The
+  XFER1 fixtures are hand-ordered; readers don't rely on order.
+- **Artwork:**
+  - **Which images can carry a file:** only an image with a real
+    `path` (not empty, not `pending:…`) and a `hash`. Its name is
+    `artwork_file_name(hash, lowercased extension of the path)`.
+  - **Checks first:** before the bundle names a file, the job reads
+    it and checks that its bytes still hash to `images.hash`. If the
+    file is missing or changed, or its name doesn't fit the format,
+    it is left out. The image then travels as a provider reference
+    only, and the job's errors list it.
+  - **Shared files:** cached files with the same bytes share one name.
+    Each name is added once.
+
+**Readings made in XFER2 — for the owner's veto.** None is a new
+decision. Each is how this build read D14/D25, the TODO or these
+notes where they don't say:
+
+1. **A stale duplicate image is dropped, not fatal.** The database
+   keys images by (item, kind, path), the bundle by (item, kind,
+   variant). When a re-match leaves two rows for one key, the cached
+   row is kept, otherwise the lowest path. The other row is listed
+   on the job's errors and counted in `duplicate_images_left_out`.
+   The rows are dropped so the rest of the server still exports.
+
+   The known way to get such a row: re-matching a series deletes
+   only the series' own provider images, then re-inserts each
+   episode still as `pending:still:original`, next to the already
+   downloaded one. That is a catalog bug, left for its own task.
+2. **Bundles stay on the server until deleted.** Nothing removes
+   them automatically; XFER7's retention will cover the nightly
+   ones. A bundle holding hashes is as sensitive as the logins, so
+   its job row says so, and Delete is one click.
+3. **The Jobs page offers no hash option.** The API flag is the
+   confirm. The warning in §6 belongs to XFER8's page.
+4. **Exports are recorded in the Activity feed** (`export.*`, with a
+   new "Exports" filter), so the audit trail shows who took the
+   server's data, and whether the hashes went with it.
 
 ## 12. Notes for XFER3 (import) — problems known now
 
@@ -561,6 +636,8 @@ Other things XFER3 has to handle:
   - `archive.rs` — `BundleWriter` and `BundleReader`;
   - `check.rs` — `Bundle::problems()`;
   - `coverage.rs` — the schema map and the CHECK constraints mirrored.
+- **`crates/server/src/export/`** (XFER2) — the endpoints, the job
+  and its worker; unit tests in `export/tests.rs` (run in CI).
 - **Fixtures:** `crates/server/tests/fixtures/bundle-v1/`.
 - **Unit tests** in `bundle/tests.rs` (run in CI):
   - each fixture round-trips and is byte for byte what the writer
@@ -569,5 +646,9 @@ Other things XFER3 has to handle:
     hashes, with artwork;
   - every refusal the reader and writer make;
   - the value sets match the server's.
-- **Flow test** `tests/bundle_schema_flow.rs`: ignored, needs a
-  throwaway Postgres, run locally.
+- **Flow tests**, ignored, each on its own throwaway Postgres, run
+  locally:
+  - `tests/bundle_schema_flow.rs`: the schema against `coverage.rs`;
+  - `tests/export_flow.rs`: export a seeded database over HTTP and
+    open the downloads with `BundleReader` (hashes off and on,
+    artwork off and on, duplicates, delete, the worker).

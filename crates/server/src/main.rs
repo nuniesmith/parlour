@@ -60,6 +60,10 @@ async fn main() {
         api_key: config.emby_api_key.clone(),
     };
     parlour_server::catalog::spawn_background(pool.clone(), metadata.clone(), emby.clone());
+    // XFER2: export bundles have a worker of their own, so a long
+    // export with artwork never holds up scans or metadata.
+    let export_dir = parlour_server::export::export_dir(&config.cache_dir);
+    parlour_server::export::spawn_worker(pool.clone(), export_dir.clone());
     // UI5: keep the Dashboard's notices in line with reality.
     parlour_server::notices::spawn(
         pool.clone(),
@@ -70,6 +74,7 @@ async fn main() {
     state.metadata = metadata;
     state.emby = emby;
     state.server = parlour_server::dashboard::ServerSettings::from_config(&config);
+    state.export_dir = export_dir;
     std::sync::Arc::get_mut(&mut state.playback)
         .expect("fresh playback state")
         .configure(config.cache_dir.clone(), config.stream_secret.clone());

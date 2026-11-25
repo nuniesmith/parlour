@@ -1,16 +1,27 @@
 <script lang="ts">
   // Server → Jobs: what the server has been doing in the
   // background, with each job's errors, and "run now" for the
-  // job kinds that can be started by hand (per-library scan
-  // and metadata match).
+  // job kinds that can be started by hand (per-library scan,
+  // metadata match, and the server export — XFER2 — whose
+  // finished bundle is downloaded from its row here).
   import { onMount } from 'svelte';
   import { api } from '$lib/api';
-  import { formatDateTime, jobKindLabel, type Job, type Library } from '$lib/types';
+  import {
+    formatBytes,
+    formatDateTime,
+    jobKindLabel,
+    type ExportEstimate,
+    type Job,
+    type Library,
+  } from '$lib/types';
 
   let error = $state<string | null>(null);
   let notice = $state<string | null>(null);
   let jobs = $state<Job[] | null>(null);
   let libraries = $state<Library[]>([]);
+  let includeArtwork = $state(false);
+  let estimate = $state<ExportEstimate | null>(null);
+  let exporting = $state(false);
 
   const active = $derived((jobs ?? []).some((j) => j.status === 'queued' || j.status === 'running'));
 
@@ -33,6 +44,49 @@
       notice = done;
       await loadJobs();
     } else error = err ?? 'Could not start that job.';
+  }
+
+  // The size warning's numbers, fetched when artwork is first ticked.
+  async function loadEstimate() {
+    if (!includeArtwork || estimate) return;
+    const { data } = await api<ExportEstimate>('/api/v1/admin/export/estimate');
+    estimate = data;
+  }
+
+  async function startExport() {
+    error = null;
+    notice = null;
+    exporting = true;
+    const { status, error: err } = await api('/api/v1/admin/export', {
+      method: 'POST',
+      // Hashes stay home: the explicit confirm belongs to the
+      // Import/Export page (XFER8), with its warning.
+      body: JSON.stringify({ include_artwork: includeArtwork, include_hashes: false }),
+    });
+    exporting = false;
+    if (status === 202) {
+      notice = 'Server export started. Its download appears in the job’s row when it finishes.';
+      await loadJobs();
+    } else error = err ?? 'Could not start the export.';
+  }
+
+  function isBundle(job: Job): boolean {
+    return job.kind === 'export_bundle' && job.status === 'succeeded' && job.result !== null;
+  }
+
+  async function deleteBundle(job: Job) {
+    if (!confirm('Delete this bundle from the server? Download it first if you still need it.')) {
+      return;
+    }
+    error = null;
+    notice = null;
+    const { status, error: err } = await api(`/api/v1/admin/export/${job.id}`, {
+      method: 'DELETE',
+    });
+    if (status === 204) {
+      notice = 'Bundle deleted from the server.';
+      await loadJobs();
+    } else error = err ?? 'Could not delete that bundle.';
   }
 
   onMount(() => {
@@ -88,10 +142,46 @@
     </table>
   </div>
   <p class="dim note">
-    Scans also run on their own: when files change, and once a night. The other job kinds are
-    started by the server and cannot be run from here.
+    Scans also run on their own: when files change, and once a night. The other job kinds,
+    apart from the export below, are started by the server and cannot be run from here.
   </p>
 {/if}
+
+<h3>Export the server</h3>
+<div class="export">
+  <p class="dim note">
+    Writes one bundle file with the users, profiles and their preferences, libraries and who may
+    see them, the catalog with its segments, watch history, recent searches and the Activity
+    feed. Server secrets never go in. Password and PIN hashes are left out of exports started
+    here.
+  </p>
+  <label>
+    <input type="checkbox" bind:checked={includeArtwork} onchange={loadEstimate} />
+    Include artwork files
+  </label>
+  {#if includeArtwork}
+    <p class="warn" role="status">
+      {#if estimate}
+        This adds {estimate.artwork_files}
+        {estimate.artwork_files === 1 ? 'image' : 'images'}, about {formatBytes(
+          estimate.artwork_bytes,
+        )}, to the bundle — it can be many times larger than without them.
+        {#if estimate.artwork_unavailable > 0}
+          {estimate.artwork_unavailable} cached
+          {estimate.artwork_unavailable === 1 ? 'image is' : 'images are'} missing on disk and
+          will travel as links only.
+        {/if}
+      {:else}
+        Artwork can make the bundle many times larger.
+      {/if}
+    </p>
+  {:else}
+    <p class="dim note">Without artwork the bundle keeps each image’s source link only.</p>
+  {/if}
+  <div>
+    <button class="btn small" disabled={exporting} onclick={startExport}>Export now</button>
+  </div>
+</div>
 
 <div class="head">
   <h2>Recent jobs</h2>
@@ -117,6 +207,24 @@
           {/if}
           <time class="dim when" datetime={job.created_at}>{formatDateTime(job.created_at)}</time>
         </div>
+        {#if isBundle(job)}
+          <div class="bundle">
+            {#if job.result?.deleted}
+              <span class="dim">Bundle deleted from the server</span>
+            {:else}
+              <a
+                class="btn small"
+                href={`/api/v1/admin/export/${job.id}/download`}
+                download={String(job.result?.file_name ?? 'parlour-export.zip')}
+                >Download ({formatBytes(Number(job.result?.bytes ?? 0))})</a
+              >
+              <button class="btn small" onclick={() => deleteBundle(job)}>Delete from server</button>
+            {/if}
+            {#if job.result?.hashes_included}
+              <span class="chip bad">holds password and PIN hashes</span>
+            {/if}
+          </div>
+        {/if}
         {#if job.errors.length || job.result}
           <details>
             <summary>
@@ -193,6 +301,29 @@
   .when {
     margin-left: auto;
     font-size: 0.9rem;
+  }
+  h3 {
+    margin: 1.4rem 0 0.4rem;
+    font-size: 1rem;
+  }
+  .export {
+    display: grid;
+    gap: 0.5rem;
+    max-width: 44rem;
+  }
+  .export p {
+    margin: 0;
+  }
+  .warn {
+    color: var(--accent);
+    font-size: 0.9rem;
+  }
+  .bundle {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    margin-top: 0.4rem;
   }
   .chip.bad {
     border-color: var(--danger);

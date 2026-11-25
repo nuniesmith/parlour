@@ -32,6 +32,9 @@ pub enum JobKind {
     /// The cheap intro/credits pass over a library's new or changed
     /// episodes, queued after a scan (SEG2).
     DetectSegments,
+    /// An admin's export of the whole server as a `parlour-export`
+    /// bundle (XFER2).
+    ExportBundle,
 }
 
 impl JobKind {
@@ -47,6 +50,7 @@ impl JobKind {
             JobKind::ImportEmby => "import_emby",
             JobKind::PurgeActivity => "purge_activity",
             JobKind::DetectSegments => "detect_segments",
+            JobKind::ExportBundle => "export_bundle",
         }
     }
 }
@@ -255,5 +259,6 @@ mod tests {
         assert_eq!(JobKind::ScanLibrary.as_str(), "scan_library");
         assert_eq!(JobKind::GenerateArtwork.as_str(), "generate_artwork");
         assert_eq!(JobKind::DetectSegments.as_str(), "detect_segments");
+        assert_eq!(JobKind::ExportBundle.as_str(), "export_bundle");
     }
 }

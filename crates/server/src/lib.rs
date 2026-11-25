@@ -12,6 +12,7 @@ pub mod dashboard;
 pub mod discover;
 pub mod emby_admin;
 pub mod error;
+pub mod export;
 pub mod http;
 pub mod invites;
 pub mod libraries;
