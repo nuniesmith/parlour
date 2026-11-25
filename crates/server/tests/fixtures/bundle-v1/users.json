@@ -1,0 +1,30 @@
+{
+  "users": [
+    {
+      "username": "ada",
+      "is_admin": true,
+      "created_at": "2026-11-10T15:02:11.198734Z",
+      "disabled_at": null,
+      "password_hash": "$argon2id$v=19$m=19456,t=2,p=1$Zml4dHVyZS1zYWx0LWFkYQ$Zml4dHVyZS1vbmx5LW5vdC1hLXBhc3N3b3JkLWhhc2g",
+      "pin_hashes": {
+        "Kids": "$argon2id$v=19$m=19456,t=2,p=1$Zml4dHVyZS1zYWx0LXBpbg$Zml4dHVyZS1vbmx5LW5vdC1hLXBpbi1oYXNoLTAwMDA"
+      }
+    },
+    {
+      "username": "ben",
+      "is_admin": false,
+      "created_at": "2026-11-13T01:12:32.997415Z",
+      "disabled_at": null,
+      "password_hash": "$argon2id$v=19$m=19456,t=2,p=1$Zml4dHVyZS1zYWx0LWJlbg$Zml4dHVyZS1vbmx5LWJlbi1wYXNzd29yZC1oYXNoMDA",
+      "pin_hashes": {}
+    },
+    {
+      "username": "cora",
+      "is_admin": false,
+      "created_at": "2026-11-14T09:29:59.871264Z",
+      "disabled_at": "2026-11-23T12:00:00Z",
+      "password_hash": "$argon2id$v=19$m=19456,t=2,p=1$Zml4dHVyZS1zYWx0LWNvcg$Zml4dHVyZS1vbmx5LWNvcmEtcGFzc3dvcmQtaGFzaDA",
+      "pin_hashes": {}
+    }
+  ]
+}

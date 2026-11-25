@@ -1,0 +1,103 @@
+{
+  "profiles": [
+    {
+      "username": "ada",
+      "name": "Ada",
+      "created_at": "2026-11-10T15:02:11.204518Z",
+      "has_pin": false,
+      "avatar_color": "#7c5cbf",
+      "preferences": {
+        "audio_lang": "eng",
+        "subtitle_lang": "eng",
+        "subtitle_mode": "auto",
+        "remote_bitrate_cap_kbps": null,
+        "home_rail_order": [
+          "continue_watching",
+          "next_up",
+          "libraries",
+          "recently_added",
+          "latest"
+        ],
+        "home_rails_hidden": [
+          "recently_added"
+        ],
+        "segment_skip": "auto",
+        "autoplay_next": true
+      },
+      "recent_searches": [
+        {
+          "query": "Night Harbor",
+          "searched_at": "2026-11-21T20:15:09.443817Z"
+        },
+        {
+          "query": "lantern",
+          "searched_at": "2026-11-19T18:02:55.120931Z"
+        }
+      ]
+    },
+    {
+      "username": "ada",
+      "name": "Kids",
+      "created_at": "2026-11-10T15:20:47.663201Z",
+      "has_pin": true,
+      "avatar_color": "#e0a030",
+      "preferences": {
+        "audio_lang": null,
+        "subtitle_lang": null,
+        "subtitle_mode": "always",
+        "remote_bitrate_cap_kbps": 4000,
+        "home_rail_order": [],
+        "home_rails_hidden": [],
+        "segment_skip": "button",
+        "autoplay_next": false
+      },
+      "recent_searches": []
+    },
+    {
+      "username": "ben",
+      "name": "Ben",
+      "created_at": "2026-11-13T01:12:33.009871Z",
+      "has_pin": false,
+      "avatar_color": null,
+      "preferences": {
+        "audio_lang": "fra",
+        "subtitle_lang": "eng",
+        "subtitle_mode": "never",
+        "remote_bitrate_cap_kbps": null,
+        "home_rail_order": [
+          "libraries"
+        ],
+        "home_rails_hidden": [],
+        "segment_skip": "off",
+        "autoplay_next": true
+      },
+      "recent_searches": [
+        {
+          "query": "Paper Lanterns",
+          "searched_at": "2026-11-22T21:40:18.551203Z"
+        }
+      ]
+    },
+    {
+      "username": "cora",
+      "name": "Cora",
+      "created_at": "2026-11-14T09:30:00Z",
+      "has_pin": false,
+      "avatar_color": "#3a8fd8",
+      "preferences": {
+        "audio_lang": null,
+        "subtitle_lang": null,
+        "subtitle_mode": "auto",
+        "remote_bitrate_cap_kbps": 2500,
+        "home_rail_order": [],
+        "home_rails_hidden": [
+          "latest",
+          "libraries"
+        ],
+        "segment_skip": "button",
+        "autoplay_next": true
+      },
+      "recent_searches": []
+    }
+  ]
+}

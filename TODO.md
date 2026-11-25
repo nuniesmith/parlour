@@ -650,7 +650,7 @@ does NOT depend on Phase 2 transcoding.
 
 ## Phase 8 — Import/export & sidecar metadata (`server`, `catalog`, `jobs`, `db`, D14)
 
-- [ ] XFER1 (M) **Bundle format spec**: versioned
+- [x] XFER1 (M) **Bundle format spec**: versioned
   `parlour-export v1` (zip): `manifest.json` (format +
   server versions, export time), `users.json` (username,
   is_admin, password + PIN **hashes** — hashes leave the
@@ -670,6 +670,26 @@ does NOT depend on Phase 2 transcoding.
   unencrypted zip (the admin confirm + warning stays). Audio
   tables weren't in D25: propose `book_progress` under
   `user_data` in the spec and get the owner's yes.
+  *Done 2026-11-24, per D14/D25:* spec `docs/IMPORT-EXPORT.md`;
+  format in `crates/server/src/bundle/` — the six documents'
+  types, `BundleWriter` / `BundleReader` (plain zip, documents
+  deflated, optional `artwork/<sha256>.<ext>` stored and
+  hash-checked) and `Bundle::problems()` (unique keys, the
+  database's CHECKs, every reference between documents
+  resolved; writer and reader refuse an inconsistent bundle).
+  Strict: unknown fields are errors, and the format version is
+  checked before anything else is parsed. Hashes are all or
+  nothing: absent unless confirmed, PIN hashes in `users.json`
+  by profile name, `has_pin` always. Activity `detail` travels
+  verbatim (sign-in IPs and old ids included). `coverage.rs`
+  places every column of the 26 tables — 13 carried — and the
+  ignored `bundle_schema_flow` checks it, and the mirrored
+  CHECK sets, against a freshly migrated database. Fixtures:
+  `crates/server/tests/fixtures/bundle-v1/`. **Still open:**
+  the audio proposal (`book_progress` under `user_data.json`
+  as `books[]`, `book_chapters` not carried) awaits the
+  owner's yes — format v1 carries neither until then; eleven
+  readings of D14/D25 are listed for veto in the spec's §10.
 - [ ] XFER2 (L) **Export**: admin endpoint + background job
   producing the bundle; optional artwork inclusion (files
   under `artwork/` in the zip, off by default with a size

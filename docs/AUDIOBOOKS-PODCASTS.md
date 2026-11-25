@@ -437,6 +437,12 @@ intervals) and what syncs through the server is **D35**.
   proposal is to carry the former under `user_data` and skip the
   latter. That is XFER1's to propose and the owner's to confirm,
   not decided here.
+  *2026-11-24 (XFER1):* the proposal is written up in
+  `docs/IMPORT-EXPORT.md` §9, with the exact shape
+  (`user_data.json` → each profile's `books[]`), and waits for the
+  owner's yes; format v1 carries neither table until then.
+  Audiobook *items* are ordinary catalog rows and are already in
+  the bundle's `catalog.json`.
 - **Sidecars (Phase 8, D14).** ABS-style `metadata.json` /
   `desc.txt` / `reader.txt` next to books are a possible metadata
   input (D30). Writing sidecars into audiobook folders needs the

@@ -46,6 +46,9 @@ mime_guess = "2"
 dotenvy = "0.15"
 notify = "8"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# The export bundle (Phase 8, XFER1): plain deflate only — no
+# encryption (D25) and no exotic codecs; zlib-rs is pure Rust.
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [profile.release]
 lto = "thin"
