@@ -7,7 +7,7 @@
   import AlertsRail from '$lib/AlertsRail.svelte';
   import { api } from '$lib/api';
   import NowPlaying from '$lib/NowPlaying.svelte';
-  import { formatDateTime, jobKindLabel, type Job, type Notice, type ServerInfo } from '$lib/types';
+  import { formatDateTime, jobLabel, type Job, type Notice, type ServerInfo } from '$lib/types';
 
   const REFRESH_MS = 15_000;
 
@@ -191,7 +191,7 @@
     <ul class="jobs">
       {#each jobs as job (job.id)}
         <li>
-          <span>{jobKindLabel(job.kind)}</span>
+          <span>{jobLabel(job)}</span>
           <span class="chip" class:error={job.status === 'failed'}>{job.status}</span>
           <time class="dim when" datetime={job.created_at}>{formatDateTime(job.created_at)}</time>
         </li>

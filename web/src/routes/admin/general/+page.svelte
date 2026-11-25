@@ -10,7 +10,8 @@
   let info = $state<ServerInfo | null>(null);
   let error = $state<string | null>(null);
 
-  const rows = $derived(
+  type Row = { label: string; value: string | null; env: string; unset?: string };
+  const rows = $derived<Row[]>(
     info
       ? [
           { label: 'Server name', value: info.name, env: 'PARLOUR_SERVER_NAME' },
@@ -18,6 +19,17 @@
           { label: 'Home network (LAN) address', value: info.urls.lan, env: 'PARLOUR_URL_LAN' },
           { label: 'Tailnet address', value: info.urls.tailnet, env: 'PARLOUR_URL_TAILNET' },
           { label: 'Public address', value: info.urls.public, env: 'PARLOUR_URL_PUBLIC' },
+          {
+            label: 'Nightly backup folder',
+            value: info.backups.folder,
+            env: 'PARLOUR_BACKUP_DIR',
+            unset: 'Off — no nightly backups',
+          },
+          {
+            label: 'Nightly backups kept',
+            value: String(info.backups.keep),
+            env: 'PARLOUR_BACKUP_KEEP',
+          },
         ]
       : [],
   );
@@ -45,7 +57,9 @@
         {#each rows as r (r.env)}
           <tr>
             <td>{r.label}</td>
-            <td>{#if r.value}{r.value}{:else}<span class="dim">Not set</span>{/if}</td>
+            <td>
+              {#if r.value}{r.value}{:else}<span class="dim">{r.unset ?? 'Not set'}</span>{/if}
+            </td>
             <td><code>{r.env}</code></td>
           </tr>
         {/each}

@@ -160,6 +160,9 @@ async fn dashboard_flow() {
         info["urls"]["public"].is_null(),
         "an unset URL is null, never guessed: {info}"
     );
+    // XFER7: no PARLOUR_BACKUP_DIR here, so nightly backups are off.
+    assert!(info["backups"]["folder"].is_null(), "{info}");
+    assert_eq!(info["backups"]["keep"], 7, "{info}");
     assert_eq!(info["jobs"]["queued"], 1, "{info}");
     assert_eq!(info["jobs"]["running"], 1, "{info}");
     assert_eq!(info["jobs"]["failed_recent"], 1, "{info}");

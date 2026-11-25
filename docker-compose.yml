@@ -42,6 +42,11 @@ services:
       PARLOUR_URL_LAN: ${PARLOUR_URL_LAN:-}
       PARLOUR_URL_TAILNET: ${PARLOUR_URL_TAILNET:-}
       PARLOUR_URL_PUBLIC: ${PARLOUR_URL_PUBLIC:-}
+      # Nightly backups (XFER7): unset = off. The folder is a path
+      # inside the container; mount a host folder there (below).
+      # See docs/IMPORT-EXPORT.md §15.
+      PARLOUR_BACKUP_DIR: ${PARLOUR_BACKUP_DIR:-}
+      PARLOUR_BACKUP_KEEP: ${PARLOUR_BACKUP_KEEP:-}
     ports:
       - "${PARLOUR_PORT:-8585}:${PARLOUR_PORT:-8585}"
     volumes:
@@ -53,6 +58,8 @@ services:
       # - /srv/media/films:/media/films:rw
       - parlour-artwork:/artwork
       - parlour-cache:/cache
+      # Nightly backups (XFER7), with PARLOUR_BACKUP_DIR=/backups:
+      # - /srv/backups/parlour:/backups
     # GPU transcoding (Phase 2) — enable ONE block for your host:
     # NVIDIA: also add the nvidia runtime / device reservation.
     # devices:

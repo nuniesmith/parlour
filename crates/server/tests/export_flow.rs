@@ -758,7 +758,7 @@ async fn export_flow() {
     assert_eq!(status, 404, "a non-admin can't download");
 
     // The worker picks up an export left queued.
-    parlour_server::export::spawn_worker(pool.clone(), export_dir.clone());
+    parlour_server::export::spawn_worker(pool.clone(), export_dir.clone(), None);
     let mut finished = None;
     for _ in 0..100 {
         let job = parlour_jobs::get(&pool, queued).await.unwrap().unwrap();

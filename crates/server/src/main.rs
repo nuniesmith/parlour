@@ -59,11 +59,23 @@ async fn main() {
         base_url: config.emby_url.clone(),
         api_key: config.emby_api_key.clone(),
     };
-    parlour_server::catalog::spawn_background(pool.clone(), metadata.clone(), emby.clone());
+    // XFER7: nightly backups, when PARLOUR_BACKUP_DIR is set — the
+    // nightly tick queues them, the export worker writes them.
+    let backup = parlour_server::backup::BackupSettings::from_config(&config);
+    match &backup {
+        Some(b) => tracing::info!(folder = %b.dir.display(), keep = b.keep, "nightly backups on"),
+        None => tracing::info!("nightly backups off (PARLOUR_BACKUP_DIR is not set)"),
+    }
+    parlour_server::catalog::spawn_background(
+        pool.clone(),
+        metadata.clone(),
+        emby.clone(),
+        backup.clone(),
+    );
     // XFER2: export bundles have a worker of their own, so a long
     // export with artwork never holds up scans or metadata.
     let export_dir = parlour_server::export::export_dir(&config.cache_dir);
-    parlour_server::export::spawn_worker(pool.clone(), export_dir.clone());
+    parlour_server::export::spawn_worker(pool.clone(), export_dir.clone(), backup.clone());
     // XFER3: so do imports, applied from uploads under the cache.
     let import_dir = parlour_server::import::import_dir(&config.cache_dir);
     parlour_server::import::spawn_worker(
@@ -85,6 +97,7 @@ async fn main() {
     state.server = parlour_server::dashboard::ServerSettings::from_config(&config);
     state.export_dir = export_dir;
     state.import_dir = import_dir;
+    state.backup = backup;
     std::sync::Arc::get_mut(&mut state.playback)
         .expect("fresh playback state")
         .configure(config.cache_dir.clone(), config.stream_secret.clone());

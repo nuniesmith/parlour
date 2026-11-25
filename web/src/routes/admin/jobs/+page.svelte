@@ -9,7 +9,8 @@
   import {
     formatBytes,
     formatDateTime,
-    jobKindLabel,
+    isNightlyBackup,
+    jobLabel,
     type ExportEstimate,
     type Job,
     type Library,
@@ -197,7 +198,7 @@
       <li>
         <div class="line">
           <span class="what">
-            {jobKindLabel(job.kind)}
+            {jobLabel(job)}
             {#if libraryName(job.library_id)}<span class="dim"> · {libraryName(job.library_id)}</span
               >{/if}
           </span>
@@ -209,7 +210,23 @@
         </div>
         {#if isBundle(job)}
           <div class="bundle">
-            {#if job.result?.deleted}
+            {#if isNightlyBackup(job)}
+              <!-- XFER7: nightly bundles stay in the backup folder until
+                   retention removes them; there is no Delete here. -->
+              {#if job.result?.deleted}
+                <span class="dim">Removed by retention</span>
+              {:else}
+                <a
+                  class="btn small"
+                  href={`/api/v1/admin/export/${job.id}/download`}
+                  download={String(job.result?.file_name ?? 'parlour-backup.zip')}
+                  >Download ({formatBytes(Number(job.result?.bytes ?? 0))})</a
+                >
+                <span class="dim">
+                  Saved in <span class="mono">{String(job.result?.folder ?? '')}</span>
+                </span>
+              {/if}
+            {:else if job.result?.deleted}
               <span class="dim">Bundle deleted from the server</span>
             {:else}
               <a

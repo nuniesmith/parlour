@@ -271,6 +271,7 @@ async fn autoplay_flow() {
         pool.clone(),
         parlour_server::metadata::MetadataSettings::default(),
         parlour_catalog::EmbySettings::default(),
+        None,
     );
     wait_for_job(&app, job["id"].as_str().unwrap()).await;
 

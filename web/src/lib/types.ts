@@ -368,6 +368,8 @@ export interface ServerInfo {
   port: number;
   db: 'ok' | 'unreachable';
   urls: { lan: string | null; tailnet: string | null; public: string | null };
+  /** XFER7: nightly backups (`folder` null = off). */
+  backups: { folder: string | null; keep: number };
   jobs: {
     queued: number;
     running: number;
@@ -476,6 +478,18 @@ export const JOB_KIND_LABELS: Record<string, string> = {
 
 export function jobKindLabel(kind: string): string {
   return JOB_KIND_LABELS[kind] ?? kind;
+}
+
+/** XFER7: a nightly backup is an `export_bundle` job whose payload
+ *  says `trigger: "nightly"`; its bundle lives in the backup folder. */
+export function isNightlyBackup(job: Job): boolean {
+  const payload = job.payload as { trigger?: unknown } | null;
+  return job.kind === 'export_bundle' && payload?.trigger === 'nightly';
+}
+
+/** A job's name in lists: the kind's label, or "Nightly backup". */
+export function jobLabel(job: Job): string {
+  return isNightlyBackup(job) ? 'Nightly backup' : jobKindLabel(job.kind);
 }
 
 /** Container names as people know them. The server stores
