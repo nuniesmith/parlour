@@ -17,6 +17,7 @@ use serde::Serialize;
 use sqlx::PgConnection;
 use uuid::Uuid;
 
+use super::nfo::{file_nfo_path, MOVIE_NFO, TVSHOW_NFO};
 use super::{
     file_sidecar_path, parse, series_folder, to_bytes, write_atomic, Sidecar, SidecarKind,
     SidecarPerson, SidecarSegment, SidecarSegments, WriteOutcome, MANUAL_CONFIDENCE,
@@ -36,14 +37,33 @@ struct SidecarFile {
     playback_size: Option<i64>,
 }
 
+/// One NFO file an item reads (XFER6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct NfoPath {
+    pub(super) path: PathBuf,
+    /// A movie's `movie.nfo` in its video's folder: read only when the
+    /// folder belongs to that movie alone, and never written.
+    pub(super) folder_level: bool,
+}
+
 /// An item that can have sidecars, and the files they would be.
 #[derive(Debug, Clone)]
-struct Target {
-    item_id: Uuid,
-    kind: SidecarKind,
-    season_number: Option<i32>,
-    episode_number: Option<i32>,
+pub(super) struct Target {
+    pub(super) item_id: Uuid,
+    pub(super) kind: SidecarKind,
+    pub(super) season_number: Option<i32>,
+    pub(super) episode_number: Option<i32>,
     files: Vec<SidecarFile>,
+    /// Its NFO files (XFER6): `<video stem>.nfo` beside each video, a
+    /// movie's `movie.nfo`, a series' `tvshow.nfo` in each series
+    /// folder.
+    pub(super) nfos: Vec<NfoPath>,
+}
+
+fn push_nfo(nfos: &mut Vec<NfoPath>, path: PathBuf, folder_level: bool) {
+    if !nfos.iter().any(|n| n.path == path) {
+        nfos.push(NfoPath { path, folder_level });
+    }
 }
 
 type TargetRow = (
@@ -61,7 +81,7 @@ type TargetRow = (
 /// episodes) with an available file, and the sidecar files each one
 /// reads: a movie or episode reads one beside each of its videos, a
 /// series one in each of its series folders.
-async fn load_targets(
+pub(super) async fn load_targets(
     conn: &mut PgConnection,
     library_id: Uuid,
     only: Option<Uuid>,
@@ -94,7 +114,16 @@ async fn load_targets(
             season_number: season,
             episode_number: episode,
             files: Vec::new(),
+            nfos: Vec::new(),
         });
+        if let Some(nfo) = file_nfo_path(Path::new(&path)) {
+            push_nfo(&mut target.nfos, nfo, false);
+        }
+        if kind == SidecarKind::Movie {
+            if let Some(folder) = Path::new(&path).parent() {
+                push_nfo(&mut target.nfos, folder.join(MOVIE_NFO), true);
+            }
+        }
         // Rows come in playback order: the first file of an item is
         // the one the player and the segment editor use.
         let is_playback = target.files.is_empty();
@@ -133,6 +162,13 @@ async fn load_targets(
             kind: SidecarKind::Series,
             season_number: None,
             episode_number: None,
+            nfos: paths
+                .iter()
+                .map(|p| NfoPath {
+                    path: p.with_file_name(TVSHOW_NFO),
+                    folder_level: false,
+                })
+                .collect(),
             files: paths
                 .into_iter()
                 .map(|path| SidecarFile {
@@ -194,7 +230,7 @@ fn gather(target: &Target) -> (Vec<Found>, Vec<(String, String)>) {
 
 /// The fingerprint of a set of sidecar files: path, size and mtime
 /// (microseconds) of each, one per line, sorted.
-fn fingerprint(found: &[(PathBuf, u64, DateTime<Utc>)]) -> String {
+pub(super) fn fingerprint(found: &[(PathBuf, u64, DateTime<Utc>)]) -> String {
     let mut lines: Vec<String> = found
         .iter()
         .map(|(p, size, mtime)| format!("{}\t{size}\t{}", p.display(), mtime.timestamp_micros()))
@@ -581,7 +617,7 @@ pub(crate) async fn read_library_sidecars(
     Ok(())
 }
 
-async fn report_problems(
+pub(super) async fn report_problems(
     pool: &parlour_db::PgPool,
     job_id: Option<Uuid>,
     report: &mut ScanReport,
@@ -637,11 +673,23 @@ pub async fn reapply_stored(pool: &parlour_db::PgPool, item_id: Uuid) -> Result<
 }
 
 /// After an admin's fix-match: the provider record they chose wins
-/// over the item's sidecars (and its episodes') until a sidecar file
-/// changes or Parlour rewrites it.
+/// over the item's sidecars and NFOs (and its episodes') until a
+/// sidecar or NFO file changes or Parlour rewrites it.
 pub async fn mark_overridden(pool: &parlour_db::PgPool, item_id: Uuid) -> Result<(), sqlx::Error> {
     sqlx::query(
         "UPDATE item_sidecars SET overridden_at = now()
+         WHERE overridden_at IS NULL AND item_id IN (
+             SELECT i.id FROM media_items i
+             WHERE i.id = $1 OR i.parent_id IN
+                   (SELECT id FROM media_items WHERE parent_id = $1 AND kind = 'season'))",
+    )
+    .bind(item_id)
+    .execute(pool)
+    .await?;
+    // XFER6: the item's NFO records too, or the matcher would fetch
+    // the NFO's record again at the next library match.
+    sqlx::query(
+        "UPDATE item_nfos SET overridden_at = now()
          WHERE overridden_at IS NULL AND item_id IN (
              SELECT i.id FROM media_items i
              WHERE i.id = $1 OR i.parent_id IN
@@ -662,8 +710,16 @@ pub struct SidecarWriteReport {
     pub written: i32,
     /// Files that already held exactly these bytes.
     pub unchanged: i32,
-    /// `path: reason` for each file that couldn't be written.
+    /// `path: reason` for each file that couldn't be written (a
+    /// sidecar or an NFO).
     pub errors: Vec<String>,
+    /// NFO files written (new, or Parlour's own replaced) (XFER6).
+    pub nfos_written: i32,
+    /// NFO files that already held exactly these bytes.
+    pub nfos_unchanged: i32,
+    /// `path: reason` for each NFO deliberately not written: one
+    /// Parlour didn't write is already there.
+    pub nfos_left_alone: Vec<String>,
 }
 
 type ItemFields = (
@@ -805,6 +861,11 @@ pub async fn write_item_sidecars(
     }
     let mut conn = pool.acquire().await?;
     let targets = load_targets(&mut conn, library_id, Some(item_id)).await?;
+    let roots: Vec<String> =
+        sqlx::query_scalar("SELECT path FROM library_paths WHERE library_id = $1")
+            .bind(library_id)
+            .fetch_all(&mut *conn)
+            .await?;
     for target in targets {
         let base = document_from_db(&mut conn, &target).await?;
         let problems = base.problems();
@@ -845,6 +906,9 @@ pub async fn write_item_sidecars(
             let paths: Vec<PathBuf> = target.files.iter().map(|f| f.path.clone()).collect();
             store(&mut conn, target.item_id, &stat_fingerprint(&paths), &base).await?;
         }
+        // XFER6: the `.nfo` beside the `.parlour.json`, same opt-in.
+        super::nfo_sync::write_target_nfos(pool, &mut conn, &target, &base, &roots, &mut report)
+            .await?;
     }
     Ok(report)
 }

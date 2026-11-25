@@ -90,6 +90,35 @@ fn is_root(folder: &Path, roots: &[String]) -> bool {
         .any(|r| Path::new(r.trim_end_matches('/')) == folder)
 }
 
+/// Whether a folder belongs to one movie or series alone: it isn't a
+/// library root, and every available video anywhere under it belongs
+/// to that item (for a series, to its episodes). Shared with the NFO
+/// reader (XFER6), which reads a `movie.nfo` only in such a folder.
+pub(crate) async fn folder_belongs_to(
+    pool: &parlour_db::PgPool,
+    folder: &Path,
+    item_id: Uuid,
+    roots: &[String],
+) -> Result<bool, sqlx::Error> {
+    if is_root(folder, roots) {
+        return Ok(false);
+    }
+    let prefix = format!("{}/", folder.to_string_lossy().trim_end_matches('/'));
+    let (shared,): (bool,) = sqlx::query_as(
+        "SELECT EXISTS (
+             SELECT 1 FROM media_files f
+             JOIN media_items i ON i.id = f.item_id
+             LEFT JOIN media_items se ON se.id = i.parent_id AND i.kind = 'episode'
+             WHERE f.available AND starts_with(f.path, $1)
+               AND COALESCE(se.parent_id, i.id) <> $2)",
+    )
+    .bind(&prefix)
+    .bind(item_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(!shared)
+}
+
 /// Copy a matched movie's or series' cached poster and backdrop next
 /// to its media, where its library opted in. A no-op (and no disk
 /// access) for any other item, or when the library hasn't opted in.
@@ -152,23 +181,7 @@ pub async fn copy_item_artwork(
     // Only folders that belong to this item alone.
     let mut own: Vec<PathBuf> = Vec::new();
     for folder in folders {
-        if is_root(&folder, &roots) {
-            continue;
-        }
-        let prefix = format!("{}/", folder.to_string_lossy().trim_end_matches('/'));
-        let (shared,): (bool,) = sqlx::query_as(
-            "SELECT EXISTS (
-                 SELECT 1 FROM media_files f
-                 JOIN media_items i ON i.id = f.item_id
-                 LEFT JOIN media_items se ON se.id = i.parent_id AND i.kind = 'episode'
-                 WHERE f.available AND starts_with(f.path, $1)
-                   AND COALESCE(se.parent_id, i.id) <> $2)",
-        )
-        .bind(&prefix)
-        .bind(item_id)
-        .fetch_one(pool)
-        .await?;
-        if !shared {
+        if folder_belongs_to(pool, &folder, item_id, &roots).await? {
             own.push(folder);
         }
     }

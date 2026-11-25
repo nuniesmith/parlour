@@ -422,6 +422,16 @@ pub const SCHEMA: &[Table] = &[
               the files themselves",
     },
     Table::LeftOut {
+        name: "item_nfos",
+        why: "what the scanner last read from the .nfo files (XFER6); the new host reads the \
+              files themselves",
+    },
+    Table::LeftOut {
+        name: "sidecar_nfos",
+        why: "which .nfo files this host wrote beside its own media (XFER6); the new host's \
+              media mounts are its own",
+    },
+    Table::LeftOut {
         name: "_sqlx_migrations",
         why: "the new host keeps its own migration ledger",
     },

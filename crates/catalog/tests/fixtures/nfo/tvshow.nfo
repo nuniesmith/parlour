@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<tvshow>
+  <title>Harbour Lights</title>
+  <year>2018</year>
+  <uniqueid type="tmdb" default="true">900002</uniqueid>
+  <uniqueid type="tvdb">800002</uniqueid>
+  <uniqueid type="imdb">tt9000002</uniqueid>
+  <tmdbid>900002</tmdbid>
+  <tvdbid>800002</tvdbid>
+  <imdbid>tt9000002</imdbid>
+</tvshow>

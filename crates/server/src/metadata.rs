@@ -25,7 +25,8 @@
 //! rewrites the item's `*.parlour.json` files when its library has
 //! `write_sidecars` on; with it off nothing touches the media.
 //! Where it is on, the artwork step also copies a matched item's
-//! poster / backdrop beside its media (XFER5).
+//! poster / backdrop beside its media (XFER5), and the sidecar step
+//! writes a `.nfo` beside each `.parlour.json` (XFER6).
 
 use std::path::PathBuf;
 
@@ -150,7 +151,12 @@ pub async fn run_metadata_job_claimed(
                 for e in &written.errors {
                     let _ = parlour_jobs::add_error(&pool, job.id, None, e).await;
                 }
-                Ok(serde_json::json!({ "item": o, "sidecars_written": written.written }))
+                Ok(serde_json::json!({
+                    "item": o,
+                    "sidecars_written": written.written,
+                    "nfos_written": written.nfos_written,
+                    "nfos_left_alone": written.nfos_left_alone,
+                }))
             }
             Err(e) => Err(e.to_string()),
         }

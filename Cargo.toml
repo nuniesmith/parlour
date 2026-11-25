@@ -49,6 +49,9 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 # The export bundle (Phase 8, XFER1): plain deflate only — no
 # encryption (D25) and no exotic codecs; zlib-rs is pure Rust.
 zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+# Kodi/Emby-style .nfo files beside the media (Phase 8, XFER6): a
+# streaming reader, so a trailing link or a second root is never read.
+quick-xml = "0.39"
 
 [profile.release]
 lto = "thin"

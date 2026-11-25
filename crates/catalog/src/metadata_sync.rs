@@ -6,6 +6,11 @@
 //!    sidecar's own fields are then put back over it: a sidecar is
 //!    authoritative over automatic provider lookups (D14). An admin's
 //!    manual fix (MD4) is not automatic, so it wins over the sidecar.
+//!    0b. Otherwise the item's `.nfo` (XFER6) names the record — fetch
+//!    that one, confidence 1.0. An NFO is an input, not an authority:
+//!    the provider's values then stand, and nothing of the NFO is put
+//!    back (its title was already applied by the scanner, and the
+//!    provider doesn't set a movie's or series' title).
 //! 1. A provider id written into a folder/file name by an *arr
 //!    tool (`{tmdb-603}`, `[tvdbid=78804]`) wins outright — fetch
 //!    that record, confidence 1.0.
@@ -303,6 +308,21 @@ pub async fn match_item<P: MetadataProvider>(
         }
     }
 
+    // Rule 0b (XFER6): the NFO names the record.
+    if let Some(nfo) = crate::sidecar::stored_nfo(pool, item_id).await? {
+        if let Some(id) = nfo.provider_id(provider.name()) {
+            let details = provider.details(kind, id).await?;
+            apply_details(pool, provider, item_id, &details).await?;
+            crate::sidecar::reapply_stored(pool, item_id).await?;
+            return Ok(MatchOutcome {
+                status: "matched".into(),
+                provider: Some(provider.name().into()),
+                provider_id: Some(id),
+                confidence: Some(1.0),
+            });
+        }
+    }
+
     // Rule 1: explicit provider ids in the file/folder names.
     let rel_paths: Vec<(String,)> =
         sqlx::query_as("SELECT relative_path FROM media_files WHERE item_id = $1")
@@ -446,8 +466,11 @@ pub async fn match_library<P: MetadataProvider>(
     }
     let mut counts = serde_json::json!({
         "matched": 0, "needs_review": 0, "unmatched": 0, "failed": 0, "total": total,
-        "sidecars_written": 0
+        "sidecars_written": 0, "nfos_written": 0
     });
+    // NFOs left alone because another program wrote them (XFER6), so
+    // an admin can see why (capped, as the artwork job's copies are).
+    let mut nfos_left_alone: Vec<String> = Vec::new();
     let mut done = 0i32;
     for (item_id,) in &items {
         done += 1;
@@ -462,6 +485,14 @@ pub async fn match_library<P: MetadataProvider>(
                 counts["sidecars_written"] = serde_json::json!(
                     counts["sidecars_written"].as_i64().unwrap_or(0) + written.written as i64
                 );
+                counts["nfos_written"] = serde_json::json!(
+                    counts["nfos_written"].as_i64().unwrap_or(0) + written.nfos_written as i64
+                );
+                for note in written.nfos_left_alone {
+                    if nfos_left_alone.len() < 100 {
+                        nfos_left_alone.push(note);
+                    }
+                }
                 if let Some(job) = job_id {
                     for e in &written.errors {
                         let _ = parlour_jobs::add_error(pool, job, None, e).await;
@@ -479,6 +510,7 @@ pub async fn match_library<P: MetadataProvider>(
             let _ = parlour_jobs::set_progress(pool, job, done, total).await;
         }
     }
+    counts["nfos_left_alone"] = serde_json::json!(nfos_left_alone);
     if let Some(job) = job_id {
         let _ = parlour_jobs::set_result(pool, job, counts.clone()).await;
     }

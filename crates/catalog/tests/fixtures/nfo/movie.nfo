@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<movie>
+  <title>The Lantern Keeper</title>
+  <year>2019</year>
+  <uniqueid type="tmdb" default="true">900001</uniqueid>
+  <uniqueid type="imdb">tt9000001</uniqueid>
+  <tmdbid>900001</tmdbid>
+  <imdbid>tt9000001</imdbid>
+</movie>

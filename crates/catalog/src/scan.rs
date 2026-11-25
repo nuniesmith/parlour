@@ -21,6 +21,10 @@
 //!    read, and new or changed ones applied over what the file name
 //!    gave — before any provider lookup, which only the metadata job
 //!    does (`sidecar::sync`).
+//! 7. NFOs (XFER6): every item's Kodi/Emby-style `.nfo` files are
+//!    read, and new or changed ones give the item their title and
+//!    provider ids where its sidecar doesn't carry them
+//!    (`sidecar::nfo_sync`).
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -47,6 +51,9 @@ pub struct ScanReport {
     /// Items whose sidecars carried segments for another encode (a
     /// video of a different size), so the segments were left out.
     pub sidecar_segments_skipped: i32,
+    /// Items whose `.nfo` files were new or changed and were applied
+    /// (XFER6).
+    pub nfos_applied: i32,
     pub errors: Vec<String>,
 }
 
@@ -512,6 +519,17 @@ pub async fn scan_library(
     // XFER4: sidecars, once every file is catalogued and the vanished
     // ones are marked (only available files' sidecars are read).
     crate::sidecar::sync::read_library_sidecars(
+        pool,
+        library_id,
+        &touched,
+        walked_roots.len() == paths.len(),
+        job_id,
+        &mut report,
+    )
+    .await?;
+    // XFER6: NFOs, after the sidecars, so a field the sidecar carries
+    // is never taken from an NFO.
+    crate::sidecar::nfo_sync::read_library_nfos(
         pool,
         library_id,
         &touched,

@@ -457,3 +457,255 @@ fn copies_are_named_poster_and_backdrop_jpg() {
         assert!(!name.ends_with(FILE_SUFFIX), "{name}");
     }
 }
+
+// ------------------------------------------------------------ NFO (XFER6)
+
+use super::nfo::{
+    file_nfo_path, parse_nfo, to_nfo_bytes, Nfo, NfoContent, NfoError, NfoFields, MAX_NFO_BYTES,
+};
+
+const NFO_MOVIE: &[u8] = include_bytes!("../../tests/fixtures/nfo/movie.nfo");
+const NFO_TVSHOW: &[u8] = include_bytes!("../../tests/fixtures/nfo/tvshow.nfo");
+const NFO_EPISODE: &[u8] = include_bytes!("../../tests/fixtures/nfo/episode.nfo");
+const NFO_OTHER: &[u8] = include_bytes!("../../tests/fixtures/nfo/other-software-movie.nfo");
+
+fn nfo(text: &str) -> Result<Nfo, NfoError> {
+    parse_nfo(text.as_bytes())
+}
+
+fn fields(text: &str) -> NfoFields {
+    nfo(text).unwrap_or_else(|e| panic!("{e}")).fields
+}
+
+#[test]
+fn parlour_nfo_fixtures_read_and_are_what_the_writer_writes() {
+    let movie = parse_nfo(NFO_MOVIE).unwrap();
+    assert_eq!(movie.kind, SidecarKind::Movie);
+    assert_eq!(
+        movie.fields,
+        NfoFields {
+            title: Some("The Lantern Keeper".into()),
+            tmdb_id: Some(900001),
+            tvdb_id: None,
+            imdb_id: Some("tt9000001".into()),
+        }
+    );
+    let written = to_nfo_bytes(
+        SidecarKind::Movie,
+        &NfoContent {
+            title: Some("The Lantern Keeper".into()),
+            year: Some(2019),
+            tmdb_id: Some(900001),
+            imdb_id: Some("tt9000001".into()),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        String::from_utf8(written).unwrap(),
+        std::str::from_utf8(NFO_MOVIE).unwrap()
+    );
+
+    let show = parse_nfo(NFO_TVSHOW).unwrap();
+    assert_eq!(show.kind, SidecarKind::Series);
+    assert_eq!(
+        (
+            show.fields.tmdb_id,
+            show.fields.tvdb_id,
+            show.fields.imdb_id.as_deref()
+        ),
+        (Some(900002), Some(800002), Some("tt9000002"))
+    );
+    let written = to_nfo_bytes(
+        SidecarKind::Series,
+        &NfoContent {
+            title: Some("Harbour Lights".into()),
+            year: Some(2018),
+            tmdb_id: Some(900002),
+            tvdb_id: Some(800002),
+            imdb_id: Some("tt9000002".into()),
+            ..Default::default()
+        },
+    );
+    assert_eq!(written, NFO_TVSHOW);
+
+    let ep = parse_nfo(NFO_EPISODE).unwrap();
+    assert_eq!(ep.kind, SidecarKind::Episode);
+    assert_eq!((ep.season_number, ep.episode_number), (Some(1), Some(2)));
+    assert_eq!(ep.fields.title.as_deref(), Some("Low Tide"));
+    assert_eq!(ep.fields.tvdb_id, Some(800003));
+    let written = to_nfo_bytes(
+        SidecarKind::Episode,
+        &NfoContent {
+            title: Some("Low Tide".into()),
+            // An episode's NFO carries no year.
+            year: Some(2018),
+            season_number: Some(1),
+            episode_number: Some(2),
+            tvdb_id: Some(800003),
+            ..Default::default()
+        },
+    );
+    assert_eq!(written, NFO_EPISODE);
+}
+
+#[test]
+fn another_programs_nfo_gives_only_its_title_and_ids() {
+    let n = parse_nfo(NFO_OTHER).unwrap();
+    assert_eq!(n.kind, SidecarKind::Movie);
+    assert_eq!(
+        n.fields,
+        NfoFields {
+            // The entity is resolved; the nested <set><title> is not the
+            // movie's title; plot, year, cast, ratings, <id>, an unknown
+            // uniqueid type and an untyped one are all skipped; the empty
+            // <tvdbid> is absent; the link after the root isn't read.
+            title: Some("Salt & Iron".into()),
+            tmdb_id: Some(900004),
+            tvdb_id: None,
+            imdb_id: Some("tt9000004".into()),
+        }
+    );
+}
+
+#[test]
+fn an_nfo_is_read_leniently_around_what_parlour_uses() {
+    // An empty root: a kind and nothing else.
+    let n = nfo("<movie/>").unwrap();
+    assert_eq!(
+        (n.kind, n.fields),
+        (SidecarKind::Movie, NfoFields::default())
+    );
+    // Root names are matched without regard to case; whitespace trimmed.
+    assert_eq!(
+        fields("<Movie><Title>  Spaced Out  </Title><TMDBID> 7 </TMDBID></Movie>"),
+        NfoFields {
+            title: Some("Spaced Out".into()),
+            tmdb_id: Some(7),
+            ..Default::default()
+        }
+    );
+    // The same value twice (both id forms) is fine.
+    assert_eq!(
+        fields(r#"<tvshow><uniqueid type="TVDB">5</uniqueid><tvdbid>5</tvdbid></tvshow>"#).tvdb_id,
+        Some(5)
+    );
+    // Season / episode mean nothing in a movie's NFO.
+    assert_eq!(
+        nfo("<movie><season>x</season></movie>")
+            .unwrap()
+            .season_number,
+        None
+    );
+    // A multi-episode file's NFO: only the first episode is read.
+    let n = nfo(
+        "<episodedetails><title>One</title><episode>1</episode></episodedetails>\n\
+         <episodedetails><title>Two</title><episode>2</episode></episodedetails>",
+    )
+    .unwrap();
+    assert_eq!(
+        (n.fields.title.as_deref(), n.episode_number),
+        (Some("One"), Some(1))
+    );
+    // Character references and a doctype are fine.
+    assert_eq!(
+        fields("<!DOCTYPE movie><movie><title>Caf&#233; &#x26; Co</title></movie>").title,
+        Some("Café & Co".into())
+    );
+}
+
+#[test]
+fn a_bad_nfo_is_refused_with_a_reason() {
+    assert_eq!(parse_nfo(&[0xff, 0xfe, 0x00]), Err(NfoError::NotUtf8));
+    assert_eq!(
+        nfo("https://www.example.org/movie/1\n"),
+        Err(NfoError::NoRoot)
+    );
+    assert_eq!(nfo(""), Err(NfoError::NoRoot));
+    assert_eq!(
+        nfo("<musicvideo/>"),
+        Err(NfoError::Root("musicvideo".into()))
+    );
+    assert!(matches!(
+        nfo("<movie><title>x</movie>"),
+        Err(NfoError::Xml(_))
+    ));
+    assert!(matches!(
+        nfo("<movie><title>x</title>"),
+        Err(NfoError::Xml(_))
+    ));
+    assert!(matches!(
+        nfo("<movie><title>&bogus;</title></movie>"),
+        Err(NfoError::Xml(_))
+    ));
+    let value = |text: &str| match nfo(text) {
+        Err(NfoError::Value(m)) => m,
+        other => panic!("expected a value problem, got {other:?}"),
+    };
+    assert!(value("<movie><tmdbid>abc</tmdbid></movie>").contains("TMDB id"));
+    assert!(value("<movie><tvdbid>0</tvdbid></movie>").contains("above 0"));
+    assert!(value("<movie><imdbid>nm0000001</imdbid></movie>").contains("IMDb"));
+    assert!(value("<episodedetails><season>-1</season></episodedetails>").contains("season"));
+    assert!(
+        value(r#"<movie><tmdbid>1</tmdbid><uniqueid type="tmdb">2</uniqueid></movie>"#)
+            .contains("two different TMDB ids (1 and 2)")
+    );
+    assert!(value("<movie><title>A</title><title>B</title></movie>").contains("titles"));
+    let mut big = b"<movie><plot>".to_vec();
+    big.resize(MAX_NFO_BYTES as usize + 1, b'x');
+    assert_eq!(parse_nfo(&big), Err(NfoError::TooLarge));
+}
+
+#[test]
+fn the_nfo_writer_escapes_and_reads_back() {
+    let content = NfoContent {
+        title: Some("  <Tom> & \"Jerry's\"\u{1}  ".into()),
+        year: Some(1999),
+        tmdb_id: Some(42),
+        tvdb_id: Some(0),
+        imdb_id: Some("not-imdb".into()),
+        ..Default::default()
+    };
+    let bytes = to_nfo_bytes(SidecarKind::Movie, &content);
+    let text = String::from_utf8(bytes.clone()).unwrap();
+    assert!(
+        text.contains("<title>&lt;Tom&gt; &amp; \"Jerry's\"</title>"),
+        "{text}"
+    );
+    // Values no reader would accept are left out, not written.
+    assert!(!text.contains("tvdb") && !text.contains("imdb"), "{text}");
+    assert_eq!(
+        parse_nfo(&bytes).unwrap().fields,
+        NfoFields {
+            title: Some("<Tom> & \"Jerry's\"".into()),
+            tmdb_id: Some(42),
+            ..Default::default()
+        }
+    );
+    // Same content, same bytes.
+    assert_eq!(bytes, to_nfo_bytes(SidecarKind::Movie, &content));
+    // Nothing known: just the root.
+    assert_eq!(
+        to_nfo_bytes(SidecarKind::Series, &NfoContent::default()),
+        b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<tvshow>\n</tvshow>\n"
+    );
+}
+
+#[test]
+fn nfo_names_follow_the_video_and_spare_the_folder_names() {
+    assert_eq!(
+        file_nfo_path(Path::new("/m/Arrival (2016)/Arrival (2016).mkv")),
+        Some(PathBuf::from("/m/Arrival (2016)/Arrival (2016).nfo"))
+    );
+    assert_eq!(
+        file_nfo_path(Path::new("/m/A/movie.mkv")),
+        Some(PathBuf::from("/m/A/movie.nfo"))
+    );
+    assert_eq!(file_nfo_path(Path::new("/s/Show/tvshow.mkv")), None);
+    assert_eq!(
+        file_nfo_path(Path::new("/s/Show/Season 1/season.mp4")),
+        None
+    );
+    // The scanner never takes an NFO for a video or a subtitle.
+    assert!(!crate::walk::VIDEO_EXTENSIONS.contains(&nfo::NFO_EXTENSION));
+    assert!(!crate::walk::SUBTITLE_EXTENSIONS.contains(&nfo::NFO_EXTENSION));
+}

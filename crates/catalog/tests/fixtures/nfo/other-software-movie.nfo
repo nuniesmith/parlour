@@ -1,0 +1,28 @@
+﻿<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<!-- A fictional NFO in the shape other media software writes: many
+     elements Parlour skips, nested ones, an entity, CDATA, and a link
+     after the root element. -->
+<movie>
+  <plot><![CDATA[A keeper of a lighthouse <finds> a map.]]></plot>
+  <title>Salt &amp; Iron</title>
+  <originaltitle>Sel et fer</originaltitle>
+  <year>2011</year>
+  <id>tt9000004</id>
+  <set>
+    <title>Not This Title</title>
+  </set>
+  <ratings>
+    <rating name="themoviedb" max="10"><value>6.4</value></rating>
+  </ratings>
+  <actor>
+    <name>Imaginary Person</name>
+    <role>Keeper</role>
+  </actor>
+  <uniqueid type="tmdb" default="true">900004</uniqueid>
+  <uniqueid type="anidb">5</uniqueid>
+  <uniqueid>123</uniqueid>
+  <tmdbid>900004</tmdbid>
+  <imdbid>tt9000004</imdbid>
+  <tvdbid></tvdbid>
+</movie>
+https://www.example.org/movie/900004
