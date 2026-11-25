@@ -198,12 +198,26 @@ struct FormatProbe {
     format_version: u32,
 }
 
+/// The default bound on one document's unpacked size
+/// ([`BundleReader::open`]). Each document is parsed whole in memory,
+/// so a zip whose entry inflates far beyond any real server's catalog
+/// is refused before it is read.
+pub const MAX_DOCUMENT_BYTES: u64 = 512 * 1024 * 1024;
+
 fn read_json<R: Read + Seek, T: DeserializeOwned>(
     archive: &mut ZipArchive<R>,
     name: &'static str,
+    max_bytes: u64,
 ) -> Result<T, BundleError> {
     let file = archive.by_name(name)?;
-    serde_json::from_reader(BufReader::new(file))
+    if file.size() > max_bytes {
+        return Err(BundleError::TooLarge {
+            file: name,
+            limit: max_bytes,
+        });
+    }
+    // The size in the zip's header could lie; never read past it.
+    serde_json::from_reader(BufReader::new(file.take(max_bytes)))
         .map_err(|source| BundleError::Json { file: name, source })
 }
 
@@ -223,6 +237,15 @@ impl<R: Read + Seek> BundleReader<R> {
     /// be consistent ([`Bundle::problems`], plus every artwork file
     /// the catalog names present and none unnamed).
     pub fn open(reader: R) -> Result<(Self, Bundle), BundleError> {
+        Self::open_with_limit(reader, MAX_DOCUMENT_BYTES)
+    }
+
+    /// [`BundleReader::open`] with an explicit bound on each
+    /// document's unpacked size, in bytes.
+    pub fn open_with_limit(
+        reader: R,
+        max_document_bytes: u64,
+    ) -> Result<(Self, Bundle), BundleError> {
         let mut archive = ZipArchive::new(reader)?;
         if archive.has_duplicate_names() {
             return Err(BundleError::NotABundle(
@@ -261,7 +284,7 @@ impl<R: Read + Seek> BundleReader<R> {
                 "it has no {MANIFEST_JSON}"
             )));
         }
-        let probe: FormatProbe = read_json(&mut archive, MANIFEST_JSON)?;
+        let probe: FormatProbe = read_json(&mut archive, MANIFEST_JSON, max_document_bytes)?;
         if probe.format != FORMAT_NAME {
             return Err(BundleError::NotABundle(format!(
                 "its manifest says format '{}'",
@@ -275,12 +298,12 @@ impl<R: Read + Seek> BundleReader<R> {
             return Err(BundleError::MissingEntry(missing));
         }
         let bundle = Bundle {
-            manifest: read_json(&mut archive, MANIFEST_JSON)?,
-            users: read_json(&mut archive, USERS_JSON)?,
-            profiles: read_json(&mut archive, PROFILES_JSON)?,
-            libraries: read_json(&mut archive, LIBRARIES_JSON)?,
-            catalog: read_json(&mut archive, CATALOG_JSON)?,
-            user_data: read_json(&mut archive, USER_DATA_JSON)?,
+            manifest: read_json(&mut archive, MANIFEST_JSON, max_document_bytes)?,
+            users: read_json(&mut archive, USERS_JSON, max_document_bytes)?,
+            profiles: read_json(&mut archive, PROFILES_JSON, max_document_bytes)?,
+            libraries: read_json(&mut archive, LIBRARIES_JSON, max_document_bytes)?,
+            catalog: read_json(&mut archive, CATALOG_JSON, max_document_bytes)?,
+            user_data: read_json(&mut archive, USER_DATA_JSON, max_document_bytes)?,
         };
         let mut problems = bundle.problems();
         let named = bundle.artwork_files();

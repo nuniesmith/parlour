@@ -56,6 +56,46 @@ pub fn verify_password(password: &str, stored_hash: &str) -> bool {
     }
 }
 
+/// The marker at the start of a locked hash's salt (D37).
+const LOCKED_SALT_PREFIX: &str = "parlourLocked000";
+
+/// D37: the stored hash of an account (or a profile PIN) that has no
+/// usable secret — a user imported from a bundle made without the
+/// hash confirm. It is a well-formed Argon2id PHC string, so it
+/// passes every check a real hash does and travels through an export
+/// unchanged, but its "hash" is random bytes no password produces.
+/// Its salt starts with a fixed marker so the server can say which
+/// accounts still need an admin to set a password
+/// ([`is_locked_hash`]).
+pub fn locked_hash() -> String {
+    use argon2::password_hash::Encoding;
+    let mut salt = [0u8; 12];
+    let mut hash = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut salt);
+    rand::thread_rng().fill_bytes(&mut hash);
+    let b64 = |bytes: &[u8]| -> String {
+        let mut buf = [0u8; 64];
+        Encoding::B64
+            .encode(bytes, &mut buf)
+            .map(str::to_string)
+            .unwrap_or_default()
+    };
+    // Salt: the 16-character marker plus 16 random characters.
+    format!(
+        "$argon2id$v=19$m=19456,t=2,p=1${LOCKED_SALT_PREFIX}000{}${}",
+        b64(&salt),
+        b64(&hash)
+    )
+}
+
+/// Whether a stored hash is a D37 lock ([`locked_hash`]).
+pub fn is_locked_hash(stored_hash: &str) -> bool {
+    stored_hash
+        .split('$')
+        .nth(4)
+        .is_some_and(|salt| salt.starts_with(LOCKED_SALT_PREFIX))
+}
+
 /// Verify against a real Argon2 hash of a throwaway password, so a
 /// login for a nonexistent user costs the same as a real one.
 fn verify_dummy(password: &str) -> bool {
@@ -708,6 +748,21 @@ mod tests {
         assert!(verify_password("correct horse battery", &hash));
         assert!(!verify_password("wrong horse", &hash));
         assert!(!verify_password("anything", "not-a-hash"));
+    }
+
+    #[test]
+    fn a_locked_hash_is_well_formed_and_matches_no_password() {
+        let locked = locked_hash();
+        let parsed = PasswordHash::new(&locked).expect("a PHC string");
+        assert_eq!(parsed.algorithm.as_str(), "argon2id");
+        assert!(is_locked_hash(&locked));
+        assert_ne!(locked, locked_hash(), "each lock is random");
+        for attempt in ["", "admin-pass-123", LOCKED_SALT_PREFIX] {
+            assert!(!verify_password(attempt, &locked));
+        }
+        let real = hash_password("admin-pass-123").unwrap();
+        assert!(!is_locked_hash(&real));
+        assert!(!is_locked_hash("not-a-hash"));
     }
 
     #[test]

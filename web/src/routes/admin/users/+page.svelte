@@ -1,6 +1,7 @@
 <script lang="ts">
   // Server → Users: accounts (an admin can rename any of them —
-  // UI10), invites, and which profiles may see which libraries.
+  // UI10 — and set a new password for any of them — D37), invites,
+  // and which profiles may see which libraries.
   import { onMount } from 'svelte';
   import { api } from '$lib/api';
   import { loadSession, session } from '$lib/session.svelte';
@@ -19,10 +20,43 @@
   let renamingId = $state<string | null>(null);
   let renameTo = $state('');
   let renameSaving = $state(false);
+  let passwordId = $state<string | null>(null);
+  let newPassword = $state('');
+  let passwordSaving = $state(false);
+
+  function startPassword(u: AdminUser) {
+    error = null;
+    notice = null;
+    renamingId = null;
+    passwordId = u.id;
+    newPassword = '';
+  }
+
+  async function savePassword(event: SubmitEvent, u: AdminUser) {
+    event.preventDefault();
+    error = null;
+    notice = null;
+    passwordSaving = true;
+    const { status, error: err } = await api(`/api/v1/admin/users/${u.id}/password`, {
+      method: 'PUT',
+      body: JSON.stringify({ password: newPassword }),
+    });
+    passwordSaving = false;
+    if (status === 204) {
+      users = users.map((x) => (x.id === u.id ? { ...x, password_locked: false } : x));
+      passwordId = null;
+      newPassword = '';
+      notice =
+        u.id === session.me?.user.id
+          ? 'Your password is changed. Your other devices are signed out.'
+          : `${u.username} has a new password. They are signed out everywhere; tell them the new one.`;
+    } else error = err ?? 'Could not set that password.';
+  }
 
   function startRename(u: AdminUser) {
     error = null;
     notice = null;
+    passwordId = null;
     renamingId = u.id;
     renameTo = u.username;
   }
@@ -130,16 +164,35 @@
                 Cancel
               </button>
             </form>
+          {:else if passwordId === u.id}
+            <form class="rename" onsubmit={(e) => savePassword(e, u)}>
+              <span>{u.username}</span>
+              <input
+                type="password"
+                bind:value={newPassword}
+                aria-label="New password for {u.username}"
+                autocomplete="new-password"
+                required
+                minlength="8"
+                maxlength="128"
+              />
+              <button class="btn small primary" type="submit" disabled={passwordSaving}>Save</button>
+              <button class="btn small" type="button" onclick={() => (passwordId = null)}>
+                Cancel
+              </button>
+            </form>
           {:else}
             {u.username}
+            {#if u.password_locked}<span class="badge" title="Imported without a password">No password</span>{/if}
           {/if}
         </td>
         <td>{u.is_admin ? 'yes' : '—'}</td>
         <td>{u.profile_count}</td>
         <td class="dim">{new Date(u.created_at).toLocaleDateString()}</td>
         <td>
-          {#if renamingId !== u.id}
+          {#if renamingId !== u.id && passwordId !== u.id}
             <button class="btn small" onclick={() => startRename(u)}>Rename</button>
+            <button class="btn small" onclick={() => startPassword(u)}>Set password</button>
           {/if}
         </td>
       </tr>
@@ -148,7 +201,8 @@
 </table></div>
 <p class="dim">
   Renaming keeps the account's password, profiles and signed-in sessions. Usernames are unique
-  regardless of capitals.
+  regardless of capitals. Setting a password signs the account out everywhere else; accounts marked
+  “No password” came from an import without passwords and can't sign in until you set one.
 </p>
 
 <h2>Invites</h2>
@@ -217,6 +271,14 @@
   }
   .rename input {
     width: 12rem;
+  }
+  .badge {
+    margin-left: 0.5rem;
+    font-size: 0.75rem;
+    padding: 0.1rem 0.45rem;
+    border-radius: 0.4rem;
+    border: 1px solid var(--line);
+    color: var(--text-dim);
   }
   .invite-link code {
     display: block;

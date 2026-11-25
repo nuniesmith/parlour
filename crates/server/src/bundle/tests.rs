@@ -410,6 +410,24 @@ fn a_newer_version_is_named_before_its_fields_are_read() {
 }
 
 #[test]
+fn a_document_larger_than_the_bound_is_refused_unread() {
+    let bytes = write(&fixture());
+    let catalog = entry_text(&bytes, CATALOG_JSON).len() as u64;
+    // A bound just under the catalog's size: the manifest and users
+    // fit, the catalog doesn't.
+    let err = match BundleReader::open_with_limit(Cursor::new(bytes.clone()), catalog - 1) {
+        Ok(_) => panic!("the reader accepted it"),
+        Err(e) => e,
+    };
+    assert!(
+        matches!(err, BundleError::TooLarge { file, limit } if file == CATALOG_JSON && limit == catalog - 1),
+        "{err}"
+    );
+    assert!(BundleReader::open_with_limit(Cursor::new(bytes), catalog).is_ok());
+    const { assert!(MAX_DOCUMENT_BYTES >= 64 * 1024 * 1024) };
+}
+
+#[test]
 fn the_reader_refuses_missing_and_stray_entries() {
     let missing: Vec<_> = fixture_documents()
         .into_iter()

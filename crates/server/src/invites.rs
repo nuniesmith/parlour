@@ -6,14 +6,17 @@
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::routing::{delete, get, patch, post};
+use axum::routing::{delete, get, patch, post, put};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
-use crate::auth::{create_user, new_token, rename_user, token_hash, AdminUser, UserDto};
+use crate::auth::{
+    create_user, hash_password, new_token, rename_user, token_hash, validate_password, AdminUser,
+    UserDto,
+};
 use crate::error::AppError;
 use crate::http::AppState;
 
@@ -227,6 +230,11 @@ struct AdminUserDto {
     is_admin: bool,
     created_at: DateTime<Utc>,
     profile_count: i64,
+    /// D37: the account has no usable password (it was imported
+    /// from a bundle without hashes) until an admin sets one. The
+    /// queries' `split_part(…) LIKE 'parlourLocked000%'` is
+    /// `auth::is_locked_hash` in SQL (the salt's fixed marker).
+    password_locked: bool,
 }
 
 /// Admin: every account with its profile count (W7 user admin).
@@ -236,7 +244,8 @@ async fn list_users(
 ) -> Result<Json<Vec<AdminUserDto>>, AppError> {
     let rows = sqlx::query_as::<_, AdminUserDto>(
         "SELECT u.id, u.username, u.is_admin, u.created_at,
-                (SELECT count(*) FROM profiles p WHERE p.user_id = u.id) AS profile_count
+                (SELECT count(*) FROM profiles p WHERE p.user_id = u.id) AS profile_count,
+                split_part(u.password_hash, '$', 5) LIKE 'parlourLocked000%' AS password_locked
          FROM users u ORDER BY u.created_at",
     )
     .fetch_all(&state.pool)
@@ -283,7 +292,8 @@ async fn update_user(
     .await;
     let row = sqlx::query_as::<_, AdminUserDto>(
         "SELECT u.id, u.username, u.is_admin, u.created_at,
-                (SELECT count(*) FROM profiles p WHERE p.user_id = u.id) AS profile_count
+                (SELECT count(*) FROM profiles p WHERE p.user_id = u.id) AS profile_count,
+                split_part(u.password_hash, '$', 5) LIKE 'parlourLocked000%' AS password_locked
          FROM users u WHERE u.id = $1",
     )
     .bind(id)
@@ -291,6 +301,57 @@ async fn update_user(
     .await
     .map_err(AppError::from)?;
     Ok(Json(row))
+}
+
+#[derive(Deserialize)]
+struct SetPassword {
+    password: String,
+}
+
+/// D37: an admin gives an account a new password — the way out for
+/// a user imported without a hash (created locked), and for anyone
+/// who has forgotten theirs. No current password: the admin session
+/// is the authority, as for every admin action. Like a self-service
+/// change it ends the account's other sessions; an admin setting
+/// their own password stays signed in on this one. Unknown id is a
+/// 404.
+async fn set_password(
+    State(state): State<AppState>,
+    admin: AdminUser,
+    Path(id): Path<String>,
+    Json(body): Json<SetPassword>,
+) -> Result<StatusCode, AppError> {
+    let id = Uuid::parse_str(&id).map_err(|_| AppError::NotFound("no such user".into()))?;
+    validate_password(&body.password)?;
+    let hash = hash_password(&body.password)?;
+    let row: Option<(String,)> =
+        sqlx::query_as("UPDATE users SET password_hash = $1 WHERE id = $2 RETURNING username")
+            .bind(&hash)
+            .bind(id)
+            .fetch_optional(&state.pool)
+            .await
+            .map_err(AppError::from)?;
+    let Some((username,)) = row else {
+        return Err(AppError::NotFound("no such user".into()));
+    };
+    sqlx::query("DELETE FROM sessions WHERE user_id = $1 AND id != $2")
+        .bind(id)
+        .bind(admin.0.session_id)
+        .execute(&state.pool)
+        .await
+        .map_err(AppError::from)?;
+    crate::activity::record(
+        &state.pool,
+        crate::activity::Entry::by_user(
+            "user.password_set",
+            admin.0.user_id,
+            &admin.0.username,
+            format!("{} set a new password for {username}", admin.0.username),
+        )
+        .detail(serde_json::json!({ "user_id": id })),
+    )
+    .await;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub fn routes() -> Router<AppState> {
@@ -302,6 +363,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/admin/invites/{id}", delete(revoke_invite))
         .route("/api/v1/admin/users", get(list_users))
         .route("/api/v1/admin/users/{id}", patch(update_user))
+        .route("/api/v1/admin/users/{id}/password", put(set_password))
         .route("/api/v1/invites/{token}", get(invite_status))
         .route("/api/v1/invites/accept", post(accept_invite))
 }

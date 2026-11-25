@@ -9,8 +9,9 @@ documents and their fields, and the rules a valid bundle follows.
 **Status.** The format exists in code (`crates/server/src/bundle/`)
 with fixtures and tests. Export exists too (XFER2, §11): an admin
 endpoint and background job write a bundle, and the Jobs page
-downloads it. Nothing applies a bundle yet: import is XFER3, the
-admin page is XFER8 and nightly backups are XFER7. The per-item sidecars stored with the
+downloads it. Import exists as an API and a job (XFER3, §12):
+upload, dry-run report, apply. The admin page that drives both is
+XFER8, and nightly backups are XFER7. The per-item sidecars stored with the
 media files (XFER4–XFER6) are a separate format, specified when
 XFER4 is built.
 
@@ -584,50 +585,217 @@ notes where they don't say:
    new "Exports" filter), so the audit trail shows who took the
    server's data, and whether the hashes went with it.
 
-## 12. Notes for XFER3 (import) — problems known now
+## 12. Import (XFER3)
 
-Two problems were flagged before this spec and belong to XFER3. They
-are noted here, not solved:
+Built 2026-11-25 to the notes XFER1 and XFER2 left here, and to
+**D37** and **D38** (decided 2026-11-25; recorded in
+`docs/DECISIONS.md`). Code: `crates/server/src/import/`.
 
-1. **A user imported without a hash can't sign in.**
-   `users.password_hash` is NOT NULL, and there is no admin password
-   reset today. Importing a bundle made without the confirm leaves
-   every imported login without a usable password.
-2. **A fresh install's first admin clashes with the bundle.**
-   `PARLOUR_ADMIN_USER` creates a user (plus a default profile) on
-   first start. If the bundle holds the same username, XFER3's rule
-   that "conflicting usernames are reported, not merged" turns away
-   the owner's own account.
+**The API** (admin only; anyone else gets a 404, like every admin
+route):
 
-Other things XFER3 has to handle:
+| route | does |
+|---|---|
+| `POST /api/v1/admin/import` | the bundle as the request body (`application/zip`). Streamed to `<PARLOUR_CACHE_DIR>/imports/<id>.zip`, refused past **4 GiB**, then opened with `BundleReader`, which checks the whole bundle. 201 with `{id, bytes, report}`, where `report` is the dry run. Not a bundle, or an inconsistent one: 400 with the reader's reason, and nothing is kept |
+| `POST /api/v1/admin/import/{id}/dry-run` | the dry run again, for the server as it is now, with the options in the body |
+| `POST /api/v1/admin/import/{id}/apply` | queues an `import_bundle` job with the options and starts it; 202 with the job. Its result is the same report, for what it did |
+| `DELETE /api/v1/admin/import/{id}` | removes an upload |
 
-- **Creating users:** don't go through `create_user`, which also adds
-  a default profile named after the user. The bundle already carries
-  every profile, the default one included.
-- **Library paths** are the old host's. The dry run should show them,
-  and the import should let them change.
-- **Items match** on (`library`, `stable_key`), falling back to
-  provider ids (TODO). Keys only match when the folders under each
-  library root are laid out the same way: movie keys include the
-  folder, audiobook keys the relative path.
-- **Segment times are positions in a file,** so they hold only if
-  the new host's files are the same encodes.
-- **Activity entries have no key.** A re-import must not duplicate
-  them, so treat an entry as present when every field matches.
-- **Imported `needs_review` items** come with no candidates (§8).
-- **Artwork:** extract only the names `BundleReader` lists, and copy
-  through `copy_artwork`, which checks each file's hash.
-- **Uploads:** put an upper bound on their size. The reader parses
-  each document fully in memory.
-- **Insert order:**
-  - users;
-  - then profiles;
-  - then libraries, paths and access;
-  - then items, parents first;
-  - then people, segments and images;
-  - then watch state, recent searches and Activity.
+The options are `{"library_paths": {"<library name>": ["/path", …]}}`.
+They give a library folders on this host in place of the bundle's,
+which are the old host's. The body is strict: an unknown field, a
+library the bundle doesn't have, or a path that isn't absolute is a
+400.
 
-  Never delete anything by default (TODO).
+**Bounds.** The upload is capped at 4 GiB, which leaves room for
+artwork. Each JSON document is also capped at 512 MiB unpacked
+(`MAX_DOCUMENT_BYTES`, checked by `BundleReader`), because the
+reader parses each one whole in memory. The reader also never reads
+past that bound, even when a zip header understates the size.
+
+**One walk, two endings.** The dry run and the job run the same
+code (`import::apply::run`) inside one transaction. The dry run rolls
+it back; the job commits it. So the report the admin reads is what
+the apply does, unless the server changes in between. That's why
+the apply recomputes rather than replaying the dry run. Imports
+take a transaction-level advisory lock, so two never run at once.
+A failed apply rolls back whole and changes nothing.
+
+**Insert order** is the one these notes asked for: users; then
+profiles; then libraries, paths and access; then items, parents
+first; then people, segments and images; then watch state, recent
+searches and Activity.
+
+**Never delete; change only what's newer.** Nothing in the import
+issues a `DELETE`. Rows that carry their own clock change only when
+the bundle's copy is newer by that clock:
+
+- watch state and segments by `updated_at`;
+- recent searches by `searched_at`;
+- an item's metadata by `last_metadata_at`. A freshly scanned,
+  never-matched item takes the bundle's metadata; an item matched
+  here more recently keeps its own.
+
+Rows with no clock are only ever added. These are accounts,
+profiles, libraries, folders, grants and people. A person's missing
+`tmdb_id` is filled in, never replaced. Re-importing a bundle
+therefore changes nothing and duplicates nothing.
+
+**How each thing matches:**
+
+| thing | matched by | when it's already here |
+|---|---|---|
+| user | `username`, ignoring case | **the same account** when its `created_at` matches too, to the microsecond (an earlier import of this bundle, or the server it came from): kept as it is. **Otherwise a conflict**: reported, never merged. The user is skipped with their profiles, grants, watch state and recent searches. The one exception is D38's adoption, below |
+| profile | (user, name) | kept as it is |
+| library | `name` | kept as it is, if it has the same kind. Another kind is a conflict, and its items, grants and watch state are skipped. It gains only the folders the admin names in the options |
+| item | (library, `stable_key`); failing that, a provider id (`tmdb_id`, `tvdb_id` or `imdb_id`) within the same library and kind, among items here whose key the bundle doesn't use | the item here keeps its key and its place in the tree. Its metadata changes only by the newer-wins rule. Two or more provider-id candidates is a conflict, and the item is skipped. So is the same key with another kind. A child of a skipped item is skipped too |
+| credit | (item, person, role) | added. Updated only on an item whose metadata came from the bundle |
+| segment | (item, kind, source) | newer `updated_at` wins |
+| image | (item, kind, variant) | added, or re-pointed at the bundle's `source_url`, only on an item whose metadata came from the bundle. A row still waiting for its download gets the bundle's file when there is one |
+| watch state | (profile, item) | newer `updated_at` wins |
+| recent search | (profile, query ignoring case) | newer `searched_at` wins |
+| Activity entry | its own fields: `created_at`, `kind`, `actor`, `summary` and `detail` | present: not added again |
+
+**New items arrive unavailable.** `available` is file state (§5.5),
+so an imported item stays unavailable until a scan of its library
+finds its files. The keys match only when the folders under each
+library root are laid out as on the old host: movie keys include the
+folder, and audiobook keys the relative path. When they don't, the
+provider-id fallback catches what it can.
+
+**The two problems these notes flagged, as decided:**
+
+1. **A user imported without a hash (D37(b)).** The user is created
+   **locked**. The stored hash is a well-formed Argon2id PHC string
+   whose "hash" is random bytes, so no password matches it. It
+   passes the format's hash check and travels through a later export
+   unchanged. Its salt starts with a fixed marker (`parlourLocked000`),
+   so the server can tell a lock apart from a real hash
+   (`auth::locked_hash` / `is_locked_hash`). The new admin action
+   **`PUT /api/v1/admin/users/{id}/password`** (`{"password": …}`,
+   with the sign-up rules) gives any account a working password. Like a
+   self-service change, it ends that account's other sessions. It
+   records `user.password_set` in the Activity feed. On Server →
+   Users, `GET /api/v1/admin/users` now says `password_locked`; the
+   page marks those accounts "No password" and offers **Set
+   password** on every row. If a later import carries the hash, a
+   locked account takes it; a real password here is never replaced.
+2. **The fresh install's first admin (D38(b)).** When the bundle's
+   admin clashes by name with this server's **pristine** bootstrap
+   admin, it adopts that account instead of being a conflict. Every
+   other clash is still a conflict. The account is pristine when all
+   of these hold:
+   - it is the server's first account, taken before the import adds
+     any (the bootstrap only ever creates the first user);
+   - it is an admin and not disabled, and so is the bundle's user;
+   - it still has exactly the one profile the bootstrap gave it,
+     with no PIN, and that profile still bears the account's name (a
+     rename leaves the profile's name behind);
+   - that profile has no watch state, audiobook progress or recent
+     searches.
+
+   Adoption keeps the account's id, so the admin running the import
+   stays signed in. The account takes the bundle's username,
+   `created_at` (so a re-import sees the same account) and password
+   hash. Without a hash in the bundle, it keeps the bootstrap
+   password. Its profile takes the bundle's same-named profile's
+   settings.
+
+**The rest of these notes, as built:**
+
+- **Users are created directly,** not through `create_user`, so no
+  extra default profile appears: the bundle carries every profile.
+- **Library paths:** the dry run lists each library's bundle folders
+  and whether each exists on this host, and which folders the import
+  adds.
+- **Segment times** are positions in the old host's files. The report
+  says so whenever it carries timed segments.
+- **`needs_review` items** arrive without candidates (§8), and the
+  report says how many there are.
+- **Artwork:** the job extracts only the names `BundleReader` lists,
+  through `copy_artwork`, which checks each file's hash. It stages
+  them under `<cache>/imports/<job>.artwork/` and copies each one into
+  the artwork cache as
+  `<PARLOUR_ARTWORK_DIR>/<item id>/<kind>-<variant>-<first 16 of sha256>.<ext>`,
+  written beside its place and renamed in. A file that fails its check
+  is left out and listed on the job's errors, and its image waits for
+  its download like any other. An image whose variant isn't safe in a
+  file name (`[A-Za-z0-9_-]`, 1–32 characters) travels as a
+  provider reference only.
+- **Activity entries** whose user, profile or item wasn't imported
+  keep their text, without that link, like a deleted account's. The
+  report counts them.
+- **The audio tables** are not imported. Format v1 doesn't carry them,
+  and §9's proposal is still open.
+
+**The report** (`import::Report`, the dry run's and the job's
+`result`):
+
+- `dry_run`, and the bundle's `manifest`;
+- `users[]`: `{username, is_admin, action, sign_in,
+  existing_username, note}`. `action` is `create`, `existing`,
+  `adopt` or `conflict`. `sign_in` says how the account signs in
+  afterwards: `from_bundle` (the old password), `locked` (D37),
+  `kept` (as it is here) or `none` (not imported);
+- `libraries[]`: `{name, kind, action, bundle_paths[], paths_added[],
+  note}`, each path with `exists_here`;
+- `conflicts[]`: `{what, key, reason}`, listing at most 500, with
+  `conflicts_total` counting them all;
+- a tally `{created, updated, existing, skipped}` for each of profiles,
+  access, items, people, credits, segments, images, artwork files,
+  watch state, recent searches and Activity. There is also
+  `items_matched_by_provider_id`;
+- `notes[]`, plain sentences for the admin.
+
+Once applied, the upload is **deleted**, because it may hold hashes. A
+failed apply keeps it for another try. An `import.bundle_applied` or
+`import.bundle_failed` Activity row records the requesting admin;
+these fall under the existing "Imports" filter. The Jobs page lists
+the job as "Server import". Its result renders as the page renders
+any job's; XFER8's page is where the report gets a real view.
+
+**Readings made in XFER3 — for the owner's veto.** None is a new
+decision. Each is how this build read D14, D25, D37, D38, the TODO or
+these notes where they don't spell it out:
+
+1. **"Updates" means newer wins, by each row's own clock.** Rows with
+   no clock are added, never changed. So an import never rolls back
+   anything newer here, and a re-import is a no-op. An item's clock is
+   `last_metadata_at`, not `updated_at`, because a scan bumps
+   `updated_at` without making the metadata any better.
+2. **"The same account" is the same username plus the same
+   `created_at`.** That is how a re-import, or an import back onto the
+   server the bundle came from, avoids reporting every user as a
+   conflict. A different account with the name is still a conflict
+   (TODO).
+3. **Existing accounts' credentials are never replaced.** That covers
+   the password hash, the PIN, `is_admin` and `disabled_at`. The only
+   change is a D37 lock (password or PIN) taking the bundle's hash.
+4. **PINs follow D37 too.** A profile with `has_pin` but no hash in
+   the bundle gets a locked PIN, so it isn't left open. Its owner sets
+   a new PIN when editing the profile, which already needs no old PIN.
+5. **The D37 lock carries a visible marker** in its salt, so the
+   admin's user list can flag "No password". It is still a valid
+   Argon2id string that no password matches.
+6. **D38's "pristine"** is the checklist above. "No state of its own"
+   is read as no watch state, audiobook progress, recent searches,
+   PIN or extra profile. Preferences and library grants don't count.
+   The bundle's user must be an admin and not disabled. The adopted
+   account keeps its bootstrap password when the bundle has no hash.
+7. **An existing library keeps its own folders.** It gains only the
+   ones the admin names. A created library gets the bundle's folders
+   unless the admin names others.
+8. **Activity identity leaves out the links.** An entry's user,
+   profile and item are where it attaches on this server, resolved by
+   name each time. So an entry imported once without a link isn't
+   duplicated after a later import resolves it.
+9. **Imported items are created unavailable,** so they appear only
+   once a scan finds their files (§5.5: `available` is file state).
+10. **The upload is deleted once applied,** and kept when the apply
+    fails.
+11. **The provider-id fallback** looks only at items of the same
+    library and kind whose `stable_key` the bundle doesn't use itself,
+    and needs exactly one candidate. Two or more is a conflict.
 
 ## 13. In the code
 
@@ -638,6 +806,11 @@ Other things XFER3 has to handle:
   - `coverage.rs` — the schema map and the CHECK constraints mirrored.
 - **`crates/server/src/export/`** (XFER2) — the endpoints, the job
   and its worker; unit tests in `export/tests.rs` (run in CI).
+- **`crates/server/src/import/`** (XFER3) — `mod.rs`: the upload,
+  dry-run, apply and delete endpoints, the job and its worker;
+  `apply.rs`: the walk and the report; unit tests in
+  `import/tests.rs` (run in CI). The D37 lock and the admin's set
+  password are in `auth.rs` / `invites.rs`.
 - **Fixtures:** `crates/server/tests/fixtures/bundle-v1/`.
 - **Unit tests** in `bundle/tests.rs` (run in CI):
   - each fixture round-trips and is byte for byte what the writer
@@ -651,4 +824,13 @@ Other things XFER3 has to handle:
   - `tests/bundle_schema_flow.rs`: the schema against `coverage.rs`;
   - `tests/export_flow.rs`: export a seeded database over HTTP and
     open the downloads with `BundleReader` (hashes off and on,
-    artwork off and on, duplicates, delete, the worker).
+    artwork off and on, duplicates, delete, the worker);
+  - `tests/import_flow.rs`: export a seeded database and import it
+    into fresh databases the test creates beside it. It checks that
+    the target exports what the source did, that the dry run equals
+    the apply, and that a re-import duplicates nothing (Activity
+    included). It covers D38's adoption, and, without hashes, D37's
+    lock and set password. It also covers a user conflict, a library
+    of another kind, a provider-id match, replacement folders, and a
+    later import that fills in a locked PIN. Its database role must be
+    allowed to create databases.

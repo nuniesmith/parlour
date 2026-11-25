@@ -709,11 +709,35 @@ does NOT depend on Phase 2 transcoding.
   readings for veto are in `docs/IMPORT-EXPORT.md` §11; the first
   is that a stale duplicate image row is dropped rather than
   failing the export.
-- [ ] XFER3 (L) **Import**: upload → parse → **dry-run
+- [x] XFER3 (L) **Import**: upload → parse → **dry-run
   report** (creates / updates / conflicts, matched by
   username, library name, item stable_key/provider ids) →
   apply as a job. Idempotent; import never deletes anything
   by default; conflicting usernames are reported, not merged.
+  *Done 2026-11-25, per D14/D25/D37/D38, format v1 as it
+  stands (no audio tables — the §9 proposal is still open):*
+  `crates/server/src/import/`. `POST /api/v1/admin/import`
+  streams the zip to `<cache>/imports/` (4 GiB cap; each
+  document 512 MiB unpacked, now checked by `BundleReader`),
+  opens it with `BundleReader` and answers with a dry-run
+  report; `…/{id}/dry-run` re-runs it with the admin's
+  replacement library folders; `…/{id}/apply` queues an
+  `import_bundle` job (own worker, like the export's);
+  `DELETE …/{id}` drops an upload. Dry run and apply are one
+  walk in one transaction (rolled back / committed), in the
+  spec's insert order, so the report is what the apply does.
+  Never deletes; rows with a clock change only when the
+  bundle's copy is newer, rows without one are only added;
+  re-import changes nothing, Activity included. Users match by
+  username + `created_at` (same account) or conflict, except
+  D38: a pristine bootstrap admin is adopted by the bundle's
+  admin. D37: hash-less users (and PIN'd profiles) are created
+  with a locked hash; new `PUT /api/v1/admin/users/{id}/password`
+  plus "Set password" / "No password" on Server → Users. Items
+  match on key, then a unique provider id; new items arrive
+  unavailable until a scan. Artwork is extracted only by the
+  reader's names, hash-checked, into the artwork cache. Eleven
+  readings for veto are in `docs/IMPORT-EXPORT.md` §12.
 - [ ] XFER4 (L) **Sidecar metadata with the media files**:
   per-file `<name>.parlour.json` (series: folder-level
   `series.parlour.json` + per-episode files), versioned,

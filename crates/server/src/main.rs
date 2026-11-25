@@ -64,6 +64,15 @@ async fn main() {
     // export with artwork never holds up scans or metadata.
     let export_dir = parlour_server::export::export_dir(&config.cache_dir);
     parlour_server::export::spawn_worker(pool.clone(), export_dir.clone());
+    // XFER3: so do imports, applied from uploads under the cache.
+    let import_dir = parlour_server::import::import_dir(&config.cache_dir);
+    parlour_server::import::spawn_worker(
+        pool.clone(),
+        parlour_server::import::ImportDirs {
+            import_dir: import_dir.clone(),
+            artwork_dir: metadata.artwork_dir.clone(),
+        },
+    );
     // UI5: keep the Dashboard's notices in line with reality.
     parlour_server::notices::spawn(
         pool.clone(),
@@ -75,6 +84,7 @@ async fn main() {
     state.emby = emby;
     state.server = parlour_server::dashboard::ServerSettings::from_config(&config);
     state.export_dir = export_dir;
+    state.import_dir = import_dir;
     std::sync::Arc::get_mut(&mut state.playback)
         .expect("fresh playback state")
         .configure(config.cache_dir.clone(), config.stream_secret.clone());
