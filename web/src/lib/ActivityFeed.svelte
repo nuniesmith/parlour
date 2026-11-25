@@ -15,6 +15,7 @@
     { value: 'playback', label: 'Playback' },
     { value: 'scan', label: 'Library scans' },
     { value: 'import', label: 'Imports' },
+    { value: 'export', label: 'Exports' },
     { value: 'invite', label: 'Invites' },
     { value: 'user', label: 'Users' },
   ];
@@ -74,6 +75,7 @@
     playback: 'Playback',
     scan: 'Scan',
     import: 'Import',
+    export: 'Export',
     invite: 'Invite',
     user: 'User',
   };

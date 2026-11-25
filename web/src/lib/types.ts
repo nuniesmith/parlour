@@ -269,7 +269,7 @@ export interface Job {
   progress_done: number;
   progress_total: number;
   errors: { path: string | null; message: string }[];
-  result: Record<string, number> | null;
+  result: Record<string, unknown> | null;
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
@@ -416,6 +416,16 @@ export function formatRuntime(min: number | null | undefined): string {
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 
+/** XFER2: what opting into artwork would add to an export now
+ *  (`GET /api/v1/admin/export/estimate`). */
+export interface ExportEstimate {
+  artwork_files: number;
+  artwork_bytes: number;
+  /** Cached images whose file is gone or can't be named; they
+   *  travel as provider references only. */
+  artwork_unavailable: number;
+}
+
 export function formatBytes(n: number): string {
   if (n >= 1e9) return `${(n / 1e9).toFixed(1)} GB`;
   if (n >= 1e6) return `${(n / 1e6).toFixed(1)} MB`;
@@ -447,6 +457,7 @@ export const JOB_KIND_LABELS: Record<string, string> = {
   import_emby: 'Emby import',
   purge_activity: 'Activity clean-up',
   detect_segments: 'Segment detection',
+  export_bundle: 'Server export',
 };
 
 export function jobKindLabel(kind: string): string {

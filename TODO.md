@@ -690,10 +690,25 @@ does NOT depend on Phase 2 transcoding.
   as `books[]`, `book_chapters` not carried) awaits the
   owner's yes — format v1 carries neither until then; eleven
   readings of D14/D25 are listed for veto in the spec's §10.
-- [ ] XFER2 (L) **Export**: admin endpoint + background job
+- [x] XFER2 (L) **Export**: admin endpoint + background job
   producing the bundle; optional artwork inclusion (files
   under `artwork/` in the zip, off by default with a size
   warning); download from the Jobs UI.
+  *Done 2026-11-24, per D14/D25, format v1 as it stands (no
+  audio tables — the §9 proposal is still open):*
+  `crates/server/src/export/`. `POST /api/v1/admin/export`
+  (`include_hashes` = the explicit confirm, `include_artwork`;
+  both off by default) queues an `export_bundle` job. The job
+  reads everything in one `REPEATABLE READ` snapshot, writes in
+  the spec's fixed order, and keeps the zip in
+  `<cache>/exports/`. There is also an estimate route for the
+  size warning, plus download and delete routes. Jobs page:
+  "Export the server" (artwork opt-in with its size, no hash
+  option — XFER8's page owns that warning), and Download / Delete
+  on the finished row. Exports land in the Activity feed. Four
+  readings for veto are in `docs/IMPORT-EXPORT.md` §11; the first
+  is that a stale duplicate image row is dropped rather than
+  failing the export.
 - [ ] XFER3 (L) **Import**: upload → parse → **dry-run
   report** (creates / updates / conflicts, matched by
   username, library name, item stable_key/provider ids) →
