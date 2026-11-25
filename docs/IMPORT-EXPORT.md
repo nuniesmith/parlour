@@ -11,9 +11,10 @@ with fixtures and tests. Export exists too (XFER2, §11): an admin
 endpoint and background job write a bundle, and the Jobs page
 downloads it. Import exists as an API and a job (XFER3, §12):
 upload, dry-run report, apply. The admin page that drives both is
-XFER8, and nightly backups are XFER7. The per-item sidecars stored with the
-media files (XFER4–XFER6) are a separate format, specified when
-XFER4 is built.
+XFER8, and nightly backups are XFER7. The per-item sidecars stored
+with the media files are a separate format, `parlour-sidecar` v1,
+specified in §13 (XFER4). The write opt-in and poster copy are XFER5,
+and NFO interop is XFER6.
 
 **What it rests on.**
 
@@ -357,7 +358,7 @@ must be accounted for, and the mirrored CHECK sets must match. A
 migration that adds a table, a column or a value fails that test
 until the format and this doc say where it goes.
 
-At 2026-11-24 the schema has 26 tables, 13 of them carried:
+At 2026-11-25 the schema has 27 tables, 13 of them carried:
 
 | table | lands in |
 |---|---|
@@ -371,6 +372,7 @@ Columns of those tables that stay behind:
 
 - every row's own `id`;
 - `media_items.available` (file state);
+- `libraries.write_sidecars` (the host's sidecar opt-in, §13.8);
 - `images.path` (a path in the old host's cache; `file` replaces it
   when artwork is included);
 - `images.width` / `images.height` (nothing writes them).
@@ -389,6 +391,7 @@ the Activity feed. The rest of the schema stays on the old host:
 | `metadata_candidates` | the matcher's review shortlist. An imported `needs_review` item arrives without one, and the next metadata match rebuilds it (`match_library` re-matches every top-level item) |
 | `notices`, `notice_dismissals` | reconciled from live conditions once a minute on the new host |
 | `audio_fingerprints` | a cache keyed by file content; segment detection rebuilds it |
+| `item_sidecars` | what this host's scanner last read from the sidecar files (§13); the new host reads the files |
 | `_sqlx_migrations` | the new host keeps its own ledger |
 | `book_chapters`, `book_progress` | **open — §9** |
 
@@ -797,7 +800,273 @@ these notes where they don't spell it out:
     library and kind whose `stable_key` the bundle doesn't use itself,
     and needs exactly one candidate. Two or more is a conflict.
 
-## 13. In the code
+## 13. Sidecars with the media files (XFER4)
+
+Built 2026-11-25 for D14's second half: per-item metadata stored
+**with the media files**, so it travels when the files move. Code:
+`crates/catalog/src/sidecar/`. The bundle (§1–§12) and the sidecars
+split the record the way D14 does: *item* metadata goes in sidecars,
+*per-user* state (watch history, logins, audiobook progress) goes
+only in the bundle. A sidecar never holds anything about a user.
+
+### 13.1 Where sidecars live
+
+| item | sidecar | where |
+|---|---|---|
+| movie | `<video stem>.parlour.json` | beside each of the movie's video files: `Arrival (2016).mkv` → `Arrival (2016).parlour.json` |
+| episode | `<video stem>.parlour.json` | beside each of the episode's video files |
+| series | `series.parlour.json` | in the **series folder**: the nearest folder above an episode that isn't a season folder (`Season 01`, `S01`, `Specials`) |
+
+- Seasons have no sidecar. Nothing the matcher sets lives on a season.
+- An episode directly in the library root has no series folder, so
+  its series gets no sidecar from it.
+- A video whose stem is `series` gets no per-file sidecar, because
+  that name belongs to the series folder.
+- Two videos with the same stem (`Movie.mkv`, `Movie.mp4`) share one
+  sidecar. They are one item anyway.
+- Sidecars belong to video libraries for now. Audiobooks libraries
+  have their own scanner and no provider lookup yet. AB6 brings
+  books in (D30).
+- Only **available** files' sidecars are read or written.
+
+### 13.2 The document
+
+A sidecar is one JSON object (UTF-8, the §2 conventions: two-space
+indents, a final newline, dates `YYYY-MM-DD`). Examples, byte for
+byte what the writer produces, are in
+`crates/catalog/tests/fixtures/sidecar-v1/`: a movie (with credits
+and a manual segment), a series, and an episode (with a D21 marker).
+All of them are fictional.
+
+| field | type | for | holds |
+|---|---|---|---|
+| `format` | string | all | always `"parlour-sidecar"` |
+| `format_version` | integer | all | always `1` |
+| `kind` | string | all | `movie`, `series` or `episode`. It must match the item the file belongs to |
+| `title` | string | all | the item's title (`sort_title` is derived from it) |
+| `year` | integer | all | release or first-air year |
+| `season_number`, `episode_number` | integer | episode | **checks, not values**: when present they must equal the numbers parsed from the file name, or the sidecar is refused (it belongs to another episode). They are never applied, because they are part of the item's `stable_key` |
+| `air_date` | date | all | |
+| `overview` | string | all | |
+| `genres` | array of strings | all | |
+| `content_rating` | string | all | e.g. `PG-13`, `TV-14` |
+| `vote_average` | number | all | 0–10 |
+| `runtime_minutes` | integer | all | |
+| `tmdb_id`, `tvdb_id` | integer | all | provider ids |
+| `imdb_id` | string | all | |
+| `people` | array | all | credits: `{name, role, character_name, sort_order, tmdb_id}`. `name` and `role` are required, the rest optional. `sort_order` defaults to the entry's position in the list |
+| `segments` | object | movie, episode | `{size_bytes, entries}`. `size_bytes` is the size of the video the times were measured on. `entries` is a list of `{kind, start_ms, end_ms}`: `kind` is `intro`, `credits` or `recap`; times are milliseconds into that video, or both absent for a D21 "no segment of this kind here" marker |
+
+**Present means authoritative; absent means not carried.** Every
+field after `kind` is optional. A field that is present wins over the
+provider. A field that is absent, or `null`, isn't carried, and still
+comes from the provider as before. An array that is present is
+carried even when empty: `"genres": []` means "no genres", not
+"ask the provider". The writer leaves out what the database holds as
+NULL or empty, so a Parlour-written sidecar never pins an empty
+value.
+
+### 13.3 Rules a valid sidecar follows
+
+The reader refuses a sidecar that breaks any of these. A refused
+sidecar is reported on the scan job (path and reason) and skipped,
+and the item keeps whatever it had.
+
+- **Version first.** `format` and `format_version` are read before
+  anything else, so a newer sidecar is refused for its version
+  ("the sidecar is format version 2; this server reads version 1"),
+  not for a field.
+- **Strict.** An unknown field is an error, anywhere: at the top, in
+  a credit, or in a segment. So is a field given twice, or a value of
+  the wrong type. Any change to the shape is a new version.
+- Text fields, when present, aren't empty or blank. Leave a field
+  out instead.
+- `year`, `runtime_minutes`, `tmdb_id`, `tvdb_id` and a credit's
+  `tmdb_id` are above 0. `vote_average` is between 0 and 10.
+  `season_number` and `episode_number` are 0 or more, and appear only
+  on an episode.
+- `genres` has no empty entry and no repeats.
+- A credit's (`name`, `role`) appears once. The same person in two
+  roles is fine.
+- `segments` appears only on a movie or an episode, and `size_bytes`
+  is above 0. Each `kind` appears once. Times are both present with
+  `0 ≤ start_ms < end_ms`, or both absent (a marker).
+- **One item, one story.** When an item reads several sidecars (a
+  movie in two files, a series spread over two folders), they must
+  agree on everything except `segments`. If they don't, all of them
+  are refused for that scan.
+
+### 13.4 Which segments a sidecar carries
+
+**Only `manual` rows:** the times an admin set in the editor (SEG4),
+and D21 markers. Detected rows (`chapters`, `heuristic`,
+`fingerprint`) stay out. Segment detection rebuilds them from the
+video on any host, and it never touches manual rows. So a sidecar's
+segments and detection can't fight.
+
+Segment times are positions in one encode. As with a bundle import,
+they hold only where the host has the same file. The sidecar says
+which file, by `size_bytes`:
+
+- The scanner applies a sidecar's segments only beside a video of
+  exactly that size. Otherwise it leaves them out, keeps the rest of
+  the sidecar, and counts the item in the scan's
+  `sidecar_segments_skipped`.
+- The writer puts the item's segments only in the sidecar of its
+  **playback file** (the first available file by path, the one the
+  player and the editor use), with that file's size.
+- Applying a sidecar's segments makes the item's manual rows exactly
+  the listed ones. A kind the sidecar doesn't list loses its manual
+  row.
+
+### 13.5 Reading: the scanner
+
+At the end of each scan of a video library, after files are
+catalogued and vanished ones marked (C8), the scanner reads every
+item's sidecars. A provider lookup happens only later, in the
+metadata job, so the sidecar is read **before** any lookup.
+
+- **New or changed sidecars are applied.** "Changed" means the path,
+  size or mtime of any of the item's sidecar files differs from the
+  last read (`item_sidecars.fingerprint`). Applying writes the
+  carried fields, credits and segments in one transaction, and
+  records the document. An unchanged sidecar is not applied again.
+  So an edit made in Parlour after the read (a segment edit, say) is
+  not undone by the next nightly scan.
+- **A re-read video gets its sidecar back.** A new or changed video
+  re-creates its item's row from the file name, which resets the
+  title and year. The scanner then re-applies that item's recorded
+  sidecar, unless an admin's fix overrode it (§13.6).
+- **A sidecar that is gone stops counting.** Its record is dropped.
+  The item keeps its values, and the next metadata match may change
+  them. This happens only when every library root walked cleanly, so
+  an unmounted disk never looks like deleted sidecars.
+- The scanner doesn't change `metadata_status`. An item with a full
+  sidecar still reads "unmatched" until the metadata job matches it,
+  usually at once, by the sidecar's id.
+- The scan report adds `sidecars_applied` and
+  `sidecar_segments_skipped`. Refusals go in its `errors`.
+- **A scan never writes.** Sidecars are written only by the metadata
+  job (§13.7).
+
+### 13.6 Precedence: sidecar, provider, admin
+
+- **Sidecar over automatic lookups.** The matcher (MD2) gains a
+  rule 0: when the item's recorded sidecar names a provider id for
+  the active provider (`tmdb_id` for TMDB, `tvdb_id` for TVDB), that
+  record is fetched directly, at confidence 1.0, with no search.
+  After any automatic match applies a record (rule 0, 1 or 2), the
+  sidecar's carried fields and credits are put back over it, on the
+  item and, for a series, on its episodes (a series lookup enriches
+  them too). Fields the sidecar doesn't carry keep the provider's
+  values. Artwork always comes from the provider; poster and backdrop
+  files beside the media are XFER5's.
+- **The admin's fix-match over the sidecar.** A manual apply (MD4)
+  is an explicit choice, not a lookup, so it wins:
+  - In a library that writes sidecars, the fix rewrites them at once,
+    so the sidecar and the item agree again.
+  - In a library that doesn't, the item's sidecar records (and its
+    episodes', for a series) are marked overridden
+    (`item_sidecars.overridden_at`). The matcher then ignores them,
+    and the scanner doesn't re-apply them, until the sidecar file
+    changes. A changed file is read and wins again.
+- **What the provider can no longer change.** Once a sidecar carries
+  a field, a later automatic lookup can't change it, even if the
+  provider's value drifts (a new vote average, say). To take fresh
+  provider values, fix-match the item (the same id is fine), or edit
+  or delete the sidecar.
+
+### 13.7 Writing: the metadata job
+
+After the `fetch_metadata` job matches an item, whether for a whole
+library or one item, and after an admin's manual apply, Parlour
+rewrites that item's sidecars from what the database now holds:
+
+- **Only where the library opted in.** The opt-in is
+  `libraries.write_sidecars`, off by default (D14: media mounts stay
+  read-only). With it off, nothing is written, and the media folders
+  aren't even looked at for writing. XFER4 adds the column and obeys
+  it. Turning it on (API, admin UI, and the mount change) is XFER5's
+  task, so until then no library writes.
+- **Only matched items.** The item must be `matched`: a movie, or a
+  series with its series-folder sidecars and its episodes' sidecars.
+  An unmatched or needs-review item gets nothing, so a file-name guess
+  is never pinned.
+- **Only when something changed.** The writer is deterministic (§2's
+  JSON, fields in a fixed order, absent ones left out). A file that
+  already holds exactly the new bytes isn't touched. So re-running
+  the job writes nothing, and the job's result counts
+  `sidecars_written`.
+- **Atomically.** Each file is written to a hidden temp file in the
+  same folder (`.<name>.<random>.tmp`), synced, then renamed over the
+  sidecar, so a reader sees the old file or the new one, never part
+  of one. On any failure the temp file is removed and the old
+  sidecar stays. A read-only mount fails here.
+- **A failed write doesn't fail the job.** Each file that can't be
+  written is listed on the job (path and reason), and the rest carry
+  on. A value the database holds that no sidecar may carry (a vote
+  above 10, say) is left out. A document that would still break a
+  §13.3 rule isn't written at all, so Parlour never writes a sidecar
+  its own reader refuses.
+- After writing, the item's record is updated to the new files'
+  fingerprint, so the next scan doesn't re-read Parlour's own
+  writes. The filesystem watcher still sees the write and queues a
+  scan, which finds nothing new.
+
+### 13.8 What the bundle does with the new schema
+
+- `libraries.write_sidecars` **stays behind.** Whether a library may
+  write depends on the host's mounts, so an imported library starts
+  with it off.
+- `item_sidecars` **stays behind.** It is what one host read from its
+  own files; the new host reads the files.
+
+Format v1 of the bundle doesn't change.
+
+### 13.9 Readings of D14 made here — for the owner's veto
+
+None of these is a new decision. Each is how XFER4 read D14 and the
+TODO where they don't spell the detail out.
+
+1. **The gate is a column now, operated later.** XFER4 adds
+   `libraries.write_sidecars` (default off) and obeys it. XFER5 owns
+   turning it on (API, UI, the documented mount change) and the
+   poster/backdrop copy. Until XFER5, the writer only runs in tests.
+2. **"Authoritative" means over automatic lookups.** An admin's
+   fix-match beats the sidecar, and rewrites it where the library
+   writes (§13.6). Without that, a wrong id in a sidecar could never
+   be fixed from the UI.
+3. **Applied when changed, not on every scan.** A sidecar is applied
+   when its files change, or when its item's video is re-read.
+   Otherwise every nightly scan would undo segment edits and fixes
+   made in Parlour since.
+4. **Parlour writes everything the database holds** for a matched
+   item. So after a first write, provider drift no longer reaches
+   that item until a fix-match or a sidecar edit (§13.6). This is
+   what "authoritative" plus "the job rewrites sidecars" adds up to.
+5. **Only matched items are written.** "Matched metadata" in the
+   TODO is read literally.
+6. **Segments: manual rows only**, tied to the video's byte size
+   (§13.4). The bundle carries every source (§10, reading 7). A
+   sidecar carries only what detection can't rebuild.
+7. **Season and episode numbers are checks, not values,** because
+   they are part of the item's identity (`stable_key`).
+8. **Absent and `null` both mean "not carried."** A present array,
+   even empty, is carried.
+9. **The scanner leaves `metadata_status` alone.** "Matched" stays the
+   matcher's word.
+10. **A removed sidecar leaves its values behind.** The item isn't
+    rolled back to the file name. The provider takes over at the next
+    match.
+11. **Video libraries only, for now.** Audiobooks have their own
+    scanner and no provider lookup yet. D30 already puts the
+    `.parlour.json` sidecar last in AB6's audiobook precedence list,
+    so AB6 extends this format to books. XFER4 doesn't build that.
+12. **The audio proposal (§9, D36) is still open.** It doesn't touch
+    sidecars either way: audiobook progress is per-user state, so it
+    lives only in the bundle, never in a sidecar.
+
+## 14. In the code
 
 - **`crates/server/src/bundle/`:**
   - `mod.rs` — the types;
@@ -811,7 +1080,16 @@ these notes where they don't spell it out:
   `apply.rs`: the walk and the report; unit tests in
   `import/tests.rs` (run in CI). The D37 lock and the admin's set
   password are in `auth.rs` / `invites.rs`.
-- **Fixtures:** `crates/server/tests/fixtures/bundle-v1/`.
+- **`crates/catalog/src/sidecar/`** (XFER4) — `mod.rs`: the
+  `parlour-sidecar` types, the strict reader, the writer's bytes, where
+  sidecars live and the atomic write; `sync.rs`: the scanner's pass,
+  applying, the matcher's re-apply and override, and the metadata
+  job's rewrite. Unit tests in `sidecar/tests.rs` (run in CI). Hooks:
+  `scan.rs` (the pass), `metadata_sync.rs` (rule 0, re-apply,
+  override), and `crates/server/src/metadata.rs` (the job and manual
+  apply write).
+- **Fixtures:** `crates/server/tests/fixtures/bundle-v1/`;
+  `crates/catalog/tests/fixtures/sidecar-v1/`.
 - **Unit tests** in `bundle/tests.rs` (run in CI):
   - each fixture round-trips and is byte for byte what the writer
     writes;
@@ -834,3 +1112,13 @@ these notes where they don't spell it out:
     of another kind, a provider-id match, replacement folders, and a
     later import that fills in a locked PIN. Its database role must be
     allowed to create databases.
+  - `tests/sidecar_flow.rs` (XFER4): stub TMDB and ffmpeg-made files.
+    It checks that a folder without sidecars scans as before and that
+    a library that hasn't opted in is never written to. It checks the
+    job's sidecars (movie, series folder, episode, a manual segment),
+    that a re-run writes nothing, and that a copy of the folder,
+    scanned as a new library, gets identical metadata with no lookup.
+    It also covers the sidecar beating the provider (and naming the
+    record), a re-probe, a refused sidecar, segments for another
+    encode, a fix-match with and without writing, and a removed
+    sidecar.

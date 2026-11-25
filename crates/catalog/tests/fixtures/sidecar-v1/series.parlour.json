@@ -1,0 +1,17 @@
+{
+  "format": "parlour-sidecar",
+  "format_version": 1,
+  "kind": "series",
+  "title": "Tidewater Station",
+  "year": 2021,
+  "overview": "Researchers at a made-up tidal observatory keep finding the same message.",
+  "genres": [
+    "Sci-Fi"
+  ],
+  "content_rating": "TV-14",
+  "vote_average": 8.1,
+  "runtime_minutes": 44,
+  "tmdb_id": 900301,
+  "tvdb_id": 880301,
+  "imdb_id": "tt9900301"
+}

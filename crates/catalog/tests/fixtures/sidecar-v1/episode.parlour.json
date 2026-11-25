@@ -1,0 +1,29 @@
+{
+  "format": "parlour-sidecar",
+  "format_version": 1,
+  "kind": "episode",
+  "title": "Low Water",
+  "season_number": 1,
+  "episode_number": 2,
+  "air_date": "2021-03-08",
+  "overview": "The message arrives twice.",
+  "runtime_minutes": 43,
+  "segments": {
+    "size_bytes": 412000000,
+    "entries": [
+      {
+        "kind": "recap",
+        "start_ms": 0,
+        "end_ms": 45000
+      },
+      {
+        "kind": "intro",
+        "start_ms": 52000,
+        "end_ms": 97000
+      },
+      {
+        "kind": "credits"
+      }
+    ]
+  }
+}

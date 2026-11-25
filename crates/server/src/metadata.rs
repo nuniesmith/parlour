@@ -14,10 +14,14 @@
 //! - `GET  /admin/metadata/search` — live provider search for the
 //!   fix-match flow
 //! - `POST /admin/items/{id}/metadata/apply` — apply a chosen
-//!   provider record (manual fix)
+//!   provider record (manual fix; it wins over the item's sidecars)
 //! - `POST /admin/items/{id}/artwork` — cache artwork (job)
 //!
 //! Users: `GET /items/{id}/artwork/{kind}` serves the cached file.
+//!
+//! Sidecars (XFER4): after a match, the job (and a manual fix)
+//! rewrites the item's `*.parlour.json` files when its library has
+//! `write_sidecars` on; with it off nothing touches the media.
 
 use std::path::PathBuf;
 
@@ -129,10 +133,23 @@ pub async fn run_metadata_job_claimed(
         .and_then(|v| v.as_str())
         .and_then(|s| Uuid::parse_str(s).ok());
     let result = if let Some(item_id) = item_id {
-        parlour_catalog::match_item(&pool, &provider, item_id)
-            .await
-            .map(|o| serde_json::json!({ "item": o }))
-            .map_err(|e| e.to_string())
+        match parlour_catalog::match_item(&pool, &provider, item_id).await {
+            Ok(o) => {
+                // XFER4: rewrite the item's sidecars where its library
+                // opted in (nothing happens otherwise).
+                let written = parlour_catalog::write_item_sidecars(&pool, item_id)
+                    .await
+                    .unwrap_or_else(|e| parlour_catalog::SidecarWriteReport {
+                        errors: vec![e.to_string()],
+                        ..Default::default()
+                    });
+                for e in &written.errors {
+                    let _ = parlour_jobs::add_error(&pool, job.id, None, e).await;
+                }
+                Ok(serde_json::json!({ "item": o, "sidecars_written": written.written }))
+            }
+            Err(e) => Err(e.to_string()),
+        }
     } else if let Some(library_id) = job.library_id {
         parlour_catalog::match_library(&pool, &provider, library_id, Some(job.id))
             .await
@@ -419,6 +436,14 @@ async fn apply_endpoint(
             }
             other => AppError::Internal(other.to_string()),
         })?;
+    // XFER4: the admin's fix wins over the item's sidecars; where the
+    // library writes sidecars, they now say what the fix says.
+    let sidecars = parlour_catalog::write_item_sidecars(&state.pool, item_id)
+        .await
+        .map_err(AppError::from)?;
+    for e in &sidecars.errors {
+        tracing::warn!(%item_id, error = %e, "sidecar write failed");
+    }
     // Cache the new artwork right away so the fix is visible.
     let http = reqwest::Client::new();
     let _ = parlour_catalog::download_item_artwork(
@@ -428,7 +453,9 @@ async fn apply_endpoint(
         item_id,
     )
     .await;
-    Ok(Json(serde_json::json!({ "status": "matched" })))
+    Ok(Json(
+        serde_json::json!({ "status": "matched", "sidecars": sidecars }),
+    ))
 }
 
 /// Serve a cached artwork file for an item the profile can access.

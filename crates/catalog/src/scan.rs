@@ -17,6 +17,10 @@
 //!    by segment detection, and loses its fingerprint cache key; the
 //!    server queues `DetectSegments` after the scan when any episode
 //!    needs it (SEG2 `segments`, SEG3 `fingerprint`).
+//! 6. Sidecars (XFER4, D14): every item's `*.parlour.json` files are
+//!    read, and new or changed ones applied over what the file name
+//!    gave — before any provider lookup, which only the metadata job
+//!    does (`sidecar::sync`).
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -38,6 +42,11 @@ pub struct ScanReport {
     pub missing_files: i32,
     pub skipped_samples: i32,
     pub skipped_extras: i32,
+    /// Items whose sidecars were new or changed and were applied.
+    pub sidecars_applied: i32,
+    /// Items whose sidecars carried segments for another encode (a
+    /// video of a different size), so the segments were left out.
+    pub sidecar_segments_skipped: i32,
     pub errors: Vec<String>,
 }
 
@@ -99,10 +108,15 @@ async fn upsert_item(
 /// Resolve (creating as needed) the leaf item a file belongs to:
 /// series -> season -> episode for episode files, one movie item
 /// otherwise. Returns (leaf item id, number of items created).
+///
+/// Every item it upserts goes into `touched`: the upsert puts the
+/// file name's title and year back, so the sidecar pass re-applies
+/// those items' sidecars.
 async fn resolve_item(
     pool: &parlour_db::PgPool,
     library_id: Uuid,
     video: &crate::walk::DiscoveredVideo,
+    touched: &mut HashSet<Uuid>,
 ) -> Result<(Uuid, i32), sqlx::Error> {
     let parsed = parse_file_name(&video.rel_path);
     let mut created = 0;
@@ -131,6 +145,7 @@ async fn resolve_item(
         )
         .await?;
         created += ins as i32;
+        touched.insert(series_id);
         let season_key = format!("{series_key}:s{season:02}");
         let season_title = format!("Season {season}");
         let (season_id, ins) = upsert_item(
@@ -148,6 +163,7 @@ async fn resolve_item(
         )
         .await?;
         created += ins as i32;
+        touched.insert(season_id);
         let episode_key = format!("{season_key}:e{episode:03}");
         let (episode_id, ins) = upsert_item(
             pool,
@@ -164,6 +180,7 @@ async fn resolve_item(
         )
         .await?;
         created += ins as i32;
+        touched.insert(episode_id);
         return Ok((episode_id, created));
     }
 
@@ -195,6 +212,7 @@ async fn resolve_item(
     )
     .await?;
     created += ins as i32;
+    touched.insert(id);
     Ok((id, created))
 }
 
@@ -295,6 +313,7 @@ pub async fn scan_library(
     }
 
     let mut seen_paths: HashSet<String> = HashSet::new();
+    let mut touched: HashSet<Uuid> = HashSet::new();
     let mut done = 0i32;
     for video in &videos {
         done += 1;
@@ -327,7 +346,7 @@ pub async fn scan_library(
             }
         }
 
-        let (item_id, created) = resolve_item(pool, library_id, video).await?;
+        let (item_id, created) = resolve_item(pool, library_id, video, &mut touched).await?;
         report.created_items += created;
 
         // Probe (C4). A probe failure still catalogues the file —
@@ -489,6 +508,18 @@ pub async fn scan_library(
         .execute(pool)
         .await?;
     }
+
+    // XFER4: sidecars, once every file is catalogued and the vanished
+    // ones are marked (only available files' sidecars are read).
+    crate::sidecar::sync::read_library_sidecars(
+        pool,
+        library_id,
+        &touched,
+        walked_roots.len() == paths.len(),
+        job_id,
+        &mut report,
+    )
+    .await?;
 
     Ok(report)
 }
