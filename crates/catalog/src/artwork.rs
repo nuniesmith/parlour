@@ -7,6 +7,11 @@
 //! processing happens here). Items with no poster at all get a
 //! generated SVG tile (title + initial), so the UI never shows a
 //! broken image.
+//!
+//! After caching, the item's poster and backdrop are copied next to
+//! its media as `poster.jpg` / `backdrop.jpg` where its library has
+//! opted into writing sidecars (XFER5, `sidecar::artwork`); with the
+//! opt-in off that step touches nothing.
 
 use std::path::{Path, PathBuf};
 
@@ -19,6 +24,10 @@ pub struct ArtworkReport {
     pub downloaded: i32,
     pub skipped: i32,
     pub generated: i32,
+    /// `poster.jpg` / `backdrop.jpg` written beside the media (XFER5).
+    pub copied: i32,
+    /// Copies deliberately not written, `path: reason` (XFER5).
+    pub copies_left_alone: Vec<String>,
     pub errors: Vec<String>,
 }
 
@@ -39,7 +48,7 @@ fn extension_of(url: &str) -> String {
     }
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     let mut h = Sha256::new();
     h.update(bytes);
     format!("{:x}", h.finalize())
@@ -170,6 +179,14 @@ pub async fn download_item_artwork(
             report.generated += 1;
         }
     }
+
+    // XFER5: copy the poster / backdrop beside the media where the
+    // library opted in (a no-op otherwise). A failed copy is reported
+    // with the other errors; it never fails the download.
+    let copies = crate::sidecar::copy_item_artwork(pool, item_id).await?;
+    report.copied += copies.copied;
+    report.copies_left_alone.extend(copies.left_alone);
+    report.errors.extend(copies.errors);
     Ok(report)
 }
 
@@ -192,6 +209,9 @@ pub async fn download_library_artwork(
         let _ = parlour_jobs::set_progress(pool, job, 0, total).await;
     }
     let (mut downloaded, mut skipped, mut generated, mut failed) = (0, 0, 0, 0);
+    let mut copied = 0;
+    // Which copies were left alone, so an admin can see why (capped).
+    let mut left_alone: Vec<String> = Vec::new();
     let mut done = 0i32;
     for (item_id,) in &items {
         done += 1;
@@ -200,6 +220,12 @@ pub async fn download_library_artwork(
                 downloaded += r.downloaded;
                 skipped += r.skipped;
                 generated += r.generated;
+                copied += r.copied;
+                for note in r.copies_left_alone {
+                    if left_alone.len() < 100 {
+                        left_alone.push(note);
+                    }
+                }
                 if !r.errors.is_empty() {
                     failed += 1;
                     if let Some(job) = job_id {
@@ -222,7 +248,8 @@ pub async fn download_library_artwork(
     }
     let summary = serde_json::json!({
         "downloaded": downloaded, "skipped": skipped,
-        "generated": generated, "failed_items": failed, "total_items": total
+        "generated": generated, "failed_items": failed, "total_items": total,
+        "copied": copied, "copies_left_alone": left_alone
     });
     if let Some(job) = job_id {
         let _ = parlour_jobs::set_result(pool, job, summary.clone()).await;

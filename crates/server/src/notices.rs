@@ -16,6 +16,11 @@
 //! configuration is read from the environment at startup, so the
 //! running server cannot know it changed.
 //!
+//! XFER5 adds one more condition: a library that has opted into
+//! writing sidecars (`write_sidecars`) while one of its folders can't
+//! be written (a read-only mount, say) gets a warning until the mount
+//! allows it or the opt-in is turned off.
+//!
 //! - `GET /api/v1/admin/notices` — active notices this admin has
 //!   not dismissed, newest first
 //! - `POST /api/v1/admin/notices/{id}/dismiss` — per-admin dismiss
@@ -322,7 +327,63 @@ pub async fn reconcile_with(
         }
     }
 
-    // 4. Housekeeping.
+    // 4. Libraries that may write next to the media (XFER5) but
+    //    whose folders can't be written: nothing lands there until
+    //    the mount allows it, so say so. One notice per library.
+    let writers: Vec<(Uuid, String)> =
+        sqlx::query_as("SELECT id, name FROM libraries WHERE write_sidecars ORDER BY name")
+            .fetch_all(pool)
+            .await?;
+    let mut live_keys: Vec<String> = Vec::new();
+    for (library_id, name) in writers {
+        let paths: Vec<(String,)> =
+            sqlx::query_as("SELECT path FROM library_paths WHERE library_id = $1 ORDER BY path")
+                .bind(library_id)
+                .fetch_all(pool)
+                .await?;
+        let blocked: Vec<crate::libraries::FolderAccess> = paths
+            .iter()
+            .map(|(p,)| crate::libraries::folder_access(p))
+            .filter(|a| !a.writable)
+            .collect();
+        if blocked.is_empty() {
+            continue;
+        }
+        let key = format!("sidecars_unwritable:{library_id}");
+        let first = &blocked[0];
+        raise(
+            pool,
+            &key,
+            "sidecars_unwritable",
+            Severity::Warning,
+            &format!(
+                "{name} may write sidecars, but Parlour can't write in {}{}",
+                first.path,
+                match blocked.len() {
+                    1 => String::new(),
+                    2 => " (and 1 more folder)".to_string(),
+                    n => format!(" (and {} more folders)", n - 1),
+                }
+            ),
+            serde_json::json!({
+                "library_id": library_id,
+                "library": name,
+                "error": first.problem,
+                "folders": blocked,
+            }),
+        )
+        .await?;
+        live_keys.push(key);
+    }
+    sqlx::query(
+        "UPDATE notices SET resolved_at = now()
+         WHERE kind = 'sidecars_unwritable' AND resolved_at IS NULL AND NOT (key = ANY($1))",
+    )
+    .bind(&live_keys)
+    .execute(pool)
+    .await?;
+
+    // 5. Housekeeping.
     sqlx::query(
         "DELETE FROM notices
          WHERE resolved_at < now() - make_interval(days => $1)

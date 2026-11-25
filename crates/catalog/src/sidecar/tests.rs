@@ -398,3 +398,62 @@ fn sidecar_kinds_follow_item_kinds() {
     assert_eq!(SidecarKind::for_item("season"), None);
     assert_eq!(SidecarKind::for_item("audiobook"), None);
 }
+
+// ------------------------------------------------ poster / backdrop (XFER5)
+
+#[test]
+fn only_jpegs_are_copied() {
+    assert!(artwork::is_jpeg(&[0xFF, 0xD8, 0xFF, 0xE0, 0, 0x10]));
+    assert!(!artwork::is_jpeg(b"\x89PNG\r\n\x1a\n"));
+    assert!(!artwork::is_jpeg(b"<svg xmlns="));
+    assert!(!artwork::is_jpeg(b"FAKEJPEGDATA"));
+    assert!(!artwork::is_jpeg(&[]));
+}
+
+#[test]
+fn a_copy_never_replaces_a_file_parlour_did_not_write() {
+    use artwork::{decide, CopyAction};
+    let ours = [0xFF, 0xD8, 0xFF, 1, 2, 3];
+    let newer = [0xFF, 0xD8, 0xFF, 4, 5, 6];
+    let ours_hash = crate::artwork::sha256_hex(&ours);
+    // Nothing there: write.
+    assert_eq!(decide(None, None, &ours), CopyAction::Write);
+    // A leftover record without a file is no reason not to write.
+    assert_eq!(decide(None, Some(&ours_hash), &ours), CopyAction::Write);
+    // Same bytes: left alone, whoever wrote them.
+    assert_eq!(
+        decide(Some(&ours), Some(&ours_hash), &ours),
+        CopyAction::Unchanged
+    );
+    assert_eq!(decide(Some(&ours), None, &ours), CopyAction::Unchanged);
+    // Parlour's own earlier copy, and the cache has moved on: replace.
+    assert_eq!(
+        decide(Some(&ours), Some(&ours_hash), &newer),
+        CopyAction::Replace
+    );
+    // A file Parlour never wrote: foreign, whatever it holds.
+    assert_eq!(
+        decide(Some(b"someone's poster"), None, &newer),
+        CopyAction::Foreign
+    );
+    // Parlour wrote this path once, but someone has replaced the file
+    // since: foreign too.
+    assert_eq!(
+        decide(Some(b"someone's poster"), Some(&ours_hash), &newer),
+        CopyAction::Foreign
+    );
+}
+
+#[test]
+fn copies_are_named_poster_and_backdrop_jpg() {
+    assert_eq!(
+        artwork::ARTWORK_FILES,
+        [("poster", "poster.jpg"), ("backdrop", "backdrop.jpg")]
+    );
+    // The scanner never takes them for videos or sidecars.
+    for (_, name) in artwork::ARTWORK_FILES {
+        let ext = Path::new(name).extension().unwrap().to_str().unwrap();
+        assert!(!crate::walk::VIDEO_EXTENSIONS.contains(&ext), "{name}");
+        assert!(!name.ends_with(FILE_SUFFIX), "{name}");
+    }
+}

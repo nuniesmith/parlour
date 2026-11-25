@@ -12,7 +12,9 @@
 //! fields refused, [`Sidecar::problems`]), the deterministic writer,
 //! where a sidecar lives, and the atomic write (temp file + rename).
 //! `sync` is the database half: the scanner's read pass, the
-//! matcher's re-apply, and the metadata job's rewrite.
+//! matcher's re-apply, and the metadata job's rewrite. `artwork` is
+//! XFER5's poster / backdrop copy beside the media, under the same
+//! per-library opt-in.
 
 use std::collections::HashSet;
 use std::io::Write;
@@ -22,9 +24,12 @@ use chrono::NaiveDate;
 use parlour_core::SegmentKind;
 use serde::{Deserialize, Serialize};
 
+pub mod artwork;
 pub mod sync;
 #[cfg(test)]
 mod tests;
+
+pub use artwork::{copy_item_artwork, ArtworkCopyReport};
 
 pub use sync::{
     mark_overridden, reapply_stored, stored_document, write_item_sidecars, SidecarWriteReport,

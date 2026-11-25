@@ -66,7 +66,9 @@ architecture are fine; their code and branding are not.
 - Media mounts are read-only by default; anything that
   writes next to media (sidecars, Phase 8) needs the
   per-library opt-in designed there — don't just flip the
-  mount.
+  mount. XFER5 built it: `write_sidecars` per library plus a
+  writable bind mount for just that library's folder
+  (`docs/IMPORT-EXPORT.md` §13.11).
 
 ## House rules
 - Branch + PR for everything; the owner merges. Author

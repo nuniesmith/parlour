@@ -412,6 +412,11 @@ pub const SCHEMA: &[Table] = &[
         proposal: "carried under user_data.json profiles[].books[] like watch state; needs the owner's yes",
     },
     Table::LeftOut {
+        name: "sidecar_artwork",
+        why: "which poster.jpg / backdrop.jpg files this host wrote beside its own media \
+              (XFER5); the new host's media mounts are its own",
+    },
+    Table::LeftOut {
         name: "item_sidecars",
         why: "what the scanner last read from the sidecar files (XFER4); the new host reads \
               the files themselves",
