@@ -14,7 +14,9 @@
 //! `sync` is the database half: the scanner's read pass, the
 //! matcher's re-apply, and the metadata job's rewrite. `artwork` is
 //! XFER5's poster / backdrop copy beside the media, under the same
-//! per-library opt-in.
+//! per-library opt-in. `nfo` (the format) and `nfo_sync` (the scanner,
+//! matcher and writer steps) are XFER6's Kodi/Emby-style `.nfo`
+//! interop: read as an input source, written under the same opt-in.
 
 use std::collections::HashSet;
 use std::io::Write;
@@ -25,11 +27,14 @@ use parlour_core::SegmentKind;
 use serde::{Deserialize, Serialize};
 
 pub mod artwork;
+pub mod nfo;
+pub(crate) mod nfo_sync;
 pub mod sync;
 #[cfg(test)]
 mod tests;
 
 pub use artwork::{copy_item_artwork, ArtworkCopyReport};
+pub use nfo_sync::stored_nfo;
 
 pub use sync::{
     mark_overridden, reapply_stored, stored_document, write_item_sidecars, SidecarWriteReport,

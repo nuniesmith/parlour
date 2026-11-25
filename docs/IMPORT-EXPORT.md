@@ -14,8 +14,9 @@ upload, dry-run report, apply. The admin page that drives both is
 XFER8, and nightly backups are XFER7. The per-item sidecars stored
 with the media files are a separate format, `parlour-sidecar` v1,
 specified in §13 (XFER4). The per-library write opt-in, the mount
-step and the poster / backdrop copy are XFER5 (§13.10–§13.12), and
-NFO interop is XFER6.
+step and the poster / backdrop copy are XFER5 (§13.10–§13.12). NFO
+interop, reading Kodi/Emby-style `.nfo` files as an input and writing
+them beside the sidecars, is XFER6 (§13.13–§13.14).
 
 **What it rests on.**
 
@@ -830,6 +831,9 @@ only in the bundle. A sidecar never holds anything about a user.
   have their own scanner and no provider lookup yet. AB6 brings
   books in (D30).
 - Only **available** files' sidecars are read or written.
+- Kodi/Emby-style `.nfo` files beside the media are read as an input
+  and, where a library writes, written beside the sidecar (XFER6,
+  §13.13).
 
 ### 13.2 The document
 
@@ -950,6 +954,8 @@ metadata job, so the sidecar is read **before** any lookup.
   `sidecar_segments_skipped`. Refusals go in its `errors`.
 - **A scan never writes.** Sidecars are written only by the metadata
   job (§13.7).
+- After this pass, the scanner reads the items' `.nfo` files (XFER6,
+  §13.13). They fill only what the sidecar doesn't carry.
 
 ### 13.6 Precedence: sidecar, provider, admin
 
@@ -973,6 +979,9 @@ metadata job, so the sidecar is read **before** any lookup.
     (`item_sidecars.overridden_at`). The matcher then ignores them,
     and the scanner doesn't re-apply them, until the sidecar file
     changes. A changed file is read and wins again.
+- **NFO files rank below all of these** (XFER6, §13.13): below the
+  sidecar and the provider, above the file name. The matcher's rule
+  0b fetches an NFO's id when the sidecar names none.
 - **What the provider can no longer change.** Once a sidecar carries
   a field, a later automatic lookup can't change it, even if the
   provider's value drifts (a new vote average, say). To take fresh
@@ -1015,6 +1024,9 @@ rewrites that item's sidecars from what the database now holds:
   fingerprint, so the next scan doesn't re-read Parlour's own
   writes. The filesystem watcher still sees the write and queues a
   scan, which finds nothing new.
+- **A `.nfo` goes beside each sidecar** (XFER6). It is written in the
+  same step, under the same opt-in, scope and rules, and never over
+  an NFO Parlour didn't write (§13.13).
 
 ### 13.8 What the bundle does with the new schema
 
@@ -1027,6 +1039,12 @@ rewrites that item's sidecars from what the database now holds:
   and backdrop files one host wrote beside its own media. On a new
   host, files it finds there are treated as not Parlour's until it
   writes them itself (§13.10).
+
+- `item_nfos` and `sidecar_nfos` (XFER6) **stay behind**, for the
+  same reasons as `item_sidecars` and `sidecar_artwork`. The new host
+  reads the NFO files itself, and treats NFOs it finds as not
+  Parlour's until it writes them itself, or finds Parlour's exact
+  bytes there (§13.13).
 
 Format v1 of the bundle doesn't change.
 
@@ -1223,13 +1241,14 @@ stays that way. For each library that opts in, the operator:
    Parlour can't change its own mounts.
 4. **Checks Server → Library.** The library's folders should now
    read "writable". Then turn the library on, run **Match metadata**
-   (writes the sidecars), then **Download artwork** (writes the
-   copies). Each job lists what it wrote or couldn't write.
+   (writes the sidecars and, since XFER6, the `.nfo` files beside
+   them), then **Download artwork** (writes the copies). Each job
+   lists what it wrote or couldn't write.
 
 To stop: turn the flag off first (nothing more is written), then
 remove the extra mount if wanted. Files already written stay. They
 are ordinary files, and the scanner keeps reading the `.parlour.json`
-ones (§13.5).
+ones (§13.5) and the `.nfo` ones (§13.13).
 
 ### 13.12 Readings made in XFER5 — for the owner's veto
 
@@ -1275,6 +1294,257 @@ TODO where they don't spell the detail out.
     touch it: no `book_progress` / `book_chapters` anywhere, and
     audiobook progress, being per-user state, never goes in a sidecar.
 
+### 13.13 NFO files: read as an input, written beside the sidecar (XFER6)
+
+Built 2026-11-25. An NFO is the plain XML file other media software
+(Kodi-style players, Emby-style servers, the *arr tools) keeps next
+to a video: a `<movie>`, `<tvshow>` or `<episodedetails>` element
+with a title, provider ids and usually much more. Parlour **reads**
+an NFO only for what identifies the item, its title and ids, as an
+input below the sidecar. Where a library writes sidecars, Parlour
+also **writes** a small NFO of its own beside each `.parlour.json`,
+so other software can identify the same files. Code:
+`crates/catalog/src/sidecar/nfo.rs` (the format and file names) and
+`nfo_sync.rs` (the scanner's pass, the matcher's rule, the writer's
+step).
+
+**Which NFO belongs to which item.**
+
+| item | NFO files read | NFO written |
+|---|---|---|
+| movie | `<video stem>.nfo` beside each of its videos; `movie.nfo` in a video's folder, **only when that folder belongs to this movie alone** (§13.10's rule: not a library root, and every available video under it is this movie's) | `<video stem>.nfo` beside each video |
+| episode | `<video stem>.nfo` beside each of its videos | the same |
+| series | `tvshow.nfo` in each series folder (the folder of `series.parlour.json`, §13.1) | the same |
+
+- `season.nfo` is not read: nothing the matcher sets lives on a
+  season. A video whose stem is `tvshow` or `season` has no per-file
+  NFO, because those names belong to a folder's NFO.
+- A `movie.nfo` in a folder shared by two movies is ignored: it can't
+  say whose it is. Parlour never writes `movie.nfo` as a folder NFO.
+  The one exception is a video literally named `movie.<ext>`: its
+  per-file NFO is `movie.nfo`, so that file is read and written as the
+  video's own.
+- As with sidecars: only **available** files' NFOs, and video
+  libraries only. Audiobooks get their own NFO handling in AB6 (D30).
+- `.nfo` is neither a video nor a subtitle extension, so the scanner
+  never catalogues one as either.
+
+**What is read.** The root element gives the kind, which must match
+the item's: `<movie>`, `<tvshow>` (a series) or `<episodedetails>`.
+Of the root's **direct children**, Parlour reads:
+
+| element | read as |
+|---|---|
+| `<title>` | the item's title (`sort_title` is derived from it) |
+| `<uniqueid type="tmdb">` or `<tmdbid>` | the TMDB id |
+| `<uniqueid type="tvdb">` or `<tvdbid>` | the TVDB id |
+| `<uniqueid type="imdb">` or `<imdbid>` | the IMDb id |
+| `<season>`, `<episode>` (episode only) | **checks, not values**: when present they must equal the numbers parsed from the file name, or the NFO is refused (it belongs to another episode), as with a sidecar (§13.2) |
+
+**Deliberately not read:** everything else. That covers `<year>`,
+`<plot>`, `<originaltitle>`, `<sorttitle>`, genres, cast, ratings,
+artwork, `<id>` (what it holds depends on which program wrote it),
+`<uniqueid>` of any other type or with no type, and anything nested
+deeper (a collection's `<set><title>` is not the movie's title). The
+item's year comes from the file name, or from the provider when the
+name has none. Descriptive metadata comes from the provider, or from
+the sidecar where there is one.
+
+**Lenient about what it skips, strict about what it reads.**
+
+- The file is UTF-8 (a byte-order mark is fine), at most 4 MiB, and
+  well-formed XML up to the end of its root element. Reading stops
+  there. A link after the root (a "combined" NFO) is never read, and
+  neither is a second `<episodedetails>`: in a multi-episode file's
+  NFO, only the first episode is read.
+- Element names match without regard to case. Values are trimmed,
+  and an empty element is absent. The five predefined entities and
+  character references are resolved. Any other entity is an error.
+- An id must be a whole number above 0, and an IMDb id must be `tt`
+  followed by digits. A field given twice must agree, for example
+  `<uniqueid type="tmdb">` and `<tmdbid>`.
+- A link-only NFO (a URL with no XML root) is refused.
+- **One item, one story.** When an item reads several NFOs (a movie
+  in two files, a `<stem>.nfo` beside a `movie.nfo`, a series in two
+  folders), they must agree on the title and the ids. If they don't,
+  all of them are refused for that scan.
+
+**A bad NFO never breaks a scan.** An NFO that breaks any of these
+rules is refused. The scan job lists it (path and reason) in its
+`errors`, the item keeps whatever it had, and the scan carries on
+with everything else. Like a refused sidecar, it is reported again on
+every scan until it is fixed or removed.
+
+**When the scanner applies it.** The NFO pass runs after the sidecar
+pass (§13.5), so the sidecar's fields are already in place.
+
+- **New or changed NFOs are applied.** "Changed" means the path, size
+  or mtime of any of the item's NFO files differs from the last read
+  (`item_nfos.fingerprint`). The scan report counts them in
+  `nfos_applied`. An unchanged NFO isn't applied again.
+- **A re-read video gets its NFO's title back**, as with a sidecar,
+  unless an admin's fix overrode it.
+- **An NFO that is gone stops counting.** Its record is dropped and
+  the item keeps its values. As with sidecars, this happens only when
+  every library root walked cleanly.
+- The scanner doesn't change `metadata_status`.
+
+**Precedence.** For an item's title and provider ids, highest first:
+
+1. **An admin's fix-match** (MD4).
+2. **The sidecar** (`.parlour.json`), authoritative over automatic
+   lookups (D14, §13.6).
+3. **The provider's record** from an automatic match, for what the
+   provider sets. That covers the ids, and the episode titles a
+   series lookup brings. The provider never sets a movie's or a
+   series' title, so the NFO's title stays.
+4. **The NFO.**
+5. **The file name:** its title and year, and a `{tmdb-603}`-style id
+   written into it.
+
+In practice:
+
+- **At the scan**, the NFO's title and each of its ids are written
+  onto the item **field by field**, each only where the sidecar
+  doesn't carry that field.
+- **At the match**, the matcher has a new rule 0b. After rule 0 (the
+  sidecar's id), if the NFO names an id for the active provider
+  (`tmdb_id` for TMDB, `tvdb_id` for TVDB), that record is fetched
+  directly at confidence 1.0, with no search. Rule 1 (an id in the
+  file name) and rule 2 (the search) come after. A search uses the
+  item's title, which by then is the NFO's (unless the sidecar
+  carries one).
+- **After a match**, the sidecar's fields are put back as before.
+  Nothing of the NFO is put back, because it is an input, not an
+  authority. The provider's ids replace the NFO's where the provider
+  has one. An IMDb id from the NFO stays when the provider has none.
+
+**When the NFO and the sidecar disagree,** the sidecar wins, field by
+field and without a report. The NFO fills only fields the sidecar
+leaves out. When the sidecar names the active provider's id, the
+NFO's id is never consulted. An older NFO from another program sitting
+beside a newer sidecar is ordinary, not an error. In a library that
+writes, Parlour's own NFO is written from the same values as the
+sidecar, so the two agree.
+
+**An admin's fix-match beats the NFO.** The fix marks the item's NFO
+record overridden (`item_nfos.overridden_at`), its episodes' too,
+just as it does the sidecar's. Until the NFO file changes, the matcher
+ignores it and the scanner doesn't re-apply it. Without this, the next
+library match would fetch the NFO's record again and undo the fix. In
+a library that writes, the fix also rewrites Parlour's own NFO.
+
+**Writing.** The NFO is written by the same step as the sidecar
+(§13.7). Wherever `.parlour.json` files are written, the NFO goes
+beside them:
+
+- **Same opt-in, no switch of its own:** `libraries.write_sidecars`
+  (§13.11). With it off nothing is written, and the media folders
+  aren't looked at for writing.
+- **Same scope:** matched movies (an NFO beside each video), and
+  matched series (`tvshow.nfo` in each series folder, plus an NFO
+  beside each episode's video).
+- **Same rules:** each write is atomic (a hidden temp file in the same
+  folder, synced, then renamed), and a file that already holds exactly
+  the new bytes is left alone, mtime included. A file that can't be
+  written is listed on the job (path and reason), and the job still
+  succeeds.
+- **Never over someone else's NFO.** This is the rule XFER5 uses for
+  posters (§13.10). Parlour records each NFO it writes, with the
+  SHA-256 of the bytes, in `sidecar_nfos`, and replaces a file only
+  while it still holds exactly those bytes. An NFO that another
+  program wrote, or that someone wrote by hand, is left alone and
+  listed. A Parlour NFO that someone has since edited becomes theirs.
+  The job result lists them as `nfos_left_alone` (the first 100), and
+  counts what was written in `nfos_written`.
+- **Claimed when identical.** An NFO that already holds exactly the
+  bytes Parlour would write is recorded as Parlour's. One case is an
+  NFO that came with the media from another host. Parlour keeps it up
+  to date from then on.
+- To hand a folder's NFO back to Parlour, delete the file. The next
+  metadata match writes Parlour's own.
+
+**What a written NFO holds:** only the fields that identify the item,
+taken from the same database values the sidecar is written from:
+
+- `<title>`;
+- `<year>` (movies and series only);
+- `<season>` and `<episode>` (episodes only);
+- each provider id the item has, written twice: once as
+  `<uniqueid type="…">` (the first one marked `default="true"`), and
+  once as `<tmdbid>` / `<tvdbid>` / `<imdbid>`. Readers differ in
+  which form they look for, and Parlour's reader requires the two to
+  agree.
+
+Plot, genres, cast and ratings are not written. The item's full
+record is the sidecar, and the NFO only helps other software identify
+the files. The writer is deterministic: UTF-8, two-space indents, a
+final newline, elements in a fixed order, absent ones left out. Byte
+for byte examples are in `crates/catalog/tests/fixtures/nfo/`
+(`movie.nfo`, `tvshow.nfo`, `episode.nfo`; fictional), next to an
+example of the richer kind of NFO other software writes
+(`other-software-movie.nfo`), of which Parlour reads only the title
+and ids.
+
+**Parlour's own NFO is not new input.** After writing, when every NFO
+the reader would read for that item is one Parlour wrote (its hash
+matches), the item's `item_nfos` record is moved to the new files'
+fingerprint. The next scan then finds nothing new (`nfos_applied`
+stays 0). If another program's NFO sits beside it (a `movie.nfo` in
+the folder, say), the record is left for the scan to read, and to
+report if the two disagree. The filesystem watcher still sees the
+write and queues a scan, which finds nothing new.
+
+### 13.14 Readings made in XFER6 — for the owner's veto
+
+None of these is a new decision. Each is how XFER6 read D14 and the
+TODO ("scanner also reads Kodi/Emby-style `.nfo` (ids + title) as an
+input source; XFER4 can optionally write `.nfo` alongside the JSON")
+where they don't spell the detail out.
+
+1. **An input, not an authority.** D14 makes only the sidecar
+   authoritative, and the TODO calls the NFO "an input source". So the
+   NFO ranks below the sidecar and below the provider's record, and
+   above the file name (§13.13, precedence). Nothing of it is put back
+   after a match.
+2. **Ids and title only, read literally.** `<year>`, `<plot>` and the
+   rest are deliberately not read. `<season>` / `<episode>` are only
+   checks, like a sidecar's (§13.9, reading 7).
+3. **The NFO's id beats an id in the file name.** Rule 0b runs before
+   rule 1, because the NFO is a document about this item and the name
+   is only a naming convention.
+4. **The sidecar beats the NFO field by field, without a report.** A
+   stale NFO beside a sidecar is normal. Refusing or reporting it
+   would turn every library that kept another program's NFOs into a
+   wall of errors.
+5. **Which files:** `<stem>.nfo`; `movie.nfo` only in a folder that
+   belongs to one movie; `tvshow.nfo` in the series folder.
+   `season.nfo` is ignored. A multi-episode NFO gives only its first
+   episode. A trailing link is ignored, and a link-only NFO is refused
+   (it has no title or ids to read).
+6. **Writing is part of the same opt-in,** on for every library that
+   writes sidecars, with no switch of its own. This follows XFER5's
+   reading of "optionally copies" (§13.12, reading 1). A separate
+   toggle would be a second decision.
+7. **The written NFO identifies; it doesn't describe.** It holds the
+   title, the year (or the season and episode) and the ids. It doesn't
+   carry the full matched metadata, because that is the sidecar's job,
+   and a second full copy would be a second record to keep in step.
+8. **Never over another program's NFO,** recorded by hash as XFER5
+   does for posters (§13.12, reading 4). It matters more here, because
+   Emby-style servers and the *arr tools write NFOs under exactly
+   these names. One addition: an NFO already holding Parlour's exact
+   bytes is claimed, so an NFO that moved hosts with the media stays
+   up to date.
+9. **Parlour never writes `movie.nfo` as a folder NFO.** It only reads
+   it, and only in a folder that belongs to one movie. A video named
+   `movie.<ext>` is the exception: `movie.nfo` is its own per-file NFO.
+10. **A fix-match overrides the NFO too,** or the next library match
+    would fetch the NFO's record again and undo the admin's choice.
+11. **The audio proposal (§9, D36) is still open.** XFER6 doesn't
+    touch it. An NFO holds no per-user state, and nothing about
+    `book_progress` / `book_chapters`.
+
 ## 14. In the code
 
 - **`crates/server/src/bundle/`:**
@@ -1305,8 +1575,18 @@ TODO where they don't spell the detail out.
   "can't write" notice; `crates/server/src/metadata.rs` — the
   library-wide artwork route; `web/src/routes/admin/library/` — the
   card and the toggle. Migration `20261126000000_sidecar_artwork.sql`.
+- **XFER6:** `crates/catalog/src/sidecar/nfo.rs` — the NFO reader
+  (streaming, via `quick-xml`), the writer's bytes and the file
+  names; `sidecar/nfo_sync.rs` — the scanner's NFO pass (called from
+  `scan.rs` after the sidecar pass), `stored_nfo` for the matcher's
+  rule 0b (`metadata_sync.rs`), and the writer's NFO step (called from
+  `write_item_sidecars`). The fix-match override covers NFOs in
+  `sidecar/sync.rs`'s `mark_overridden`. Migration
+  `20261127000000_nfo.sql` (`item_nfos`, `sidecar_nfos`). Unit tests
+  are in `sidecar/tests.rs` (run in CI).
 - **Fixtures:** `crates/server/tests/fixtures/bundle-v1/`;
-  `crates/catalog/tests/fixtures/sidecar-v1/`.
+  `crates/catalog/tests/fixtures/sidecar-v1/`;
+  `crates/catalog/tests/fixtures/nfo/`.
 - **Unit tests** in `bundle/tests.rs` (run in CI):
   - each fixture round-trips and is byte for byte what the writer
     writes;
@@ -1348,3 +1628,17 @@ TODO where they don't spell the detail out.
     Parlour's own copies, a folder that can't be written (job
     succeeds, paths listed, no temp files), the library's folder
     report and the notice, and that turning it off stops all writes.
+  - `tests/nfo_flow.rs` (XFER6): stub TMDB and ffmpeg-made files. It
+    checks that an NFO next to a movie is read for its title and ids
+    (not its year or plot) and that its id picks the record a search
+    would miss. It checks that `movie.nfo` counts only in a folder of
+    its own, that `tvshow.nfo` and episode NFOs are read, and that an
+    episode NFO naming another episode is refused. A malformed NFO is
+    reported and the scan carries on. It checks that the sidecar beats
+    the NFO field by field, that a re-probe brings the NFO's title
+    back, that a fix-match beats the NFO, and that a removed NFO stops
+    counting. With the opt-in on, it checks the NFOs written beside the
+    sidecars (and `tvshow.nfo`), that a re-run touches nothing, that
+    the next scan doesn't re-read Parlour's own NFOs, and that another
+    program's NFO, or one edited by hand, is left alone and listed.
+    With the opt-in off, nothing is written.

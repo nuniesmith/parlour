@@ -74,9 +74,10 @@
     if (enabled) {
       const sure = confirm(
         `Let Parlour write files next to the media of "${lib.name}"?\n\n` +
-          'It will write a .parlour.json beside each matched video, series.parlour.json in ' +
-          'each series folder, and poster.jpg / backdrop.jpg in folders that hold one item. ' +
-          "It never deletes anything and never replaces a poster.jpg it didn't write.\n\n" +
+          'It will write a .parlour.json and a .nfo beside each matched video, ' +
+          'series.parlour.json and tvshow.nfo in each series folder, and poster.jpg / ' +
+          'backdrop.jpg in folders that hold one item. It never deletes anything, and never ' +
+          "replaces a .nfo or a poster.jpg it didn't write.\n\n" +
           "Nothing is written until the library's folders are also mounted writable on the " +
           'server host. That is a change you make outside Parlour.',
       );
@@ -89,7 +90,7 @@
     if (data) {
       libraries = libraries.map((l) => (l.id === data.id ? data : l));
       notice = enabled
-        ? `${lib.name} may now write next to its media. Sidecars are written by the next metadata match, poster and backdrop copies by the next artwork download.`
+        ? `${lib.name} may now write next to its media. Sidecars and .nfo files are written by the next metadata match, poster and backdrop copies by the next artwork download.`
         : `${lib.name} no longer writes next to its media. Files already written stay where they are.`;
     } else error = err ?? 'Could not change that setting.';
   }
@@ -151,7 +152,8 @@
   <h2>Writing next to the media</h2>
   <p class="dim">
     Off by default: Parlour only reads your media folders. A library that is turned on gets
-    its metadata saved beside its files (<span class="mono">.parlour.json</span>, plus
+    its metadata saved beside its files (<span class="mono">.parlour.json</span>, plus a
+    <span class="mono">.nfo</span> for other media software and
     <span class="mono">poster.jpg</span> / <span class="mono">backdrop.jpg</span>), so it travels
     when the files move. Two things must both be true before anything is written: the switch
     here is on, and the server host mounts that library's folders writable.

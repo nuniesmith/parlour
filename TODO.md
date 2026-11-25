@@ -797,9 +797,35 @@ does NOT depend on Phase 2 transcoding.
   `sidecar_artwork` table, LeftOut of the bundle). Parlour's own
   copies refresh when the cache changes and are never deleted. Ten
   readings for veto are in §13.12.
-- [ ] XFER6 (S) **NFO interop**: scanner also reads
+- [x] XFER6 (S) **NFO interop**: scanner also reads
   Kodi/Emby-style `.nfo` (ids + title) as an input source;
   XFER4 can optionally write `.nfo` alongside the JSON.
+  *Done 2026-11-25, per D14 (audio proposal §9 / D36 still open —
+  untouched; an NFO holds no per-user state):* spec
+  `docs/IMPORT-EXPORT.md` §13.13–§13.14. Code
+  `crates/catalog/src/sidecar/nfo.rs` (streaming `quick-xml` reader,
+  deterministic writer) and `nfo_sync.rs`. **Read:** `<stem>.nfo`
+  beside each movie/episode video, `movie.nfo` only in a folder that
+  belongs to one movie, `tvshow.nfo` in each series folder;
+  `season.nfo` ignored. Only the root's direct `<title>` and ids
+  (`<uniqueid type=tmdb|tvdb|imdb>`, `<tmdbid>`, `<tvdbid>`,
+  `<imdbid>`) are read; `<season>` / `<episode>` are checks;
+  year, plot and the rest are deliberately not read. The scanner's
+  NFO pass runs after the sidecar pass (fingerprinted in the new
+  `item_nfos`, `nfos_applied` in the scan report). A bad NFO is listed
+  on the scan job and the scan carries on. **Precedence:** fix-match >
+  sidecar > provider > NFO > file name; the matcher's new rule 0b
+  fetches the NFO's id (after the sidecar's rule 0, before the file
+  name's rule 1). The sidecar beats the NFO field by field without a
+  report, and a fix-match overrides the NFO until its file changes.
+  **Write:** under the same `write_sidecars` opt-in (no switch of its
+  own), same scope, atomic, identical bytes left alone. The written
+  NFO holds only title, year (or season / episode) and ids. Each
+  write is recorded by SHA-256 in the new `sidecar_nfos`, so an NFO
+  another program wrote is never replaced (listed as
+  `nfos_left_alone`). Parlour's own NFO isn't re-read as new input.
+  Both tables are LeftOut of the bundle (format v1 unchanged).
+  Eleven readings for veto are in §13.14.
 - [ ] XFER7 (M) **Automatic backups**: nightly export job to
   a configurable folder with retention (ties into the
   Cross-cutting backups item); restore = XFER3.

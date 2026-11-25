@@ -639,10 +639,12 @@ async fn sidecar_optin_flow_end_to_end() {
             .run_job(&format!("/api/v1/admin/libraries/{library}/metadata"))
             .await;
         let errors = job_errors(&meta);
+        // The sidecar and, since XFER6, the NFO beside it.
         assert!(
-            errors.len() == 1
-                && errors[0].contains("Fresh Film (2015)/Fresh Film (2015).parlour.json"),
-            "the failed sidecar is listed on a job that still succeeds: {errors:?}"
+            errors.len() == 2
+                && errors[0].contains("Fresh Film (2015)/Fresh Film (2015).parlour.json")
+                && errors[1].contains("Fresh Film (2015)/Fresh Film (2015).nfo"),
+            "the failed sidecar and NFO are listed on a job that still succeeds: {errors:?}"
         );
         let art = client
             .run_job(&format!("/api/v1/admin/libraries/{library}/artwork"))
