@@ -391,6 +391,8 @@ export interface AdminUser {
   is_admin: boolean;
   created_at: string;
   profile_count: number;
+  /** D37: imported without a password; an admin must set one. */
+  password_locked: boolean;
 }
 
 export interface Invite {
@@ -458,6 +460,7 @@ export const JOB_KIND_LABELS: Record<string, string> = {
   purge_activity: 'Activity clean-up',
   detect_segments: 'Segment detection',
   export_bundle: 'Server export',
+  import_bundle: 'Server import',
 };
 
 export function jobKindLabel(kind: string): string {

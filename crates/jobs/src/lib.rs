@@ -35,6 +35,8 @@ pub enum JobKind {
     /// An admin's export of the whole server as a `parlour-export`
     /// bundle (XFER2).
     ExportBundle,
+    /// An admin's import of a `parlour-export` bundle (XFER3).
+    ImportBundle,
 }
 
 impl JobKind {
@@ -51,6 +53,7 @@ impl JobKind {
             JobKind::PurgeActivity => "purge_activity",
             JobKind::DetectSegments => "detect_segments",
             JobKind::ExportBundle => "export_bundle",
+            JobKind::ImportBundle => "import_bundle",
         }
     }
 }
@@ -260,5 +263,6 @@ mod tests {
         assert_eq!(JobKind::GenerateArtwork.as_str(), "generate_artwork");
         assert_eq!(JobKind::DetectSegments.as_str(), "detect_segments");
         assert_eq!(JobKind::ExportBundle.as_str(), "export_bundle");
+        assert_eq!(JobKind::ImportBundle.as_str(), "import_bundle");
     }
 }

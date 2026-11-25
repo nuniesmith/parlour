@@ -34,7 +34,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 
-pub use archive::{artwork_file_name, parse_artwork_name, BundleReader, BundleWriter};
+pub use archive::{
+    artwork_file_name, parse_artwork_name, BundleReader, BundleWriter, MAX_DOCUMENT_BYTES,
+};
 pub use check::Problem;
 
 /// `manifest.json`'s `format`: says "this zip is a Parlour bundle".
@@ -577,6 +579,8 @@ pub enum BundleError {
         #[source]
         source: serde_json::Error,
     },
+    #[error("{file} is larger than this server reads ({limit} bytes unpacked)")]
+    TooLarge { file: &'static str, limit: u64 },
     #[error("the bundle is inconsistent: {}", list(.0))]
     Invalid(Vec<Problem>),
     #[error("artwork {name}: {reason}")]
