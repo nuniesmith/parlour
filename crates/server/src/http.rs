@@ -97,6 +97,8 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::book_match::routes())
         .merge(crate::book_settings::routes())
         .merge(crate::series::routes())
+        .merge(crate::shelves::routes())
+        .merge(crate::listening::routes())
         .merge(crate::segments::routes())
         .merge(crate::emby_admin::routes())
         .merge(crate::dashboard::routes())

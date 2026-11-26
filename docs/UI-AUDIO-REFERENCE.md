@@ -492,6 +492,13 @@ the decisions.
   finished check when every book is done (from §1.2).
 - Cover size (Default / Large / Extra Large) and the shelf style are
   device settings.
+- *Built on the web in AB8 (2026-11-26):* the seven shelves on Home
+  (as Home Screen rails, Continue Listening always shown) and on an
+  audiobooks library's Home view; the Continue Listening card with its
+  percent badge, time left and a "⋯" menu (Hide from Continue
+  Listening, Mark as finished). No greeting and no device-side cover
+  size or shelf style yet. Details: `AUDIOBOOKS-PODCASTS.md`,
+  "Listening sessions and Home shelves (AB8)".
 
 **Library** [no screenshot]: a cover grid with sort (title,
 author, added, recently listened; AB3 already sorts by title,
@@ -609,6 +616,10 @@ listening sessions and stats on the server):
 Both pages cover books as well as podcasts (sessions are one
 model), reached from Settings on mobile and from the profile menu
 on the web.
+*AB8 (2026-11-26) built both for books on the web, as one page:
+Preferences → Listening (listening now, stats by day and by book,
+history); admins also get every profile's sessions under Server →
+Sessions.*
 
 ### 4.5 Where the references conflict, and the proposal
 

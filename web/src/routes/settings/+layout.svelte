@@ -1,6 +1,6 @@
 <script lang="ts">
   // <profile> Preferences (UI7): one page per topic under
-  // /settings — Display, Home Screen, Playback, Subtitles,
+  // /settings — Display, Home Screen, Playback, Subtitles, Listening (AB8),
   // Profile, Account. Everything but Account edits the active
   // profile, so those pages need one selected.
   import { page } from '$app/state';

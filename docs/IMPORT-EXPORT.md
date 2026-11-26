@@ -418,6 +418,7 @@ the Activity feed. The rest of the schema stays on the old host:
 | `book_chapters`, `book_progress` | **open — §9** (AB11's `book_progress.hidden` and `client_updated_at` included) |
 | `book_sidecars` | a book's match, the server's copy of its `book.parlour.json` (AB6): **open — D40, §13.15** |
 | `series`, `book_series` | audiobook series and each book's place in them (AB7); the new host's scan rebuilds them from each book's series folder and tags. Nothing but a scan writes them, so nothing is lost |
+| `listening_sessions` | each profile's listening sessions, its listening history and stats (AB8): **open — §9**, with `book_progress`. A closed session's Activity line (`playback.listened`) is part of the Activity feed, which travels (D25) |
 
 ## 9. Proposed — needs the owner's yes: the audio tables
 
@@ -457,6 +458,16 @@ says yes.**
   client's own time of the last update). They are per-profile state of
   the same row, so they follow the same answer; until then neither is
   carried.
+- **AB8 (2026-11-26) added `listening_sessions`**: each profile's
+  listening sessions, from which its listening history and stats are
+  read (D29/D35). They are per-profile state like `book_progress`, so
+  they follow the same answer; `coverage.rs` lists the table as
+  *Proposed* and format v1 doesn't carry it. If the answer is yes, a
+  profile's group would gain a sibling list of its sessions (book by
+  library + `stable_key`, times, positions, listening time, client
+  labels). The closed sessions' Activity lines already travel with the
+  Activity feed (D25), so a migrated server's feed shows past listens
+  even while the sessions themselves stay behind.
 - **`book_chapters`: leave it out.** Every scan of the book rebuilds
   it from the files' tags and chapters, as it does the file rows.
 - **If the answer is yes:**

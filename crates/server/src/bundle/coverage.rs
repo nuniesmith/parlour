@@ -488,6 +488,13 @@ pub const SCHEMA: &[Table] = &[
         why: "a book's place in its series (AB7); the new host's scan rebuilds it from the \
               book's series folder and tags",
     },
+    Table::Proposed {
+        name: "listening_sessions",
+        proposal: "a profile's listening sessions — its listening history and stats (AB8, \
+                   D29/D35); per-profile state like book_progress, so whether and how they \
+                   travel is the same open question (D36) and a format change; not carried. \
+                   A closed session's Activity line travels with the Activity feed (D25)",
+    },
     Table::LeftOut {
         name: "_sqlx_migrations",
         why: "the new host keeps its own migration ledger",

@@ -3,6 +3,8 @@
   // GET /api/v1/admin/sessions every 5 s. Each card shows what is
   // playing, who and where from, and the stream decision —
   // source → what the server does with it, and why.
+  // AB8: open listening sessions on audiobooks show here too (same
+  // registry); their card links to the book and says it is a listen.
   import { onMount } from 'svelte';
   import { api } from '$lib/api';
   import {
@@ -167,7 +169,12 @@
       {@const ep = episodeLine(s)}
       <li class="card">
         <div class="top">
-          <a class="thumb" href={`/item/${s.item_id}`} aria-label={`Open ${heading(s)}`}>
+          <a
+            class="thumb"
+            class:square={s.item_kind === 'audiobook'}
+            href={s.item_kind === 'audiobook' ? `/book/${s.item_id}` : `/item/${s.item_id}`}
+            aria-label={`Open ${heading(s)}`}
+          >
             {#if s.poster_item_id && !brokenPosters.includes(s.poster_item_id)}
               <img
                 src={posterUrl(s.poster_item_id)}
@@ -182,6 +189,7 @@
           <div class="what">
             <h3>{heading(s)}</h3>
             {#if ep}<p class="ep">{ep}</p>{/if}
+            {#if s.item_kind === 'audiobook'}<p class="ep">Listening · audiobook</p>{/if}
             <p class="time">
               {formatDurationMs(s.position_ms) || '0:00'}
               {#if s.duration_ms}<span class="dim"> / {formatDurationMs(s.duration_ms)}</span>{/if}
@@ -229,6 +237,8 @@
             {/if}
           </dl>
           <p class="why dim">{REASON[s.plan.reason] ?? s.plan.reason}</p>
+        {:else if s.item_kind === 'audiobook'}
+          <p class="why dim">The book's audio files are sent as they are, track by track.</p>
         {:else}
           <p class="why dim">No stream decision was recorded for this session.</p>
         {/if}
@@ -296,6 +306,10 @@
     overflow: hidden;
     background: var(--bg-card);
     border: 1px solid var(--line);
+  }
+  .thumb.square {
+    aspect-ratio: 1;
+    align-self: start;
   }
   .thumb img {
     width: 100%;

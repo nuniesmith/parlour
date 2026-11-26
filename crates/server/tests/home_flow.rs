@@ -165,7 +165,8 @@ async fn home_flow() {
     let profile = Uuid::parse_str(&profile_str).unwrap();
 
     // The two UI8 rails are known to the profile: the tile row
-    // first and the Latest group last, both visible by default.
+    // first and the Latest group last of the video rails (AB8's book
+    // shelves follow), all visible by default.
     let rails: Vec<&str> = body["profiles"][0]["home_rails"]
         .as_array()
         .unwrap()
@@ -179,7 +180,15 @@ async fn home_flow() {
             "continue_watching",
             "next_up",
             "recently_added",
-            "latest"
+            "latest",
+            // AB8: the audiobook shelves follow.
+            "continue_listening",
+            "continue_series",
+            "recently_added_books",
+            "recent_series",
+            "discover_books",
+            "listen_again",
+            "newest_authors",
         ]
     );
 

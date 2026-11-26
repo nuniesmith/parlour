@@ -119,6 +119,14 @@ async fn preferences_flow() {
             {"id": "next_up", "visible": true},
             {"id": "recently_added", "visible": true},
             {"id": "latest", "visible": true},
+            // AB8: the audiobook shelves follow the video rails.
+            {"id": "continue_listening", "visible": true},
+            {"id": "continue_series", "visible": true},
+            {"id": "recently_added_books", "visible": true},
+            {"id": "recent_series", "visible": true},
+            {"id": "discover_books", "visible": true},
+            {"id": "listen_again", "visible": true},
+            {"id": "newest_authors", "visible": true},
         ])
     );
     assert_eq!(p["segment_skip"], "button");
@@ -150,6 +158,13 @@ async fn preferences_flow() {
             {"id": "next_up", "visible": true},
             {"id": "libraries", "visible": true},
             {"id": "latest", "visible": true},
+            {"id": "continue_listening", "visible": true},
+            {"id": "continue_series", "visible": true},
+            {"id": "recently_added_books", "visible": true},
+            {"id": "recent_series", "visible": true},
+            {"id": "discover_books", "visible": true},
+            {"id": "listen_again", "visible": true},
+            {"id": "newest_authors", "visible": true},
         ])
     );
     assert_eq!(body["segment_skip"], "auto");
@@ -208,6 +223,13 @@ async fn preferences_flow() {
             {"id": "continue_watching", "visible": true},
             {"id": "recently_added", "visible": true},
             {"id": "latest", "visible": true},
+            {"id": "continue_listening", "visible": true},
+            {"id": "continue_series", "visible": true},
+            {"id": "recently_added_books", "visible": true},
+            {"id": "recent_series", "visible": true},
+            {"id": "discover_books", "visible": true},
+            {"id": "listen_again", "visible": true},
+            {"id": "newest_authors", "visible": true},
         ])
     );
 

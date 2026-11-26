@@ -67,6 +67,7 @@ async fn books(
         .bind("title")
         .bind(series_id)
         .bind(author_id)
+        .bind(None::<Vec<Uuid>>)
         .fetch_all(&app.pool)
         .await
         .map_err(AppError::from)?;

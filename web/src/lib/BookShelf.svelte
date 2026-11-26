@@ -4,21 +4,59 @@
   // AB7 adds two more views of the same library, picked with
   // `?view=`: its series (each a page of books in sequence order) and
   // its authors (each a page of their books).
+  // AB8 adds the library's Home (the default view, as Audiobookshelf
+  // opens a library): its book shelves (D29), in the order and with the
+  // visibility the profile chose in Preferences → Home Screen.
   import { page } from '$app/state';
   import { api } from './api';
+  import AudioShelf from './AudioShelf.svelte';
   import BookGrid from './BookGrid.svelte';
-  import { posterUrl, type Author, type Book, type Series } from './types';
+  import { session } from './session.svelte';
+  import {
+    AUDIO_RAILS,
+    isAudioRail,
+    posterUrl,
+    type AudioRail,
+    type AudioShelves,
+    type Author,
+    type Book,
+    type Series,
+  } from './types';
 
   let { libraryId }: { libraryId: string } = $props();
 
-  type View = 'books' | 'series' | 'authors';
+  type View = 'home' | 'books' | 'series' | 'authors';
   const VIEWS: { id: View; label: string }[] = [
+    { id: 'home', label: 'Home' },
     { id: 'books', label: 'Books' },
     { id: 'series', label: 'Series' },
     { id: 'authors', label: 'Authors' },
   ];
   const view = $derived<View>(
-    (VIEWS.find((v) => v.id === page.url.searchParams.get('view'))?.id ?? 'books') as View,
+    (VIEWS.find((v) => v.id === page.url.searchParams.get('view'))?.id ?? 'home') as View,
+  );
+
+  // The shelves in the profile's Home Screen order, minus hidden ones.
+  const shelfOrder = $derived<AudioRail[]>(
+    (
+      session.me?.active_profile?.home_rails ??
+      AUDIO_RAILS.map((id) => ({ id, visible: true }))
+    )
+      .filter((r) => r.visible)
+      .map((r) => r.id)
+      .filter(isAudioRail),
+  );
+  let shelves = $state<AudioShelves | null>(null);
+  const shelvesEmpty = $derived(
+    !!shelves &&
+      shelves.continue_listening.length +
+        shelves.continue_series.length +
+        shelves.recently_added.length +
+        shelves.recent_series.length +
+        shelves.discover.length +
+        shelves.listen_again.length +
+        shelves.newest_authors.length ===
+        0,
   );
 
   let books = $state<Book[]>([]);
@@ -34,12 +72,22 @@
     view === 'books' ? books.length : view === 'series' ? series.length : authors.length,
   );
 
+  async function loadShelves() {
+    const r = await api<AudioShelves>(
+      `/api/v1/audiobooks/home?library_id=${encodeURIComponent(libraryId)}`,
+    );
+    if (r.data) shelves = r.data;
+    return r.data ? null : (r.error ?? 'Could not load the shelves.');
+  }
+
   async function load() {
     loading = true;
     const params = new URLSearchParams({ library_id: libraryId });
     if (q.trim()) params.set('q', q.trim());
     let failed: string | null = null;
-    if (view === 'series') {
+    if (view === 'home') {
+      failed = await loadShelves();
+    } else if (view === 'series') {
       const r = await api<Series[]>(`/api/v1/series?${params}`);
       if (r.data) series = r.data;
       else failed = r.error ?? 'Could not load the series.';
@@ -99,7 +147,7 @@
 <nav class="views" aria-label="Browse this library by">
   {#each VIEWS as v (v.id)}
     <a
-      href={v.id === 'books' ? '?' : `?view=${v.id}`}
+      href={v.id === 'home' ? '?' : `?view=${v.id}`}
       aria-current={view === v.id ? 'page' : undefined}
       data-sveltekit-replacestate
       data-sveltekit-noscroll>{v.label}</a
@@ -107,6 +155,7 @@
   {/each}
 </nav>
 
+{#if view !== 'home'}
 <div class="toolbar" role="group" aria-label="Find in this library">
   <label>
     Search
@@ -123,9 +172,23 @@
     </label>
   {/if}
 </div>
+{/if}
 
 {#if error}
   <p class="error" role="alert">{error}</p>
+{:else if view === 'home'}
+  {#if !shelves}
+    <p class="dim">Loading…</p>
+  {:else if shelvesEmpty}
+    <p class="dim">
+      Nothing on the shelves yet. Books show up here once the library has been scanned — see
+      <a href="?view=books">Books</a>.
+    </p>
+  {:else}
+    {#each shelfOrder as id (id)}
+      <AudioShelf {id} {shelves} {libraryId} inLibrary onchanged={loadShelves} />
+    {/each}
+  {/if}
 {:else if loading && shown === 0}
   <p class="dim">Loading…</p>
 {:else if shown === 0}

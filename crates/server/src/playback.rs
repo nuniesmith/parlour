@@ -16,6 +16,14 @@
 //! - `POST /api/v1/admin/sessions/{id}/stop` — admin stop (UI3):
 //!   revokes the session's stream tokens and marks it stopped
 //!
+//! AB8: the same three reports carry **listening** sessions for an
+//! audiobook. A book's reports never write `user_data` (no position
+//! there, no `play_count`: a listen is a session, D29); the session is
+//! kept in `listening_sessions` (`crate::listening`) and sits in the
+//! same live registry, so Now Playing and the admin stop cover it.
+//! The book's position is still written through
+//! `PUT /api/v1/audiobooks/{id}/progress` (AB4/AB11), unchanged.
+//!
 //! Media URLs carry a short-lived HMAC stream token (file +
 //! profile + expiry) so a leaked URL is neither permanent nor a
 //! skeleton key; a valid session cookie + library access also
@@ -92,6 +100,10 @@ pub struct SessionInfo {
     /// Set by an admin stop: the session is hidden from Now
     /// Playing and its next progress report is answered 409.
     pub stopped: bool,
+    /// A listening session on an audiobook (AB8): kept in
+    /// `listening_sessions` as well, positions are book-global, and
+    /// an admin stop revokes every track of the book.
+    pub book: bool,
 }
 
 /// First video stream: codec, width, height, HDR format.
@@ -195,9 +207,10 @@ fn clean_label(raw: Option<&str>, max: usize) -> Option<String> {
 }
 
 /// Sessions with no report for this long are not "now playing".
-const SESSION_LIVE_SECS: i64 = 90;
-/// ...and are forgotten entirely after this long.
-const SESSION_FORGET_SECS: i64 = 3600;
+const SESSION_LIVE_SECS: i64 = crate::listening::LIVE_SECS;
+/// ...and are forgotten entirely after this long (when a listening
+/// session is closed as stale, too).
+const SESSION_FORGET_SECS: i64 = crate::listening::STALE_AFTER_SECS;
 
 #[derive(Clone, PartialEq)]
 enum RemuxStatus {
@@ -1078,6 +1091,9 @@ struct ReportBody {
     client_name: Option<String>,
     client_version: Option<String>,
     device_name: Option<String>,
+    /// AB8, audiobooks only: listening time since the previous
+    /// report, as the player measured it (pauses excluded).
+    listened_ms: Option<i64>,
 }
 
 /// Find the session a report belongs to: by id when the client
@@ -1105,13 +1121,14 @@ fn find_session<'a>(
     sessions.get_mut(&id)
 }
 
+/// The item's kind, when the profile can reach it; 404 otherwise.
 async fn require_item_access(
     app: &AppState,
     profile_id: Uuid,
     item_id: Uuid,
-) -> Result<(), AppError> {
-    let ok: Option<(bool,)> = sqlx::query_as(
-        "SELECT true FROM media_items i
+) -> Result<String, AppError> {
+    let kind: Option<(String,)> = sqlx::query_as(
+        "SELECT i.kind FROM media_items i
          JOIN library_access a ON a.library_id = i.library_id AND a.profile_id = $2
          WHERE i.id = $1",
     )
@@ -1120,10 +1137,8 @@ async fn require_item_access(
     .fetch_optional(&app.pool)
     .await
     .map_err(AppError::from)?;
-    if ok.is_none() {
-        return Err(AppError::NotFound("not found".into()));
-    }
-    Ok(())
+    kind.map(|(k,)| k)
+        .ok_or_else(|| AppError::NotFound("not found".into()))
 }
 
 async fn upsert_position(
@@ -1166,6 +1181,33 @@ fn active_profile(user: &AuthUser) -> Result<Uuid, AppError> {
         .ok_or_else(|| AppError::BadRequest("select a profile first".into()))
 }
 
+/// The display-only facts about a reporting client (UI3): what it
+/// said about itself, its User-Agent, and where the request came from.
+fn client_and_remote(
+    body: &ReportBody,
+    ip: Option<std::net::IpAddr>,
+    version: Version,
+    headers: &HeaderMap,
+) -> (ClientInfo, RemoteInfo) {
+    let header_text = |name: header::HeaderName, max: usize| {
+        clean_label(headers.get(name).and_then(|v| v.to_str().ok()), max)
+    };
+    let client = ClientInfo {
+        name: clean_label(body.client_name.as_deref(), 80),
+        version: clean_label(body.client_version.as_deref(), 40),
+        device: clean_label(body.device_name.as_deref(), 80),
+        user_agent: header_text(header::USER_AGENT, 300),
+    };
+    let remote = RemoteInfo {
+        ip: ip.map(|a| a.to_string()),
+        // First hop only: the address the proxy says it saw.
+        forwarded_for: header_text(header::HeaderName::from_static("x-forwarded-for"), 200)
+            .and_then(|v| clean_label(v.split(',').next(), 64)),
+        protocol: protocol_name(version),
+    };
+    (client, remote)
+}
+
 async fn report_start(
     State(app): State<AppState>,
     user: AuthUser,
@@ -1175,11 +1217,12 @@ async fn report_start(
     Json(body): Json<ReportBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let profile_id = active_profile(&user)?;
-    require_item_access(&app, profile_id, body.item_id).await?;
+    let kind = require_item_access(&app, profile_id, body.item_id).await?;
+    let (client, remote) = client_and_remote(&body, ip, version, &headers);
+    if kind == "audiobook" {
+        return listen_start(&app, profile_id, body, client, remote).await;
+    }
     upsert_position(&app, profile_id, &body, true).await?;
-    let header_text = |name: header::HeaderName, max: usize| {
-        clean_label(headers.get(name).and_then(|v| v.to_str().ok()), max)
-    };
     let plan = body.file_id.and_then(|file_id| {
         app.playback
             .plans
@@ -1204,23 +1247,10 @@ async fn report_start(
                 position_ms: body.position_ms.unwrap_or(0),
                 duration_ms: body.duration_ms.filter(|d| *d > 0),
                 plan,
-                client: ClientInfo {
-                    name: clean_label(body.client_name.as_deref(), 80),
-                    version: clean_label(body.client_version.as_deref(), 40),
-                    device: clean_label(body.device_name.as_deref(), 80),
-                    user_agent: header_text(header::USER_AGENT, 300),
-                },
-                remote: RemoteInfo {
-                    ip: ip.map(|a| a.to_string()),
-                    // First hop only: the address the proxy says it saw.
-                    forwarded_for: header_text(
-                        header::HeaderName::from_static("x-forwarded-for"),
-                        200,
-                    )
-                    .and_then(|v| clean_label(v.split(',').next(), 64)),
-                    protocol: protocol_name(version),
-                },
+                client,
+                remote,
                 stopped: false,
+                book: false,
             },
         );
     }
@@ -1244,10 +1274,17 @@ async fn report_start(
 async fn report_progress(
     State(app): State<AppState>,
     user: AuthUser,
+    ClientIp(ip): ClientIp,
+    version: Version,
+    headers: HeaderMap,
     Json(body): Json<ReportBody>,
-) -> Result<StatusCode, AppError> {
+) -> Result<Response, AppError> {
     let profile_id = active_profile(&user)?;
-    require_item_access(&app, profile_id, body.item_id).await?;
+    let kind = require_item_access(&app, profile_id, body.item_id).await?;
+    if kind == "audiobook" {
+        let (client, remote) = client_and_remote(&body, ip, version, &headers);
+        return listen_progress(&app, profile_id, body, client, remote).await;
+    }
     upsert_position(&app, profile_id, &body, false).await?;
     let mut sessions = app.playback.sessions.lock().unwrap();
     if let Some(s) = find_session(&mut sessions, profile_id, &body) {
@@ -1264,7 +1301,35 @@ async fn report_progress(
             s.duration_ms = Some(d);
         }
     }
-    Ok(StatusCode::NO_CONTENT)
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+/// Remove the profile's registry sessions a stopped report ends: the
+/// one it names, or without a name every one on the item. Returns
+/// whether any of them was still playing.
+fn end_registry_sessions(app: &AppState, profile_id: Uuid, body: &ReportBody) -> bool {
+    let mut sessions = app.playback.sessions.lock().unwrap();
+    let mine = |s: &SessionInfo| s.profile_id == profile_id && s.item_id == body.item_id;
+    let ids: Vec<Uuid> = match body.session_id {
+        // A client that names its session ends only that one.
+        Some(id) => sessions
+            .get(&id)
+            .filter(|s| mine(s))
+            .map(|_| vec![id])
+            .unwrap_or_default(),
+        None => sessions
+            .iter()
+            .filter(|(_, s)| mine(s))
+            .map(|(id, _)| *id)
+            .collect(),
+    };
+    let mut live = false;
+    for id in ids {
+        if let Some(s) = sessions.remove(&id) {
+            live |= !s.stopped;
+        }
+    }
+    live
 }
 
 async fn report_stopped(
@@ -1273,35 +1338,15 @@ async fn report_stopped(
     Json(body): Json<ReportBody>,
 ) -> Result<StatusCode, AppError> {
     let profile_id = active_profile(&user)?;
-    require_item_access(&app, profile_id, body.item_id).await?;
+    let kind = require_item_access(&app, profile_id, body.item_id).await?;
+    if kind == "audiobook" {
+        return listen_stopped(&app, profile_id, body).await;
+    }
     upsert_position(&app, profile_id, &body, false).await?;
     // Whether a session that was still playing ended here. Players
     // can report `stopped` twice (ended, then page teardown), and a
     // session an admin stopped already has its own activity line.
-    let ended_live = {
-        let mut sessions = app.playback.sessions.lock().unwrap();
-        let mine = |s: &SessionInfo| s.profile_id == profile_id && s.item_id == body.item_id;
-        let ids: Vec<Uuid> = match body.session_id {
-            // A client that names its session ends only that one.
-            Some(id) => sessions
-                .get(&id)
-                .filter(|s| mine(s))
-                .map(|_| vec![id])
-                .unwrap_or_default(),
-            None => sessions
-                .iter()
-                .filter(|(_, s)| mine(s))
-                .map(|(id, _)| *id)
-                .collect(),
-        };
-        let mut live = false;
-        for id in ids {
-            if let Some(s) = sessions.remove(&id) {
-                live |= !s.stopped;
-            }
-        }
-        live
-    };
+    let ended_live = end_registry_sessions(&app, profile_id, &body);
     if ended_live {
         let title = crate::activity::item_label(&app.pool, body.item_id).await;
         crate::activity::record(
@@ -1321,6 +1366,186 @@ async fn report_stopped(
         )
         .await;
     }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ---------------------------------------------------------------------
+// AB8: listening sessions through the same reports
+
+fn listen_beat(body: &ReportBody) -> crate::listening::Beat {
+    crate::listening::Beat {
+        position_ms: body.position_ms.unwrap_or(0).max(0),
+        duration_ms: body.duration_ms.filter(|d| *d > 0),
+        listened_ms: body.listened_ms,
+    }
+}
+
+fn listen_labels(client: &ClientInfo) -> crate::listening::ClientLabels {
+    crate::listening::ClientLabels {
+        name: client.name.clone(),
+        version: client.version.clone(),
+        device: client.device.clone(),
+    }
+}
+
+/// A book's start report: open a listening session (closing any the
+/// profile still had open on the book) and put it in the registry.
+/// No `user_data` write and no Activity line: a listen is not a play
+/// (D29), and the Activity feed gets the session when it closes.
+async fn listen_start(
+    app: &AppState,
+    profile_id: Uuid,
+    body: ReportBody,
+    client: ClientInfo,
+    remote: RemoteInfo,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let beat = listen_beat(&body);
+    let session_id = Uuid::new_v4();
+    crate::listening::open(
+        &app.pool,
+        session_id,
+        profile_id,
+        body.item_id,
+        beat.position_ms,
+        beat.duration_ms,
+        &listen_labels(&client),
+    )
+    .await?;
+    let now = Utc::now();
+    let mut sessions = app.playback.sessions.lock().unwrap();
+    sessions.retain(|_, s| (now - s.last_seen).num_seconds() <= SESSION_FORGET_SECS);
+    // The ones `open` replaced are closed now.
+    sessions.retain(|_, s| !(s.book && s.profile_id == profile_id && s.item_id == body.item_id));
+    sessions.insert(
+        session_id,
+        SessionInfo {
+            profile_id,
+            item_id: body.item_id,
+            file_id: None,
+            started_at: now,
+            last_seen: now,
+            position_ms: beat.position_ms,
+            duration_ms: beat.duration_ms,
+            plan: None,
+            client,
+            remote,
+            stopped: false,
+            book: true,
+        },
+    );
+    Ok(Json(serde_json::json!({ "session_id": session_id })))
+}
+
+/// A book's progress report: listening time and position onto the
+/// open session. A session an admin stopped is answered 409, as for
+/// video. When no open session matches — it was closed as stale after
+/// an hour's silence, or the server restarted and swept it — a new one
+/// opens here, and its id is in the answer (`{"session_id"}`) for the
+/// player to use from then on.
+async fn listen_progress(
+    app: &AppState,
+    profile_id: Uuid,
+    body: ReportBody,
+    client: ClientInfo,
+    remote: RemoteInfo,
+) -> Result<Response, AppError> {
+    {
+        let mut sessions = app.playback.sessions.lock().unwrap();
+        if find_session(&mut sessions, profile_id, &body).is_some_and(|s| s.stopped) {
+            return Err(AppError::Conflict(
+                "this listening session was stopped by an administrator".into(),
+            ));
+        }
+    }
+    let beat = listen_beat(&body);
+    let now = Utc::now();
+    let session = match crate::listening::report(
+        &app.pool,
+        profile_id,
+        body.item_id,
+        body.session_id,
+        beat,
+        false,
+    )
+    .await?
+    {
+        Some(session) => session,
+        None => {
+            let id = Uuid::new_v4();
+            crate::listening::open(
+                &app.pool,
+                id,
+                profile_id,
+                body.item_id,
+                beat.position_ms,
+                beat.duration_ms,
+                &listen_labels(&client),
+            )
+            .await?;
+            crate::listening::OpenSession {
+                id,
+                started_at: now,
+                position_ms: beat.position_ms,
+                duration_ms: beat.duration_ms,
+                client_name: client.name.clone(),
+                client_version: client.version.clone(),
+                device_name: client.device.clone(),
+            }
+        }
+    };
+    {
+        let mut sessions = app.playback.sessions.lock().unwrap();
+        if let Some(old) = body.session_id.filter(|old| *old != session.id) {
+            sessions.remove(&old);
+        }
+        // After a restart the registry is empty: the session is the
+        // database's, so it comes back into Now Playing here.
+        let entry = sessions.entry(session.id).or_insert_with(|| SessionInfo {
+            profile_id,
+            item_id: body.item_id,
+            file_id: None,
+            started_at: session.started_at,
+            last_seen: now,
+            position_ms: session.position_ms,
+            duration_ms: session.duration_ms,
+            plan: None,
+            client: ClientInfo {
+                name: session.client_name.clone(),
+                version: session.client_version.clone(),
+                device: session.device_name.clone(),
+                user_agent: client.user_agent.clone(),
+            },
+            remote,
+            stopped: false,
+            book: true,
+        });
+        entry.last_seen = now;
+        entry.position_ms = session.position_ms;
+        entry.duration_ms = session.duration_ms;
+    }
+    Ok(Json(serde_json::json!({ "session_id": session.id })).into_response())
+}
+
+/// A book's stopped report: close the session where the player left
+/// it (its Activity line is written by `listening`) and drop it from
+/// the registry. A second stopped report finds nothing open and does
+/// nothing.
+async fn listen_stopped(
+    app: &AppState,
+    profile_id: Uuid,
+    body: ReportBody,
+) -> Result<StatusCode, AppError> {
+    let beat = listen_beat(&body);
+    crate::listening::report(
+        &app.pool,
+        profile_id,
+        body.item_id,
+        body.session_id,
+        beat,
+        true,
+    )
+    .await?;
+    end_registry_sessions(app, profile_id, &body);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1444,16 +1669,29 @@ async fn stop_session(
         match sessions.get_mut(&session_id) {
             Some(s) if !s.stopped => {
                 s.stopped = true;
-                Some((s.profile_id, s.file_id, s.item_id))
+                Some((s.profile_id, s.file_id, s.item_id, s.book))
             }
             _ => None,
         }
     };
-    let Some((profile_id, file_id, item_id)) = target else {
+    let Some((profile_id, file_id, item_id, book)) = target else {
         return Err(AppError::NotFound("no such session".into()));
     };
     if let Some(file_id) = file_id {
         revoke_tokens(&app.playback, profile_id, file_id);
+    }
+    if book {
+        // AB8: a listening session plays the book track after track,
+        // so every track's tokens go; the session closes here.
+        let tracks: Vec<(Uuid,)> = sqlx::query_as("SELECT id FROM media_files WHERE item_id = $1")
+            .bind(item_id)
+            .fetch_all(&app.pool)
+            .await
+            .unwrap_or_default();
+        for (track,) in tracks {
+            revoke_tokens(&app.playback, profile_id, track);
+        }
+        crate::listening::close_by_admin(&app.pool, session_id).await;
     }
     let viewer: Option<(String,)> = sqlx::query_as(
         "SELECT u.username FROM profiles p JOIN users u ON u.id = p.user_id WHERE p.id = $1",

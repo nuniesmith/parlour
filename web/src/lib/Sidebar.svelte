@@ -89,6 +89,7 @@
           settingsItem('/settings/home', 'Home Screen'),
           settingsItem('/settings/playback', 'Playback'),
           settingsItem('/settings/subtitles', 'Subtitles'),
+          settingsItem('/settings/listening', 'Listening'),
           settingsItem('/settings/profile', 'Profile'),
           settingsItem('/settings/account', 'Account'),
         ],

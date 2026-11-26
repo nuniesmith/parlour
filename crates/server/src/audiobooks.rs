@@ -213,7 +213,7 @@ pub fn track_offsets(durations: &[Option<i64>]) -> Vec<i64> {
 
 // ------------------------------------------------------------------ DTOs
 
-#[derive(Debug, Serialize, Default)]
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct ProgressDto {
     pub position_ms: i64,
     pub duration_ms: Option<i64>,
@@ -286,7 +286,7 @@ pub struct BookSeriesDto {
 }
 
 /// What an admin's match left on a book (AB6).
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct BookMatchDto {
     pub provider: String,
     pub provider_id: String,
@@ -295,7 +295,7 @@ pub struct BookMatchDto {
     pub matched_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct BookDto {
     pub id: Uuid,
     pub library_id: Uuid,
@@ -426,7 +426,8 @@ struct BookDetailDto {
 /// and author pages (AB7): `$1` profile, `$2` book id or NULL, `$3`
 /// library id or NULL, `$4` search text or NULL, `$5` sort, `$6`
 /// series id or NULL (only that series' books, in sequence order),
-/// `$7` author (person) id or NULL (only that author's books).
+/// `$7` author (person) id or NULL (only that author's books), `$8`
+/// a list of book ids or NULL (only those; AB8's shelves).
 ///
 /// Sequence order mirrors Audiobookshelf's: the sequence read as a
 /// number (its leading number; text with none reads as 0), books
@@ -484,6 +485,7 @@ pub(crate) const BOOKS_SQL: &str = "
       AND ($7::uuid IS NULL
            OR EXISTS (SELECT 1 FROM item_people ip
                       WHERE ip.item_id = i.id AND ip.person_id = $7 AND ip.role = 'author'))
+      AND ($8::uuid[] IS NULL OR i.id = ANY($8))
     ORDER BY
       CASE WHEN $6::uuid IS NOT NULL AND sl.sequence IS NOT NULL
            THEN COALESCE(substring(sl.sequence FROM '^ *(-?[0-9]+([.][0-9]+)?)')::numeric, 0)
@@ -501,6 +503,7 @@ async fn load_book(app: &AppState, profile_id: Uuid, book_id: Uuid) -> Result<Bo
         .bind("title")
         .bind(None::<Uuid>)
         .bind(None::<Uuid>)
+        .bind(None::<Vec<Uuid>>)
         .fetch_optional(&app.pool)
         .await
         .map_err(AppError::from)?
@@ -546,6 +549,7 @@ async fn list_books(
         .bind(sort)
         .bind(None::<Uuid>)
         .bind(None::<Uuid>)
+        .bind(None::<Vec<Uuid>>)
         .fetch_all(&app.pool)
         .await
         .map_err(AppError::from)?;
