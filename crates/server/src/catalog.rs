@@ -541,11 +541,16 @@ pub fn spawn_background(
 
     // Nightly safety net (C7): after 07:30 UTC (02:30/03:30 in
     // Toronto), queue one full scan per library per day — and, when
-    // a backup folder is set, one nightly backup (XFER7).
+    // a backup folder is set, one nightly backup (XFER7). The same
+    // 15-minute tick closes stale listening sessions (AB8).
     {
         let pool = pool.clone();
         tokio::spawn(async move {
             loop {
+                // AB8: a listening session whose player went away
+                // without a stop report closes an hour after it was
+                // last heard from.
+                crate::listening::close_stale(&pool).await;
                 nightly_tick(&pool, backup.as_ref()).await;
                 tokio::time::sleep(Duration::from_secs(900)).await;
             }

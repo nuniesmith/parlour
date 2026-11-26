@@ -907,3 +907,97 @@ export function chapterAt(chapters: BookChapter[], positionMs: number): number {
   }
   return found;
 }
+
+// ------------------------------------------------------------ listening
+// AB8 (D29/D35): listening sessions, their stats, and the audiobook
+// Home shelves.
+
+/** One listening session (`/api/v1/listening/sessions`, and the admin
+ *  list at `/api/v1/admin/listening/sessions`). */
+export interface ListeningSession {
+  id: string;
+  profile_id: string;
+  username: string;
+  profile_name: string;
+  item_id: string;
+  title: string;
+  has_cover: boolean;
+  authors: string[];
+  started_at: string;
+  last_seen_at: string;
+  ended_at: string | null;
+  /** 'stopped' | 'replaced' | 'timeout' | 'admin'; null while open. */
+  end_reason: string | null;
+  start_position_ms: number;
+  position_ms: number;
+  duration_ms: number | null;
+  /** Time actually spent listening (pauses excluded). */
+  listened_ms: number;
+  client_name: string | null;
+  client_version: string | null;
+  device_name: string | null;
+  /** Open and still reporting: the player is on it now. */
+  live: boolean;
+}
+
+export interface ListeningSessionPage {
+  sessions: ListeningSession[];
+  next_before: string | null;
+}
+
+export interface ListeningStats {
+  time_zone: string;
+  total_ms: number;
+  sessions: number;
+  days_listened: number;
+  today_ms: number;
+  /** Days with listening, newest first (`YYYY-MM-DD`). */
+  days: { date: string; listened_ms: number }[];
+  /** Books by listening time, most first. */
+  books: {
+    item_id: string;
+    title: string;
+    has_cover: boolean;
+    listened_ms: number;
+    sessions: number;
+    last_listened_at: string;
+  }[];
+}
+
+/** `GET /api/v1/audiobooks/home`: Audiobookshelf's book shelves. */
+export interface AudioShelves {
+  continue_listening: Book[];
+  continue_series: { series_id: string; series_name: string; book: Book }[];
+  recently_added: Book[];
+  recent_series: Series[];
+  discover: Book[];
+  listen_again: Book[];
+  newest_authors: Author[];
+}
+
+/** The Home Screen rail ids of the book shelves, in default order. */
+export const AUDIO_RAILS = [
+  'continue_listening',
+  'continue_series',
+  'recently_added_books',
+  'recent_series',
+  'discover_books',
+  'listen_again',
+  'newest_authors',
+] as const;
+export type AudioRail = (typeof AUDIO_RAILS)[number];
+
+export function isAudioRail(id: string): id is AudioRail {
+  return (AUDIO_RAILS as readonly string[]).includes(id);
+}
+
+/** "18 min", "2 h 5 min", "45 s" — a listening time. */
+export function formatListened(ms: number): string {
+  const secs = Math.floor(Math.max(0, ms) / 1000);
+  if (secs < 60) return `${secs} s`;
+  const mins = Math.floor(secs / 60);
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  if (h === 0) return `${m} min`;
+  return m === 0 ? `${h} h` : `${h} h ${m} min`;
+}

@@ -808,6 +808,205 @@ Each is a reading inside D28, D29 or D33, not a new decision.
 12. **The first scan after this change probes every book once**
     (merge rules `ab11.1`), as AB6's and AB7's did.
 
+### Listening sessions and Home shelves (AB8, built 2026-11-26)
+
+Built to **D29** (a listen is a session, no play count; sessions feed
+Now Playing and the Activity feed; per-profile stats; ABS's book
+shelves with the per-item hide) and **D35** (sessions and stats are
+kept by the server). ABS behaviour was read from its server source on
+2026-11-26 (`libraryFilters.js`, `libraryItemsBookFilters.js`,
+`LibraryController.js`; behaviour only, nothing copied). Screens follow
+`UI-AUDIO-REFERENCE.md` §4.2–§4.4. Code: `crates/server/src/listening.rs`
+(sessions, history, stats), `crates/server/src/shelves.rs` (the
+shelves), the audiobook branch of the playback reports in
+`crates/server/src/playback.rs`, `HOME_RAILS` in `profiles.rs`;
+web `lib/AudioShelf.svelte`, `lib/BookShelf.svelte` (the library's Home
+view), `lib/ListeningHistory.svelte`, `routes/+page.svelte`,
+`routes/book/[id]`, `routes/settings/listening`, `lib/NowPlaying.svelte`.
+Migration `20261202000000_ab8_listening_sessions.sql` (the timestamp
+only orders it after AB11's; written 2026-11-26).
+
+**Sessions, through the video machinery.** A book's listening session
+goes through the same three reports video uses —
+`POST /api/v1/playback/{start,progress,stopped}` with the book's id as
+`item_id` and book-global positions — and sits in the same live
+registry, so **Now Playing** (`GET /api/v1/admin/sessions`) lists it
+beside the viewing sessions (`item_kind: "audiobook"`, no stream plan)
+and the admin **Stop** works on it. The video session shape carries
+audio without breaking video; what it can't carry (listening time, a
+record that outlives the process) is in the new `listening_sessions`
+table, one row per session, per profile:
+
+- **start** opens a session at the player's position. Any session the
+  same profile still has open **on the same book** closes first
+  (`replaced`). No `user_data` row is written and `play_count` is never
+  touched (follow-up item 13), and there is no Activity line yet;
+- **progress** moves the position and adds listening time: what the
+  player says it listened since its previous report (`listened_ms`,
+  pauses excluded), or, when it sends none, how far the position moved
+  forward — either way never more than the wall-clock time since the
+  previous report plus 5 s. A report whose session was closed meanwhile
+  opens a fresh one and answers with its id (`{"session_id"}`), so the
+  player carries on in the new one;
+- **stopped** closes it where the player left it (`stopped`);
+- a session silent for **an hour** is closed at its last report
+  (`timeout`) by the server's 15-minute tick; an admin stop closes it
+  at once (`admin`) and revokes the stream tokens of **every track** of
+  the book, so the next track is refused too.
+
+The book's position is still written by `PUT /audiobooks/{id}/progress`
+(AB4/AB11, unchanged): the session is the record of a listen, the
+progress row is where the book is. The web player sends both: a
+session report every 15 s while the book page is open (paused or not,
+as the video player does, so the session stays in Now Playing), on a
+pause, when the book ends, and a `keepalive` stop when the page goes
+away.
+
+**Activity.** A closed session — stopped, replaced, timed out or
+stopped by an admin — writes one `playback.listened` line, in the
+Playback category: "jordan listened to *Book* for 18 min", with the
+session id, times, start and end positions, listening time and how it
+ended in `detail`. Opening a session writes nothing. An admin stop also
+writes the usual `playback.stopped_by_admin` line.
+
+**The profile's own sessions and stats.**
+
+| Method + path | What |
+|---|---|
+| `GET /api/v1/listening/sessions?before=&limit=` | This profile's sessions, newest first, open ones included; `live` while the player is still reporting (90 s, the viewing sessions' rule). Paged by `started_at` (`next_before`) |
+| `GET /api/v1/listening/stats?tz=` | Totals from the same sessions: all time, today, sessions, days listened, per day (newest first) and per book (most first). A session counts on the day it **started**, in the IANA time zone given (UTC by default; an unknown zone is a 400) |
+| `GET /api/v1/admin/listening/sessions?profile_id=&before=&limit=` | Every profile's sessions, for admins |
+
+The profile's views only show books it can still reach (A6); the
+admin's list shows everything. The web: **Preferences → Listening**
+(the profile's "Listening now", stats and history) and **Server →
+Sessions** (a listening-sessions table under Now Playing).
+
+**Home shelves.** `GET /api/v1/audiobooks/home?library_id=` returns
+ABS's seven book shelves for the active profile, over every audiobooks
+library it can reach or the one named, at most **10** each (ABS's
+default), books in the book list's shape (progress inline), series and
+authors in AB7's shapes:
+
+| shelf | what qualifies (as ABS) | order |
+|---|---|---|
+| Continue Listening | a position past 0, not finished, **not hidden** | progress last updated, newest first |
+| Continue Series | per series: at least one book finished, none in progress (not finished with a position past 0 — hidden or not), one still unfinished; the book shown is the **first unfinished** in sequence order | the series' most recent progress update, newest first |
+| Recently Added | books added in the last **60 days** | newest first |
+| Recent Series | series created in the last **60 days**, with at least one book | newest first |
+| Discover | books not finished with no position, that stand alone or are the **first book** of a series the profile hasn't started | random each time |
+| Listen Again | finished books | progress last updated, newest first |
+| Newest Authors | authors whose first book here arrived in the last **60 days** | newest first |
+
+**Where they show.** On **Home**, each shelf is a Home Screen rail
+(`continue_listening`, `continue_series`, `recently_added_books`,
+`recent_series`, `discover_books`, `listen_again`, `newest_authors`),
+after the video rails by default, ordered and hidden per profile in
+**Preferences → Home Screen** (UI7) — except **Continue Listening,
+which can be moved but not hidden** (a hide is refused with a 400, and
+a stored one is ignored). An audiobooks library's page now opens on a
+**Home** view (before Books, Series, Authors) with the same shelves for
+that library alone, in the same order. Empty shelves aren't drawn.
+
+**The hide control.** A Continue Listening card shows the percent
+listened and the time left, and a "⋯" menu: **Hide from Continue
+listening** (`PUT …/progress {"hidden": true}`) and **Mark as finished**.
+The book page of a hidden book says so and offers **Show it there
+again** (`{"hidden": false}`); the next position move clears the flag
+anyway (AB11). AB11's write rules are untouched.
+
+**The bundle.** `listening_sessions` is *Proposed* in `coverage.rs`, not
+carried: per-profile state like `book_progress`, so it follows D36's
+open answer and a format change (`IMPORT-EXPORT.md` §8–§9). The
+`playback.listened` Activity lines travel with the Activity feed (D25).
+The new Home Screen rail ids travel inside the profile's existing rail
+preferences, so format v1 is unchanged.
+
+**Not here.** The native-client side is still CL3/CL6: device tokens
+(CL1), sessions a client recorded offline and uploads later, and the
+documented contract. Bookmarks, playlists and collections (D35) are
+CL2/POD work; per-user hidden series (ABS's "hide from Continue
+Series") and the library settings `onlyShowLaterBooksInContinueSeries`
+/ `hideSingleBookSeries` aren't built.
+
+**Tests.** Unit: the listening-time cap, its phrase, the Home rails
+(Continue Listening never hidden). Flow:
+`crates/server/tests/listening_flow.rs` scans ffmpeg-made books and
+drives the reports the web player sends — no `user_data` row, the
+session in Now Playing and in the profile's list, the clock cap, the
+stop into Activity (and a second stop adding nothing), a start
+replacing an open session, an admin stop (409 to the player, the
+track's token refused), an hour's silence closed and a fresh session
+opened by the next report, stats in a time zone, paging, another
+profile's empty view, the admin list — then every shelf's membership:
+in progress / finished / hidden (and the hide clearing on a move),
+Continue Series moving on through a series, Discover's series rule, the
+60-day shelves, a library filter, a profile with nothing started and a
+profile with no access, and the Home Screen rails.
+`home_flow.rs` and `preferences_flow.rs` list the new rails. Checked in
+headless Chromium against a private instance: the book page opens a
+session on play, reports listening time, keeps it open through a pause
+and closes it on leaving; the Activity line; Home's shelves; the hide
+menu; "Show it there again"; the library's Home view; the Listening
+page; Server → Sessions; the disabled Continue listening box.
+
+#### Readings made in AB8 — for the owner's veto
+
+Each is a reading inside D29, D35 or the UI reference, not a new
+decision.
+
+1. **Sessions reuse the playback reports**, not a new endpoint: the
+   web player sends `start` / `progress` / `stopped` for a book as it
+   does for a video, and the server branches on the item's kind. What
+   CL3 still owns is the native client's side (tokens, offline upload,
+   the contract); if CL3 wants its own endpoints, they can sit on the
+   same `listening` module.
+2. **A session runs from play to leaving the book**, pauses included,
+   as ABS's does from opening the player to closing it. A pause is not
+   a new session; leaving the page, the book ending, or a new start on
+   the same book is.
+3. **Listening time is the player's measure, capped by the clock**
+   (wall time since the previous report + 5 s). ABS takes the client's
+   `timeListened`; the cap is Parlour's guard. A client that sends no
+   measure is credited with forward movement, under the same cap.
+4. **One open session per profile per book.** A new start on the same
+   book closes the old one (`replaced`); sessions on different books,
+   or on two profiles, stay open side by side.
+5. **An hour's silence closes a session** at its last report — the
+   span after which the live registry already forgets a session. ABS's
+   exact stale rule wasn't read.
+6. **Only closed sessions reach the Activity feed** (D29: "the Activity
+   feed (closed ones)"); opening one writes nothing, unlike a video's
+   start line. An admin stop writes both its own line and the listen.
+7. **Stats count a session on the day it started**, in the time zone
+   the client names (the web sends the browser's), as ABS dates a
+   session by its start. Days with no listening are left out of
+   `days`.
+8. **The profile's own history and stats show only books it can still
+   reach**, as every item query does (A6); an admin sees all of them.
+   Sessions are kept indefinitely; the Activity lines follow the
+   feed's 90-day retention.
+9. **The shelves follow ABS's queries**, including the 60-day window on
+   Recently Added, Recent Series and Newest Authors, Listen Again
+   ordered by the progress row's update (not `finished_at`), and
+   Continue Series ignoring the hide flag. "An author's first book
+   here" stands in for ABS's author record's creation time, since
+   Parlour's authors are `people` rows (AB7).
+10. **Shelf order and visibility are the profile's Home Screen rails**,
+    one setting for Home and for each library's Home view, with
+    Continue Listening always shown (UI-AUDIO-REFERENCE §4.3; that rule
+    is from the Audiobooth app, not ABS's server). The book shelves
+    follow the video rails by default.
+11. **An audiobooks library opens on its Home view**, as ABS opens a
+    library, so AB7's Books list moved to `?view=books`.
+12. **Main Home's book shelves span every audiobooks library** the
+    profile reaches (ABS's are per library; Parlour's Home spans
+    libraries, as Continue Watching does). The existing Recently added
+    rail still holds books too, as before.
+13. **AB11's reading 6 stands**: the auto-finish rule still runs on
+    every progress write. Sessions don't finish a book; the progress
+    write does.
+
 ### Later in Phase 10 (blocked on decisions)
 
 AB6 metadata providers and embedded covers (D30), AB7 series and
@@ -820,7 +1019,8 @@ for codecs a client can't play (CL5).
 (D27: no ABS import). AB6 follows D30, AB7 follows D28, AB8 follows
 D29 + D35; the details are in the list below. *2026-11-26: AB6 is
 built (above). AB7 is built (above, "Series and authors (AB7)").
-AB11 is built (above, "Aligning with Audiobookshelf (AB11)").*
+AB11 is built (above, "Aligning with Audiobookshelf (AB11)"). AB8 is
+built (above, "Listening sessions and Home shelves (AB8)").*
 
 ### Follow-up from D28–D35 (where AB1–AB5 differ from ABS)
 
@@ -886,8 +1086,8 @@ not yet scheduled in a PR:
    *Done in AB11.*
 9. **Hide from Continue Listening (AB4/AB8).** ABS keeps a per-user,
    per-item hide flag that clears when progress next changes. Add
-   it to `book_progress` and the API. *Done in AB11 (API only; AB8's
-   shelf shows it).*
+   it to `book_progress` and the API. *Done in AB11 (API only); AB8
+   added the shelf and the web control.*
 10. **Client timestamp (AB4/CL4).** ABS keeps last-arrival-wins but
     stores the client's own last-update time. AB4 stamps the
     server's time. Accept and store the client's. *Done in AB11
@@ -906,7 +1106,10 @@ not yet scheduled in a PR:
     (not confirmed on 2026-11-24). *Done in AB6. ABS's default was
     confirmed as fill gaps on 2026-11-26.*
 13. **No play count (AB8).** ABS keeps no play count; listens are
-    sessions. AB8 must not bump `play_count` for books.
+    sessions. AB8 must not bump `play_count` for books. *Done in AB8:
+    a book's playback reports write no `user_data` row at all; listens
+    are `listening_sessions` ("Listening sessions and Home shelves
+    (AB8)").*
 
 ---
 
@@ -1056,6 +1259,12 @@ D33/D35 …", read the decisions above.
 3. **Listening sessions** (CL3): start/progress/stop for audio, so
    Now Playing and Activity show listeners like viewers, with
    listening-time totals. Whether to keep stats is part of D35.
+   *AB8 (2026-11-26) built the server side for the web player: the
+   playback reports carry a book's session, `listening_sessions`, Now
+   Playing, the Activity line, history and stats ("Listening sessions
+   and Home shelves (AB8)"). CL3 is what a native client needs on top:
+   its device token, sessions recorded offline and uploaded later, and
+   the contract in CL6.*
 4. **Offline** (CL4, only if D33 says yes): a download manifest per
    book or episode (files, sizes, hashes), and replay of progress
    recorded offline, carrying the client's own timestamps under the

@@ -22,7 +22,19 @@ export const RAIL_LABELS: Record<string, string> = {
   next_up: 'Next up',
   recently_added: 'Recently added',
   latest: 'Latest in each library',
+  // AB8: Audiobookshelf's book shelves (D29).
+  continue_listening: 'Continue listening',
+  continue_series: 'Continue series',
+  recently_added_books: 'Recently added audiobooks',
+  recent_series: 'Recent series',
+  discover_books: 'Discover audiobooks',
+  listen_again: 'Listen again',
+  newest_authors: 'Newest authors',
 };
+
+/** Rails a profile can move but not hide (the server refuses it):
+ *  Continue Listening is always shown (UI-AUDIO-REFERENCE §4.3). */
+export const ALWAYS_SHOWN_RAILS = ['continue_listening'];
 
 export async function updateActiveProfile(
   body: Record<string, unknown>,

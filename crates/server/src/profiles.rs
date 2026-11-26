@@ -43,13 +43,29 @@ pub struct ProfileRow {
 /// group of per-library Latest rails (UI8) — one id for the whole
 /// group, so the set of ids does not depend on which libraries
 /// exist.
+///
+/// AB8 adds Audiobookshelf's seven book shelves (D29), after the video
+/// rails; Home fills them from `GET /api/v1/audiobooks/home`, and an
+/// audiobooks library's own Home view shows the same shelves in the
+/// same order.
 pub const HOME_RAILS: &[&str] = &[
     "libraries",
     "continue_watching",
     "next_up",
     "recently_added",
     "latest",
+    "continue_listening",
+    "continue_series",
+    "recently_added_books",
+    "recent_series",
+    "discover_books",
+    "listen_again",
+    "newest_authors",
 ];
+
+/// Rails a profile can move but not hide: Continue Listening is always
+/// shown, as the audio reference has it (UI-AUDIO-REFERENCE §1.7, §4.3).
+pub const ALWAYS_SHOWN_RAILS: &[&str] = &["continue_listening"];
 
 /// One rail in a profile's Home Screen, in display order.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -80,7 +96,7 @@ pub fn home_rails(order: &[String], hidden: &[String]) -> Vec<HomeRail> {
     ids.into_iter()
         .map(|id| HomeRail {
             id: id.to_string(),
-            visible: !hidden.iter().any(|h| h == id),
+            visible: ALWAYS_SHOWN_RAILS.contains(&id) || !hidden.iter().any(|h| h == id),
         })
         .collect()
 }
@@ -106,6 +122,12 @@ fn split_home_rails(rails: &[HomeRail]) -> Result<(Vec<String>, Vec<String>), Ap
             )));
         }
         order.push(rail.id.clone());
+        if !rail.visible && ALWAYS_SHOWN_RAILS.contains(&rail.id.as_str()) {
+            return Err(AppError::BadRequest(format!(
+                "home rail '{}' can't be hidden",
+                rail.id
+            )));
+        }
         if !rail.visible {
             hidden.push(rail.id.clone());
         }
@@ -488,6 +510,17 @@ mod tests {
         xs.iter().map(|s| s.to_string()).collect()
     }
 
+    /// The AB8 book shelves, which follow the video rails by default.
+    const BOOK_RAILS: [&str; 7] = [
+        "continue_listening",
+        "continue_series",
+        "recently_added_books",
+        "recent_series",
+        "discover_books",
+        "listen_again",
+        "newest_authors",
+    ];
+
     #[test]
     fn default_rails_are_all_visible_in_default_order() {
         let rails = home_rails(&[], &[]);
@@ -499,7 +532,7 @@ mod tests {
     fn stored_order_wins_and_missing_rails_go_last() {
         let rails = home_rails(&strings(&["recently_added"]), &strings(&["next_up"]));
         assert_eq!(
-            ids(&rails),
+            ids(&rails)[..5],
             [
                 "recently_added",
                 "libraries",
@@ -508,6 +541,7 @@ mod tests {
                 "latest"
             ]
         );
+        assert_eq!(ids(&rails)[5..], BOOK_RAILS);
         let hidden: Vec<&str> = rails
             .iter()
             .filter(|r| !r.visible)
@@ -523,7 +557,7 @@ mod tests {
             &strings(&["gone_rail"]),
         );
         assert_eq!(
-            ids(&rails),
+            ids(&rails)[..5],
             [
                 "next_up",
                 "continue_watching",
@@ -532,6 +566,7 @@ mod tests {
                 "latest"
             ]
         );
+        assert_eq!(ids(&rails)[5..], BOOK_RAILS);
         assert!(rails.iter().all(|r| r.visible));
     }
 
@@ -561,7 +596,37 @@ mod tests {
         ];
         let (order, hidden) = split_home_rails(&wanted).unwrap();
         assert_eq!(hidden, strings(&["recently_added", "latest"]));
-        assert_eq!(home_rails(&order, &hidden), wanted);
+        let back = home_rails(&order, &hidden);
+        assert_eq!(back[..5], wanted[..]);
+        assert_eq!(ids(&back)[5..], BOOK_RAILS);
+        assert!(back[5..].iter().all(|r| r.visible));
+    }
+
+    #[test]
+    fn continue_listening_moves_but_never_hides() {
+        let hide = [HomeRail {
+            id: "continue_listening".into(),
+            visible: false,
+        }];
+        assert!(split_home_rails(&hide).is_err());
+        let first = [
+            HomeRail {
+                id: "continue_listening".into(),
+                visible: true,
+            },
+            HomeRail {
+                id: "listen_again".into(),
+                visible: false,
+            },
+        ];
+        let (order, hidden) = split_home_rails(&first).unwrap();
+        assert_eq!(order[0], "continue_listening");
+        assert_eq!(hidden, strings(&["listen_again"]));
+        // A stored hide (an old bundle, a hand edit) is overruled.
+        let rails = home_rails(&[], &strings(&["continue_listening", "newest_authors"]));
+        let shown = |id: &str| rails.iter().find(|r| r.id == id).unwrap().visible;
+        assert!(shown("continue_listening"));
+        assert!(!shown("newest_authors"));
     }
 
     #[test]

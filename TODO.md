@@ -1154,11 +1154,35 @@ the rest wait on the owner's decisions.
   bundle (`book_progress` stays D36's open proposal). Spec:
   AUDIOBOOKS-PODCASTS.md "Aligning with Audiobookshelf (AB11)" (12
   readings for veto).
-- [ ] AB8 (S) **Listening in Now Playing / Activity, Home
+- [x] AB8 (S) **Listening in Now Playing / Activity, Home
   "Continue listening"** — after **D29** / **D35**. *D29
   (2026-11-24): ABS's shelves (Continue Listening with a
   per-item hide, Continue Series, Listen Again, …); listens are
   sessions, no `play_count` bump.*
+  *Done 2026-11-26 (follow-up item 13):* a listen is a session in the
+  new `listening_sessions` (per profile; migration
+  `20261202000000_ab8_listening_sessions.sql`). The web player opens,
+  beats and closes it through the existing
+  `POST /api/v1/playback/{start,progress,stopped}`, which branch on an
+  audiobook: no `user_data` row, no `play_count`; listening time is the
+  player's measure capped by the clock; a new start on the same book
+  replaces an open session, an hour's silence closes one (15-minute
+  tick), and a report on a closed one opens a fresh one. Open sessions
+  sit in the live registry, so **Now Playing** shows them and its Stop
+  works (every track's token revoked); closed ones write a
+  `playback.listened` **Activity** line. Per-profile
+  `GET /api/v1/listening/sessions` and `…/stats?tz=` (Preferences →
+  Listening), admin `GET /api/v1/admin/listening/sessions` (under Now
+  Playing on Server → Sessions). `GET /api/v1/audiobooks/home` gives
+  ABS's seven shelves (Continue Listening, Continue Series, Recently
+  Added, Recent Series, Discover, Listen Again, Newest Authors, as ABS's
+  queries have them); they are Home Screen rails on Home (Continue
+  Listening can't be hidden) and the shelves of an audiobooks library's
+  new default **Home** view. A Continue Listening card has the hide
+  control and Mark as finished; a hidden book's page offers "Show it
+  there again". `listening_sessions` is *Proposed* in the bundle (D36
+  still open; format v1 unchanged). Spec: AUDIOBOOKS-PODCASTS.md
+  "Listening sessions and Home shelves (AB8)" (13 readings for veto).
 - [ ] AB9 (M) **CANCELLED 2026-11-24 by D27 — not to be
   built.** Original: importer from the owner's Audiobookshelf
   (progress + finished) — only if **D27** says yes.
@@ -1233,6 +1257,9 @@ Phases 3 and 6; app shape and order is **D34**.
 - [ ] CL3 (S) **Listening sessions**: start/progress/stop for
   audio into the P8 registry (Now Playing, Activity);
   listening-time stats only if **D35** wants them.
+  *AB8 (2026-11-26) built the server side and the web player's use of
+  it; CL3 is what a native client needs on top (its token, offline
+  sessions uploaded later, the CL6 contract).*
 - [ ] CL4 (M) **Offline**: download manifests + replay of
   offline progress with client timestamps under **D33**'s
   conflict rule — only if **D33** says clients download.

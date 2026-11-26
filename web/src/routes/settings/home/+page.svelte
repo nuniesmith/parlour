@@ -3,7 +3,7 @@
   // what order. Saved on the profile, so every device signed in
   // to it sees the same Home.
   import { session } from '$lib/session.svelte';
-  import { RAIL_LABELS, updateActiveProfile } from '$lib/preferences';
+  import { ALWAYS_SHOWN_RAILS, RAIL_LABELS, updateActiveProfile } from '$lib/preferences';
   import type { HomeRail } from '$lib/types';
 
   let rails = $state<HomeRail[]>(
@@ -40,7 +40,10 @@
 </script>
 
 <h2>Home Screen</h2>
-<p class="dim">Choose which rows Home shows for this profile, and their order.</p>
+<p class="dim">
+  Choose which rows Home shows for this profile, and their order. The audiobook shelves also set
+  the order of an audiobooks library's own Home; Continue listening is always shown.
+</p>
 
 <form class="form" onsubmit={save}>
   {#if error}<p class="error" role="alert">{error}</p>{/if}
@@ -49,8 +52,13 @@
     {#each rails as rail, i (rail.id)}
       <li>
         <label class="check">
-          <input type="checkbox" bind:checked={rail.visible} />
-          {RAIL_LABELS[rail.id] ?? rail.id}
+          {#if ALWAYS_SHOWN_RAILS.includes(rail.id)}
+            <input type="checkbox" checked disabled />
+            {RAIL_LABELS[rail.id] ?? rail.id} <span class="dim">(always shown)</span>
+          {:else}
+            <input type="checkbox" bind:checked={rail.visible} />
+            {RAIL_LABELS[rail.id] ?? rail.id}
+          {/if}
         </label>
         <span class="order">
           <button

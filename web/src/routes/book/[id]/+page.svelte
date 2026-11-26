@@ -12,6 +12,12 @@
   // browser's own time (client_updated_at).
   // AB6: admins can match the book by hand (BookMatch).
   // AB7: its authors and series link to their pages.
+  // AB8 (D29): listening is a session. The first play opens one
+  // (POST /api/v1/playback/start), a report every 15 s keeps it open
+  // while the page is open — paused or not, as the video player does —
+  // and carries the time actually spent listening since the last one;
+  // the book ending, or the page going away, closes it. A book that is
+  // hidden from Continue listening can be shown there again from here.
   import { onMount, tick } from 'svelte';
   import { page } from '$app/state';
   import { api } from '$lib/api';
@@ -19,6 +25,7 @@
   import { session } from '$lib/session.svelte';
   import {
     chapterAt,
+    deviceLabel,
     formatDurationMs,
     locateInBook,
     posterUrl,
@@ -27,6 +34,7 @@
   } from '$lib/types';
 
   const SAVE_EVERY_MS = 15_000;
+  const REPORT_EVERY_MS = 15_000;
   const SKIP_MS = 30_000;
 
   let book = $state<BookDetail | null>(null);
@@ -43,6 +51,15 @@
   let pendingOffsetMs: number | null = null;
   let lastSavedAt = 0;
   let lastSavedPos = -1;
+
+  // AB8: the listening session this page has open, and the listening
+  // time measured since its last report (pauses excluded).
+  let sessionId: string | null = null;
+  let sessionOpening = false;
+  let reportTimer: ReturnType<typeof setInterval> | null = null;
+  let listenedMs = 0;
+  let playingSince: number | null = null;
+  let stoppedByAdmin = $state(false);
 
   const total = $derived(book?.duration_ms ?? 0);
   const chapterIndex = $derived(book ? chapterAt(book.chapters, position) : -1);
@@ -100,7 +117,111 @@
       playing = false;
       position = total;
       void save({ finished: true });
+      endSession(false);
     }
+  }
+
+  /** Listening time since the last report, and start counting again. */
+  function takeListened(): number {
+    const now = performance.now();
+    if (playingSince !== null) {
+      listenedMs += now - playingSince;
+      playingSince = now;
+    }
+    const out = Math.round(listenedMs);
+    listenedMs = 0;
+    return out;
+  }
+
+  function onPlay() {
+    playing = true;
+    started = true;
+    playingSince = performance.now();
+    void openSession();
+  }
+
+  function onPause() {
+    if (playingSince !== null) listenedMs += performance.now() - playingSince;
+    playingSince = null;
+    playing = false;
+    void save();
+    void report();
+  }
+
+  function reportBody(extra: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      item_id: book?.id,
+      position_ms: Math.round(position),
+      duration_ms: total > 0 ? total : undefined,
+      ...extra,
+    };
+  }
+
+  /** Open a session on the first play (and again after one closed). */
+  async function openSession() {
+    if (!book || sessionId || sessionOpening || stoppedByAdmin) return;
+    sessionOpening = true;
+    const { data } = await api<{ session_id: string }>('/api/v1/playback/start', {
+      method: 'POST',
+      body: JSON.stringify(
+        reportBody({ client_name: 'Parlour Web', device_name: deviceLabel(navigator.userAgent) }),
+      ),
+    });
+    sessionOpening = false;
+    if (!data) return;
+    sessionId = data.session_id;
+    listenedMs = 0;
+    if (playingSince !== null) playingSince = performance.now();
+    if (!reportTimer) reportTimer = setInterval(() => void report(), REPORT_EVERY_MS);
+  }
+
+  async function report() {
+    if (!book || !sessionId) return;
+    const { status, data } = await api<{ session_id: string }>('/api/v1/playback/progress', {
+      method: 'POST',
+      body: JSON.stringify(reportBody({ session_id: sessionId, listened_ms: takeListened() })),
+    });
+    // The server opens a fresh session when the old one was closed
+    // (an hour's silence, a restart); follow it.
+    if (data?.session_id && sessionId) sessionId = data.session_id;
+    // 409: an admin stopped this session and its stream.
+    if (status === 409) {
+      stoppedByAdmin = true;
+      endSession(false, false);
+      audio?.pause();
+    }
+  }
+
+  /** Close the session: the book ended, or the page is going away
+   *  (`keepalive` so the report survives the page). */
+  function endSession(keepalive: boolean, tell = true) {
+    if (reportTimer) clearInterval(reportTimer);
+    reportTimer = null;
+    const id = sessionId;
+    sessionId = null;
+    if (!book || !id || !tell) return;
+    const body = JSON.stringify(reportBody({ session_id: id, listened_ms: takeListened() }));
+    playingSince = null;
+    if (keepalive) {
+      void fetch('/api/v1/playback/stopped', {
+        method: 'POST',
+        credentials: 'same-origin',
+        keepalive: true,
+        headers: { 'content-type': 'application/json' },
+        body,
+      }).catch(() => {});
+    } else {
+      void api('/api/v1/playback/stopped', { method: 'POST', body });
+    }
+  }
+
+  async function showAgain() {
+    if (!book) return;
+    const { data } = await api<BookProgress>(`/api/v1/audiobooks/${book.id}/progress`, {
+      method: 'PUT',
+      body: JSON.stringify({ hidden: false, client_updated_at: new Date().toISOString() }),
+    });
+    if (data && book) book = { ...book, progress: data };
   }
 
   async function save(extra: { finished?: boolean } = {}) {
@@ -192,12 +313,17 @@
     loadAt(0, playing);
   }
 
+  function onLeave() {
+    saveOnLeave();
+    endSession(true);
+  }
+
   onMount(() => {
     void load(page.params.id ?? '');
-    window.addEventListener('pagehide', saveOnLeave);
+    window.addEventListener('pagehide', onLeave);
     return () => {
-      window.removeEventListener('pagehide', saveOnLeave);
-      saveOnLeave();
+      window.removeEventListener('pagehide', onLeave);
+      onLeave();
     };
   });
 </script>
@@ -249,6 +375,15 @@
       {:else if resumable && !started}
         <p class="status">Resumes at {formatDurationMs(book.progress.position_ms)}</p>
       {/if}
+      {#if book.progress.hidden && !book.progress.finished}
+        <p class="dim hidden-note">
+          Hidden from Continue listening until you listen again.
+          <button class="btn small" type="button" onclick={showAgain}>Show it there again</button>
+        </p>
+      {/if}
+      {#if stoppedByAdmin}
+        <p class="error" role="alert">An administrator stopped this listening session.</p>
+      {/if}
       {#if book.overview}<p class="overview">{book.overview}</p>{/if}
       {#if book.publisher || book.language || book.isbn}
         <p class="dim facts">
@@ -273,14 +408,8 @@
         preload="metadata"
         onloadedmetadata={onLoadedMetadata}
         ontimeupdate={onTimeUpdate}
-        onplay={() => {
-          playing = true;
-          started = true;
-        }}
-        onpause={() => {
-          playing = false;
-          void save();
-        }}
+        onplay={onPlay}
+        onpause={onPause}
         onended={onEnded}
       ></audio>
       <p class="now">
@@ -402,6 +531,12 @@
   .status {
     color: var(--accent);
     font-weight: 600;
+  }
+  .hidden-note {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
   }
   .overview {
     margin-top: 0.8rem !important;
