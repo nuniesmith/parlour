@@ -365,6 +365,9 @@ async fn trigger_scan(
 #[derive(Deserialize)]
 struct JobsQuery {
     library_id: Option<String>,
+    /// One kind only (`export_bundle`, `import_bundle`, …): XFER8's
+    /// Import/Export page lists its own jobs this way.
+    kind: Option<String>,
     limit: Option<i64>,
 }
 
@@ -377,8 +380,15 @@ async fn list_jobs(
         Some(s) => Some(parse_id(s)?),
         None => None,
     };
+    let kind = match q.kind.as_deref() {
+        Some(name) => Some(
+            parlour_jobs::JobKind::parse(name)
+                .ok_or_else(|| AppError::BadRequest(format!("no job kind '{name}'")))?,
+        ),
+        None => None,
+    };
     let limit = q.limit.unwrap_or(20).clamp(1, 100);
-    let jobs = parlour_jobs::list_recent(&state.pool, library_id, limit)
+    let jobs = parlour_jobs::list_recent(&state.pool, library_id, kind, limit)
         .await
         .map_err(AppError::from)?;
     Ok(Json(jobs))

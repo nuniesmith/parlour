@@ -59,12 +59,18 @@ async fn main() {
         base_url: config.emby_url.clone(),
         api_key: config.emby_api_key.clone(),
     };
-    // XFER7: nightly backups, when PARLOUR_BACKUP_DIR is set — the
-    // nightly tick queues them, the export worker writes them.
+    // XFER7: nightly backups — the nightly tick queues them, the
+    // export worker writes them. D39: the setting lives in the web UI
+    // (Server → Import/Export); PARLOUR_BACKUP_DIR / _KEEP are only the
+    // default until an admin saves one, so this is read fresh each
+    // time rather than fixed here.
     let backup = parlour_server::backup::BackupSettings::from_config(&config);
-    match &backup {
-        Some(b) => tracing::info!(folder = %b.dir.display(), keep = b.keep, "nightly backups on"),
-        None => tracing::info!("nightly backups off (PARLOUR_BACKUP_DIR is not set)"),
+    match parlour_server::backup::effective(&pool, backup.as_ref()).await {
+        Ok(Some(b)) => {
+            tracing::info!(folder = %b.dir.display(), keep = b.keep, "nightly backups on")
+        }
+        Ok(None) => tracing::info!("nightly backups off (no backup folder is set)"),
+        Err(e) => tracing::warn!(error = %e, "could not read the backup setting"),
     }
     parlour_server::catalog::spawn_background(
         pool.clone(),

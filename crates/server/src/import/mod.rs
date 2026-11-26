@@ -16,6 +16,8 @@
 //!   job with those options; 202 with the job. The job runs at once;
 //!   [`spawn_worker`] picks up one left queued.
 //! - `DELETE /api/v1/admin/import/{id}`: remove an upload.
+//! - `GET /api/v1/admin/import` (XFER8): the uploads waiting here, for
+//!   Server → Import/Export.
 //!
 //! The dry run and the job are the same walk ([`apply::run`]) in a
 //! transaction — rolled back for the dry run, committed by the job —
@@ -374,6 +376,62 @@ async fn upload(
     Ok((StatusCode::CREATED, Json(Uploaded { id, bytes, report })))
 }
 
+/// One upload waiting on the server for its dry run and apply.
+#[derive(Debug, Serialize)]
+struct Pending {
+    id: Uuid,
+    bytes: u64,
+    uploaded_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// The upload id in a file name, if it is exactly `<uuid>.zip` (not a
+/// `.part` still arriving, nor a job's staging folder).
+fn pending_id(name: &str) -> Option<Uuid> {
+    let id = Uuid::parse_str(name.strip_suffix(".zip")?).ok()?;
+    (name == format!("{id}.zip")).then_some(id)
+}
+
+/// `GET /api/v1/admin/import` (XFER8): the uploads waiting here,
+/// newest first, so Server → Import/Export can pick one up again or
+/// delete it (an upload may hold hashes).
+async fn list_uploads(
+    State(app): State<AppState>,
+    _admin: AdminUser,
+) -> Result<Json<Vec<Pending>>, AppError> {
+    let dir = app.import_dir.clone();
+    let mut pending = tokio::task::spawn_blocking(move || {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(format!("{}: {e}", dir.display())),
+        };
+        let mut out = Vec::new();
+        for entry in entries.flatten() {
+            let Some(id) = entry.file_name().to_str().and_then(pending_id) else {
+                continue;
+            };
+            let Ok(meta) = entry.metadata() else { continue };
+            if !meta.is_file() {
+                continue;
+            }
+            out.push(Pending {
+                id,
+                bytes: meta.len(),
+                uploaded_at: meta
+                    .modified()
+                    .ok()
+                    .map(chrono::DateTime::<chrono::Utc>::from),
+            });
+        }
+        Ok(out)
+    })
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))?
+    .map_err(AppError::Internal)?;
+    pending.sort_by(|a, b| b.uploaded_at.cmp(&a.uploaded_at).then(a.id.cmp(&b.id)));
+    Ok(Json(pending))
+}
+
 fn upload_id(id: &str) -> Result<Uuid, AppError> {
     Uuid::parse_str(id).map_err(|_| AppError::NotFound("no such upload".into()))
 }
@@ -459,7 +517,9 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/api/v1/admin/import",
             // The upload streams to disk under its own limit.
-            post(upload).layer(DefaultBodyLimit::disable()),
+            post(upload)
+                .layer(DefaultBodyLimit::disable())
+                .get(list_uploads),
         )
         .route("/api/v1/admin/import/{id}/dry-run", post(dry_run_upload))
         .route("/api/v1/admin/import/{id}/apply", post(apply_upload))

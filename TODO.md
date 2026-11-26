@@ -853,9 +853,41 @@ does NOT depend on Phase 2 transcoding.
   (D36) — the Postgres dump in the Cross-cutting backups item covers
   those and stays production work. Seven readings for veto are in
   §15.
-- [ ] XFER8 (M) **Admin UI**: Server → Import/Export page —
+- [x] XFER8 (M) **Admin UI**: Server → Import/Export page —
   export (options + download), import (upload, dry-run
   report render, apply), per-library sidecar status.
+  *Done 2026-11-25, per D14/D25/D37/D38 and the owner's new **D39**
+  (backups are set up in the web UI), format v1 as it stands (no audio
+  tables — the §9 proposal / D36 is still open):* spec
+  `docs/IMPORT-EXPORT.md` §16. `/admin/import-export` has four parts.
+  **Export:** artwork (with its size estimate) and password/PIN hashes
+  behind the §6 warning plus a confirm; the server's bundles with
+  Download / Delete. **Import:** upload → the dry run rendered from
+  XFER3's report (`web/src/lib/ImportReport.svelte`), with D38's
+  take-over and D37's no-password line in a "Before you apply" box,
+  accounts, libraries (with replacement folders and "Check again"),
+  every tally, conflicts and notes → Apply (confirmed) → the job's
+  report under Recent imports; waiting uploads are listed (new
+  `GET /api/v1/admin/import`). **Nightly backups (D39):** folder, keep
+  and hashes, stored in the new `backup_settings` table
+  (`GET`/`PUT`/`DELETE /api/v1/admin/backup`); the env vars are the
+  bootstrap default until a save; a saved blank folder is off; read
+  fresh, no restart; hashes off by default and only with the warning;
+  every change audited. Nothing is enabled on any host. **Sidecar
+  status:** new `GET /api/v1/admin/sidecars` per library — XFER5's
+  opt-in, folder writability and notice, and the counts the ledgers
+  already keep; the switch stays on Server → Library. Jobs page: the
+  export form moved here (finished rows keep Download / Delete);
+  General shows backups read-only and links here. New `kind` filter on
+  `GET /api/v1/admin/jobs`. Twelve readings for veto are in §16.7.
+  **Phase 8 "Done when": passed end to end for the bundle half** —
+  `tests/import_export_page_flow.rs` exports a seeded server from the
+  page's endpoints, imports it into a freshly created database through
+  upload → dry run → apply, and the new server exports the same users,
+  profiles and watch history (old passwords work). The sidecar half
+  (copying a movie folder carries its metadata) was shown by XFER4's
+  `sidecar_flow` and still passes; both on a throwaway Postgres, not
+  the live instance or a real host move.
 - **Done when:** the whole server state survives a host
   move — bundle out on oryx, bundle in on a fresh install,
   same users/profiles/watch history — and copying a movie

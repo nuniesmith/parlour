@@ -24,3 +24,4 @@ pub mod notices;
 pub mod playback;
 pub mod profiles;
 pub mod segments;
+pub mod sidecars;

@@ -828,3 +828,26 @@ on 2026-11-20, which is still open and isn't touched here.)
   (b) automatically adopt a *pristine* bootstrap admin; (c) the
   admin maps any conflict onto an existing account. Recommended:
   (b).
+
+## 2026-11-25 — Backups are set up in the web UI (XFER8)
+
+- **D39 — DECIDED 2026-11-25: nightly backup setup lives in the web
+  UI, as admin settings the owner configures when he wants them.** In
+  the owner's words (2026-11-25): he is "not really worried about
+  backing things up right now, but more of a option in the webui that
+  i can setup later on, like i do with emby". What follows: XFER7's
+  env-only config (`PARLOUR_BACKUP_DIR` / `PARLOUR_BACKUP_KEEP`, unset
+  = no backups) with a read-only line on Server → General was the
+  interim. Backup setup becomes **editable admin settings on Server →
+  Import/Export** (XFER8): the destination folder (on/off by whether a
+  folder is set), how many to keep, stored server-side. The
+  environment variables remain the **bootstrap default** while no
+  setting has been saved in the UI. **Hashes stay governed by D14/D25:**
+  a nightly backup carries no password or PIN hashes unless the owner
+  turns that on himself in that UI, behind the same warning the manual
+  export shows; never by default. The decision does not ask for a
+  backup to be set up anywhere: the folder stays unset until the owner
+  sets it. Built in XFER8; how it reads in detail (a saved blank
+  folder is off even with the variable set, a missing folder is saved
+  with a warning, hashes need both the queued job and the setting at
+  run time) is `docs/IMPORT-EXPORT.md` §16.4 and §16.7, for veto.

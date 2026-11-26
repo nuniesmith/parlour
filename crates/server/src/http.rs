@@ -48,8 +48,10 @@ pub struct AppState {
     /// XFER3: where uploaded bundles wait for their dry run and apply
     /// (`<PARLOUR_CACHE_DIR>/imports`; `main` sets it from `Config`).
     pub import_dir: PathBuf,
-    /// XFER7: the nightly backup folder and retention, `None` when
+    /// XFER7: the environment's nightly backup default, `None` when
     /// `PARLOUR_BACKUP_DIR` is unset (`main` sets it from `Config`).
+    /// D39: an admin's saved setting overrides it; read the setting in
+    /// force with `backup::effective`.
     pub backup: Option<crate::backup::BackupSettings>,
 }
 
@@ -99,6 +101,8 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::notices::routes())
         .merge(crate::export::routes())
         .merge(crate::import::routes())
+        .merge(crate::backup::routes())
+        .merge(crate::sidecars::routes())
         .fallback(fallback)
         .layer(PropagateRequestIdLayer::x_request_id())
         .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))

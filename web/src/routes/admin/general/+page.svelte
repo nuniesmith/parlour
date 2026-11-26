@@ -2,7 +2,8 @@
   // Server → General: how this server is configured. Read-only:
   // every value comes from the server's environment at startup,
   // so the page says which variable sets it instead of offering
-  // a form that could not take effect.
+  // a form that could not take effect. Nightly backups are the
+  // exception (D39): set on Server → Import/Export, shown here.
   import { onMount } from 'svelte';
   import { api } from '$lib/api';
   import type { ServerInfo } from '$lib/types';
@@ -19,17 +20,6 @@
           { label: 'Home network (LAN) address', value: info.urls.lan, env: 'PARLOUR_URL_LAN' },
           { label: 'Tailnet address', value: info.urls.tailnet, env: 'PARLOUR_URL_TAILNET' },
           { label: 'Public address', value: info.urls.public, env: 'PARLOUR_URL_PUBLIC' },
-          {
-            label: 'Nightly backup folder',
-            value: info.backups.folder,
-            env: 'PARLOUR_BACKUP_DIR',
-            unset: 'Off — no nightly backups',
-          },
-          {
-            label: 'Nightly backups kept',
-            value: String(info.backups.keep),
-            env: 'PARLOUR_BACKUP_KEEP',
-          },
         ]
       : [],
   );
@@ -66,11 +56,33 @@
       </tbody>
     </table>
   </div>
+  <h3>Nightly backups</h3>
+  <p class="dim intro">
+    {#if info.backups.folder}
+      On: written to <code>{info.backups.folder}</code> each night, keeping {info.backups.keep}{info
+        .backups.include_hashes
+        ? ', with password and PIN hashes'
+        : ''}.
+    {:else}
+      Off — no nightly backups.
+    {/if}
+    {info.backups.source === 'saved'
+      ? 'Set on'
+      : 'Nothing is saved yet, so the environment default (PARLOUR_BACKUP_DIR) applies. Set them up on'}
+    <a class="link" href="/admin/import-export">Import / Export</a>.
+  </p>
 {:else if !error}
   <p class="dim">Loading…</p>
 {/if}
 
 <style>
+  .link {
+    color: var(--accent);
+  }
+  h3 {
+    margin: 1.4rem 0 0.4rem;
+    font-size: 1rem;
+  }
   .intro {
     max-width: 44rem;
   }

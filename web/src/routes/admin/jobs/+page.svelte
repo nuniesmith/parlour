@@ -1,9 +1,11 @@
 <script lang="ts">
   // Server → Jobs: what the server has been doing in the
   // background, with each job's errors, and "run now" for the
-  // job kinds that can be started by hand (per-library scan,
-  // metadata match, and the server export — XFER2 — whose
-  // finished bundle is downloaded from its row here).
+  // job kinds that can be started by hand (per-library scan and
+  // metadata match). XFER8: exports, imports and nightly backups
+  // are started on Server → Import/Export, which owns the hashes
+  // warning; their finished rows still land here, with Download /
+  // Delete on an export's row.
   import { onMount } from 'svelte';
   import { api } from '$lib/api';
   import {
@@ -11,7 +13,6 @@
     formatDateTime,
     isNightlyBackup,
     jobLabel,
-    type ExportEstimate,
     type Job,
     type Library,
   } from '$lib/types';
@@ -20,9 +21,6 @@
   let notice = $state<string | null>(null);
   let jobs = $state<Job[] | null>(null);
   let libraries = $state<Library[]>([]);
-  let includeArtwork = $state(false);
-  let estimate = $state<ExportEstimate | null>(null);
-  let exporting = $state(false);
 
   const active = $derived((jobs ?? []).some((j) => j.status === 'queued' || j.status === 'running'));
 
@@ -45,30 +43,6 @@
       notice = done;
       await loadJobs();
     } else error = err ?? 'Could not start that job.';
-  }
-
-  // The size warning's numbers, fetched when artwork is first ticked.
-  async function loadEstimate() {
-    if (!includeArtwork || estimate) return;
-    const { data } = await api<ExportEstimate>('/api/v1/admin/export/estimate');
-    estimate = data;
-  }
-
-  async function startExport() {
-    error = null;
-    notice = null;
-    exporting = true;
-    const { status, error: err } = await api('/api/v1/admin/export', {
-      method: 'POST',
-      // Hashes stay home: the explicit confirm belongs to the
-      // Import/Export page (XFER8), with its warning.
-      body: JSON.stringify({ include_artwork: includeArtwork, include_hashes: false }),
-    });
-    exporting = false;
-    if (status === 202) {
-      notice = 'Server export started. Its download appears in the job’s row when it finishes.';
-      await loadJobs();
-    } else error = err ?? 'Could not start the export.';
   }
 
   function isBundle(job: Job): boolean {
@@ -143,46 +117,15 @@
     </table>
   </div>
   <p class="dim note">
-    Scans also run on their own: when files change, and once a night. The other job kinds,
-    apart from the export below, are started by the server and cannot be run from here.
+    Scans also run on their own: when files change, and once a night. The other job kinds are
+    started by the server and cannot be run from here.
   </p>
 {/if}
 
-<h3>Export the server</h3>
-<div class="export">
-  <p class="dim note">
-    Writes one bundle file with the users, profiles and their preferences, libraries and who may
-    see them, the catalog with its segments, watch history, recent searches and the Activity
-    feed. Server secrets never go in. Password and PIN hashes are left out of exports started
-    here.
-  </p>
-  <label>
-    <input type="checkbox" bind:checked={includeArtwork} onchange={loadEstimate} />
-    Include artwork files
-  </label>
-  {#if includeArtwork}
-    <p class="warn" role="status">
-      {#if estimate}
-        This adds {estimate.artwork_files}
-        {estimate.artwork_files === 1 ? 'image' : 'images'}, about {formatBytes(
-          estimate.artwork_bytes,
-        )}, to the bundle — it can be many times larger than without them.
-        {#if estimate.artwork_unavailable > 0}
-          {estimate.artwork_unavailable} cached
-          {estimate.artwork_unavailable === 1 ? 'image is' : 'images are'} missing on disk and
-          will travel as links only.
-        {/if}
-      {:else}
-        Artwork can make the bundle many times larger.
-      {/if}
-    </p>
-  {:else}
-    <p class="dim note">Without artwork the bundle keeps each image’s source link only.</p>
-  {/if}
-  <div>
-    <button class="btn small" disabled={exporting} onclick={startExport}>Export now</button>
-  </div>
-</div>
+<p class="dim note">
+  To export the server, import a bundle or set up nightly backups, go to
+  <a class="link" href="/admin/import-export">Import / Export</a>.
+</p>
 
 <div class="head">
   <h2>Recent jobs</h2>
@@ -317,22 +260,6 @@
   }
   .when {
     margin-left: auto;
-    font-size: 0.9rem;
-  }
-  h3 {
-    margin: 1.4rem 0 0.4rem;
-    font-size: 1rem;
-  }
-  .export {
-    display: grid;
-    gap: 0.5rem;
-    max-width: 44rem;
-  }
-  .export p {
-    margin: 0;
-  }
-  .warn {
-    color: var(--accent);
     font-size: 0.9rem;
   }
   .bundle {

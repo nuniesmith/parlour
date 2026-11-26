@@ -384,7 +384,10 @@ async fn backup_flow() {
     let stray_job = parlour_jobs::get(&pool, stray).await.unwrap().unwrap();
     assert_eq!(stray_job.status, "failed");
     assert!(
-        stray_job.errors.to_string().contains("PARLOUR_BACKUP_DIR"),
+        stray_job
+            .errors
+            .to_string()
+            .contains("no backup folder is set"),
         "{}",
         stray_job.errors
     );
@@ -434,6 +437,7 @@ async fn backup_flow() {
     let settings = BackupSettings {
         dir: backups.clone(),
         keep: 3,
+        include_hashes: false,
     };
     let server = serve(&pool, &root, Some(settings.clone())).await;
     let admin = server.login("jordan", ADMIN_PASSWORD).await;

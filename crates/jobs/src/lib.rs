@@ -40,6 +40,26 @@ pub enum JobKind {
 }
 
 impl JobKind {
+    pub const ALL: [JobKind; 12] = [
+        JobKind::ScanLibrary,
+        JobKind::FetchMetadata,
+        JobKind::DownloadArtwork,
+        JobKind::ExtractSubtitles,
+        JobKind::DownloadSubtitles,
+        JobKind::GenerateArtwork,
+        JobKind::ReconcileRequests,
+        JobKind::ImportEmby,
+        JobKind::PurgeActivity,
+        JobKind::DetectSegments,
+        JobKind::ExportBundle,
+        JobKind::ImportBundle,
+    ];
+
+    /// The kind stored as `name`, if there is one.
+    pub fn parse(name: &str) -> Option<JobKind> {
+        Self::ALL.into_iter().find(|k| k.as_str() == name)
+    }
+
     pub fn as_str(&self) -> &'static str {
         match self {
             JobKind::ScanLibrary => "scan_library",
@@ -210,6 +230,7 @@ pub async fn get(pool: &parlour_db::PgPool, id: Uuid) -> Result<Option<Job>, sql
 pub async fn list_recent(
     pool: &parlour_db::PgPool,
     library_id: Option<Uuid>,
+    kind: Option<JobKind>,
     limit: i64,
 ) -> Result<Vec<Job>, sqlx::Error> {
     sqlx::query_as::<_, Job>(
@@ -217,11 +238,13 @@ pub async fn list_recent(
                 errors, result, created_at, started_at, finished_at
          FROM jobs
          WHERE ($1::uuid IS NULL OR library_id = $1)
+           AND ($3::text IS NULL OR kind = $3)
          ORDER BY created_at DESC
          LIMIT $2",
     )
     .bind(library_id)
     .bind(limit)
+    .bind(kind.map(|k| k.as_str()))
     .fetch_all(pool)
     .await
 }
@@ -264,5 +287,18 @@ mod tests {
         assert_eq!(JobKind::DetectSegments.as_str(), "detect_segments");
         assert_eq!(JobKind::ExportBundle.as_str(), "export_bundle");
         assert_eq!(JobKind::ImportBundle.as_str(), "import_bundle");
+    }
+
+    #[test]
+    fn every_kind_parses_back_and_nothing_else_does() {
+        for kind in JobKind::ALL {
+            assert_eq!(JobKind::parse(kind.as_str()), Some(kind));
+        }
+        let mut names: Vec<_> = JobKind::ALL.iter().map(|k| k.as_str()).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), JobKind::ALL.len(), "names are distinct");
+        assert_eq!(JobKind::parse("Export_Bundle"), None);
+        assert_eq!(JobKind::parse(""), None);
     }
 }

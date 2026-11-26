@@ -1051,9 +1051,9 @@ struct BackupSummary {
     #[serde(flatten)]
     export: ExportSummary,
     trigger: &'static str,
-    /// The backup folder, as configured.
+    /// The backup folder it was written to, as configured when it ran.
     folder: String,
-    /// `PARLOUR_BACKUP_KEEP` when it ran.
+    /// How many nightly bundles were kept when it ran.
     keep: u32,
     /// Older nightly bundles (and stale `.part` files) retention
     /// deleted after this one was written.
@@ -1085,9 +1085,19 @@ async fn run_backup_job(
         )
         .await;
     };
-    let Some(settings) = backup else {
-        failed("nightly backups are off: PARLOUR_BACKUP_DIR is not set".to_string()).await;
-        return;
+    // D39: the setting saved on Server → Import/Export, read now (it
+    // may have changed since the job was queued); with none saved,
+    // the environment's default (`backup`).
+    let settings = match crate::backup::effective(pool, backup).await {
+        Ok(Some(settings)) => settings,
+        Ok(None) => {
+            failed("nightly backups are off: no backup folder is set".to_string()).await;
+            return;
+        }
+        Err(e) => {
+            failed(format!("reading the backup setting: {e}")).await;
+            return;
+        }
     };
     let dir = settings.dir.clone();
     let checked = {
@@ -1101,10 +1111,17 @@ async fn run_backup_job(
         failed(message).await;
         return;
     }
-    // D14: hashes leave the server only behind an admin's explicit
-    // confirm for that one export; a standing nightly job has none.
-    // Artwork stays off: it can make every bundle many times larger.
-    let options = ExportOptions::default();
+    // D14/D39: hashes leave the server only behind an admin's
+    // explicit confirm. For the standing job that is the setting's
+    // `include_hashes`, which only an admin turns on, past the
+    // export's warning; it must have been on when the job was queued
+    // *and* still be on now. Artwork stays off: it can make every
+    // bundle many times larger.
+    let options = ExportOptions {
+        include_hashes: settings.include_hashes
+            && job.payload["include_hashes"].as_bool() == Some(true),
+        include_artwork: false,
+    };
     let summary = match export(pool, job.id, options, Destination::Backup(&dir)).await {
         Ok(summary) => summary,
         Err(message) => {
@@ -1150,6 +1167,7 @@ async fn run_backup_job(
     let detail = serde_json::json!({
         "job_id": job.id,
         "trigger": crate::backup::NIGHTLY,
+        "hashes_included": summary.hashes_included,
         "file_name": summary.file_name,
         "bytes": summary.bytes,
         "removed_by_retention": removed,
@@ -1168,9 +1186,14 @@ async fn run_backup_job(
     )
     .await;
     let _ = parlour_jobs::complete(pool, job.id).await;
+    let text = if result.export.hashes_included {
+        "Nightly backup written, with password and PIN hashes"
+    } else {
+        "Nightly backup written"
+    };
     crate::activity::record(
         pool,
-        crate::activity::Entry::system("export.completed", "Nightly backup written").detail(detail),
+        crate::activity::Entry::system("export.completed", text).detail(detail),
     )
     .await;
 }
@@ -1353,13 +1376,17 @@ async fn download(
     let job = finished_export(&app, &id).await?;
     let gone = || AppError::NotFound("that bundle has been deleted from the server".into());
     let path = match nightly_file_name(&job) {
-        // XFER7: a nightly bundle is read from the backup folder as
-        // configured now, by a name that must look like a backup's.
-        Some(name) => app
-            .backup
+        // XFER7/D39: a nightly bundle is read from the folder its job
+        // wrote it to (the server recorded it on the result; the
+        // setting may have moved since), by a name that must look
+        // like a backup's.
+        Some(name) => job
+            .result
             .as_ref()
+            .and_then(|r| r["folder"].as_str())
+            .filter(|folder| folder.starts_with('/'))
             .filter(|_| crate::backup::is_backup_name(&name))
-            .map(|b| b.dir.join(&name))
+            .map(|folder| Path::new(folder).join(&name))
             .ok_or_else(gone)?,
         None => bundle_path(&app.export_dir, job.id),
     };
@@ -1401,7 +1428,7 @@ async fn delete_bundle(
     let job = finished_export(&app, &id).await?;
     if nightly_file_name(&job).is_some() {
         return Err(AppError::Conflict(
-            "nightly backups are removed by retention (PARLOUR_BACKUP_KEEP), not from here".into(),
+            "nightly backups are removed by retention (the number kept), not from here".into(),
         ));
     }
     match tokio::fs::remove_file(bundle_path(&app.export_dir, job.id)).await {
