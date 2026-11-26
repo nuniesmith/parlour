@@ -905,6 +905,9 @@ pub async fn scan_audiobooks(
         .execute(pool)
         .await?;
     }
+    // A series whose last book left it goes (AB7). Books that went
+    // missing keep their links, as they keep their progress.
+    crate::book_sync::remove_empty_series(pool, library_id).await?;
     Ok(report)
 }
 
@@ -1191,6 +1194,8 @@ async fn rebuild_book(
 
     // Authors, narrators and the book-only fields (AB6).
     crate::book_sync::write_people(pool, item_id, &meta).await?;
+    // Series and the book's place in each (AB7).
+    crate::book_sync::write_series(pool, library_id, item_id, &meta).await?;
     crate::book_sync::write_details(pool, item_id, &meta, Some(&book.sources.fingerprint)).await?;
 
     // The first track, in play order, that carries a picture.

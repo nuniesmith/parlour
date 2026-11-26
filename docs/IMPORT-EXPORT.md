@@ -367,8 +367,9 @@ must be accounted for, and the mirrored CHECK sets must match. A
 migration that adds a table, a column or a value fails that test
 until the format and this doc say where it goes.
 
-At 2026-11-26 the schema has 30 tables (AB6 added `book_metadata`
-and `book_sidecars`), 13 of them carried:
+At 2026-11-26 the schema has 32 tables (AB6 added `book_metadata`
+and `book_sidecars`, AB7 `series` and `book_series`), 13 of them
+carried:
 
 | table | lands in |
 |---|---|
@@ -412,6 +413,7 @@ the Activity feed. The rest of the schema stays on the old host:
 | `book_metadata` | a book's merged book-only fields and its sources fingerprint (AB6); the new host's scan rebuilds them from the book's files and its match |
 | `book_chapters`, `book_progress` | **open — §9** |
 | `book_sidecars` | a book's match, the server's copy of its `book.parlour.json` (AB6): **open — D40, §13.15** |
+| `series`, `book_series` | audiobook series and each book's place in them (AB7); the new host's scan rebuilds them from each book's series folder and tags. Nothing but a scan writes them, so nothing is lost |
 
 ## 9. Proposed — needs the owner's yes: the audio tables
 

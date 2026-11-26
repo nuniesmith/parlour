@@ -154,6 +154,9 @@ pub async fn load_fields(
         language,
         google_books_id: g,
         open_library_id: o,
+        // A match neither reads nor writes series (AB7): they come
+        // from the book's folder and tags at the next scan.
+        series: None,
     }))
 }
 
@@ -191,6 +194,62 @@ pub(crate) async fn write_people(
         }
     }
     Ok(())
+}
+
+/// Replace a book's series links with `f.series` (AB7, D28). Each
+/// series is found by name within the library, without regard to
+/// case, or created; the link carries the sequence and the series'
+/// position in the book's list. A book with no series keeps none.
+pub(crate) async fn write_series(
+    pool: &parlour_db::PgPool,
+    library_id: Uuid,
+    item_id: Uuid,
+    f: &BookFields,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM book_series WHERE item_id = $1")
+        .bind(item_id)
+        .execute(pool)
+        .await?;
+    for (order, entry) in f.series.iter().flatten().enumerate() {
+        let (series_id,): (Uuid,) = sqlx::query_as(
+            "INSERT INTO series (library_id, name, sort_name) VALUES ($1, $2, $3)
+             ON CONFLICT (library_id, lower(name)) DO UPDATE SET name = series.name
+             RETURNING id",
+        )
+        .bind(library_id)
+        .bind(&entry.name)
+        .bind(crate::parse::sort_title(&entry.name))
+        .fetch_one(pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO book_series (item_id, series_id, sequence, sort_order)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT (item_id, series_id) DO NOTHING",
+        )
+        .bind(item_id)
+        .bind(series_id)
+        .bind(&entry.sequence)
+        .bind(order as i32)
+        .execute(pool)
+        .await?;
+    }
+    Ok(())
+}
+
+/// Drop a library's series that no book links to any more (AB7).
+/// Returns how many went.
+pub async fn remove_empty_series(
+    pool: &parlour_db::PgPool,
+    library_id: Uuid,
+) -> Result<u64, sqlx::Error> {
+    let done = sqlx::query(
+        "DELETE FROM series s WHERE s.library_id = $1
+           AND NOT EXISTS (SELECT 1 FROM book_series bs WHERE bs.series_id = s.id)",
+    )
+    .bind(library_id)
+    .execute(pool)
+    .await?;
+    Ok(done.rows_affected())
 }
 
 /// Store a book's book-only fields. `fingerprint` replaces the stored

@@ -20,6 +20,10 @@
 //! `last_listened_at`; writes are last-write-wins. All of that is
 //! provisional until the owner's D29 / D33 (see DECISIONS.md).
 //! No access to a book's library reads as 404, like items.
+//!
+//! AB7 adds each book's `series` (with its sequence) and
+//! `author_refs` (author-page ids); the series and author pages
+//! themselves are `crate::series`.
 
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -40,7 +44,7 @@ fn parse_id(id: &str) -> Result<Uuid, AppError> {
     Uuid::parse_str(id).map_err(|_| AppError::NotFound("no such book".into()))
 }
 
-fn active_profile(user: &AuthUser) -> Result<Uuid, AppError> {
+pub(crate) fn active_profile(user: &AuthUser) -> Result<Uuid, AppError> {
     user.active_profile_id
         .ok_or_else(|| AppError::BadRequest("select a profile first".into()))
 }
@@ -81,7 +85,7 @@ pub struct ProgressDto {
 }
 
 #[derive(FromRow)]
-struct BookRow {
+pub(crate) struct BookRow {
     id: Uuid,
     library_id: Uuid,
     title: String,
@@ -114,6 +118,23 @@ struct BookRow {
     match_provider_id: Option<String>,
     match_mode: Option<String>,
     matched_at: Option<DateTime<Utc>>,
+    author_refs: sqlx::types::Json<Vec<AuthorRefDto>>,
+    series: sqlx::types::Json<Vec<BookSeriesDto>>,
+}
+
+/// An author of a book, with the id of their author page (AB7).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthorRefDto {
+    pub id: Uuid,
+    pub name: String,
+}
+
+/// A series a book sits in, and its place there (AB7, D28).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BookSeriesDto {
+    pub id: Uuid,
+    pub name: String,
+    pub sequence: Option<String>,
 }
 
 /// What an admin's match left on a book (AB6).
@@ -156,6 +177,10 @@ pub struct BookDto {
     /// AB6: the match on record, if an admin matched the book.
     #[serde(rename = "match")]
     pub matched: Option<BookMatchDto>,
+    /// AB7: `authors` with their author-page ids, in the same order.
+    pub author_refs: Vec<AuthorRefDto>,
+    /// AB7: the series the book sits in, in the book's own order.
+    pub series: Vec<BookSeriesDto>,
 }
 
 impl From<BookRow> for BookDto {
@@ -208,6 +233,8 @@ impl From<BookRow> for BookDto {
                 }
                 _ => None,
             },
+            author_refs: r.author_refs.0,
+            series: r.series.0,
         }
     }
 }
@@ -245,10 +272,16 @@ struct BookDetailDto {
 
 // --------------------------------------------------------------- reads
 
-/// The one book query, shared by list and detail: `$1` profile,
-/// `$2` book id or NULL, `$3` library id or NULL, `$4` search text
-/// or NULL, `$5` sort.
-const BOOKS_SQL: &str = "
+/// The one book query, shared by list and detail and by the series
+/// and author pages (AB7): `$1` profile, `$2` book id or NULL, `$3`
+/// library id or NULL, `$4` search text or NULL, `$5` sort, `$6`
+/// series id or NULL (only that series' books, in sequence order),
+/// `$7` author (person) id or NULL (only that author's books).
+///
+/// Sequence order mirrors Audiobookshelf's: the sequence read as a
+/// number (its leading number; text with none reads as 0), books
+/// without a sequence last, then by title.
+pub(crate) const BOOKS_SQL: &str = "
     SELECT i.id, i.library_id, i.title, i.sort_title, i.year, i.overview, i.genres,
            i.available, i.created_at,
            EXISTS (SELECT 1 FROM images im WHERE im.item_id = i.id AND im.kind = 'poster'
@@ -270,12 +303,22 @@ const BOOKS_SQL: &str = "
            bm.subtitle, bm.publisher, bm.isbn, bm.asin, bm.language,
            bm.google_books_id, bm.open_library_id,
            bs.provider AS match_provider, bs.provider_id AS match_provider_id,
-           bs.mode AS match_mode, bs.matched_at
+           bs.mode AS match_mode, bs.matched_at,
+           COALESCE((SELECT json_agg(json_build_object('id', p.id, 'name', p.name)
+                                     ORDER BY ip.sort_order, p.name)
+                     FROM item_people ip JOIN people p ON p.id = ip.person_id
+                     WHERE ip.item_id = i.id AND ip.role = 'author'), '[]'::json) AS author_refs,
+           COALESCE((SELECT json_agg(json_build_object('id', s.id, 'name', s.name,
+                                                       'sequence', l.sequence)
+                                     ORDER BY l.sort_order)
+                     FROM book_series l JOIN series s ON s.id = l.series_id
+                     WHERE l.item_id = i.id), '[]'::json) AS series
     FROM media_items i
     JOIN library_access a ON a.library_id = i.library_id AND a.profile_id = $1
     LEFT JOIN book_progress bp ON bp.item_id = i.id AND bp.profile_id = $1
     LEFT JOIN book_metadata bm ON bm.item_id = i.id
     LEFT JOIN book_sidecars bs ON bs.item_id = i.id
+    LEFT JOIN book_series sl ON sl.item_id = i.id AND sl.series_id = $6
     WHERE i.kind = 'audiobook'
       AND ($2::uuid IS NULL OR i.id = $2)
       AND ($3::uuid IS NULL OR i.library_id = $3)
@@ -283,8 +326,17 @@ const BOOKS_SQL: &str = "
            OR i.title ILIKE '%' || $4 || '%'
            OR EXISTS (SELECT 1 FROM item_people ip JOIN people p ON p.id = ip.person_id
                       WHERE ip.item_id = i.id AND ip.role IN ('author', 'narrator')
-                        AND p.name ILIKE '%' || $4 || '%'))
+                        AND p.name ILIKE '%' || $4 || '%')
+           OR EXISTS (SELECT 1 FROM book_series l JOIN series s ON s.id = l.series_id
+                      WHERE l.item_id = i.id AND s.name ILIKE '%' || $4 || '%'))
+      AND ($6::uuid IS NULL OR sl.series_id IS NOT NULL)
+      AND ($7::uuid IS NULL
+           OR EXISTS (SELECT 1 FROM item_people ip
+                      WHERE ip.item_id = i.id AND ip.person_id = $7 AND ip.role = 'author'))
     ORDER BY
+      CASE WHEN $6::uuid IS NOT NULL AND sl.sequence IS NOT NULL
+           THEN COALESCE(substring(sl.sequence FROM '^ *(-?[0-9]+([.][0-9]+)?)')::numeric, 0)
+      END NULLS LAST,
       CASE WHEN $5::text = 'added' THEN i.created_at END DESC,
       CASE WHEN $5::text = 'recent' THEN bp.last_listened_at END DESC NULLS LAST,
       i.sort_title, i.id";
@@ -296,6 +348,8 @@ async fn load_book(app: &AppState, profile_id: Uuid, book_id: Uuid) -> Result<Bo
         .bind(None::<Uuid>)
         .bind(None::<String>)
         .bind("title")
+        .bind(None::<Uuid>)
+        .bind(None::<Uuid>)
         .fetch_optional(&app.pool)
         .await
         .map_err(AppError::from)?
@@ -339,6 +393,8 @@ async fn list_books(
         .bind(library_id)
         .bind(search)
         .bind(sort)
+        .bind(None::<Uuid>)
+        .bind(None::<Uuid>)
         .fetch_all(&app.pool)
         .await
         .map_err(AppError::from)?;
