@@ -588,6 +588,7 @@ export const JOB_KIND_LABELS: Record<string, string> = {
   detect_segments: 'Segment detection',
   export_bundle: 'Server export',
   import_bundle: 'Server import',
+  refresh_podcasts: 'Podcast feed check',
 };
 
 export function jobKindLabel(kind: string): string {

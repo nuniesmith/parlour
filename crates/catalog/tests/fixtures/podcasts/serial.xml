@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" version="2.0">
+<channel>
+<title>Under the Ice Shelf</title>
+<description>A six-part story told in order.</description>
+<language>en</language>
+<itunes:author>Bo Imaginary &amp; Ada Fictional</itunes:author>
+<itunes:explicit>yes</itunes:explicit>
+<itunes:type>Serial</itunes:type>
+<image><url>https://cdn.example.com/ice-shelf/art.png</url></image>
+<itunes:category text="Fiction"><itunes:category text="Drama"/></itunes:category>
+<item>
+<title>Chapter 2: Whiteout</title>
+<guid>ice-shelf-c2</guid>
+<pubDate>Sat, 07 Nov 2026 05:00:00 +0000</pubDate>
+<enclosure url="https://media.example.com/ice/c2.mp3" length="0" type="audio/mpeg"/>
+<itunes:duration>75:30</itunes:duration>
+<itunes:season>Two</itunes:season>
+<itunes:episode>4a</itunes:episode>
+<itunes:episodeType>full</itunes:episodeType>
+</item>
+<item>
+<title>Chapter 1: Departure</title>
+<guid>ice-shelf-c1</guid>
+<pubDate>Sat, 31 Oct 2026 05:00:00 +0000</pubDate>
+<enclosure url="https://media.example.com/ice/c1.mp3" length="abc" type="audio/mpeg"/>
+<itunes:duration>1:02:03.5</itunes:duration>
+<itunes:season> 1 </itunes:season>
+<itunes:episode>1</itunes:episode>
+</item>
+<item>
+<title>Bonus: Making the Sound of Ice</title>
+<guid>ice-shelf-bonus-1</guid>
+<pubDate>Sun, 08 Nov 2026 05:00:00 +0000</pubDate>
+<enclosure url="https://media.example.com/ice/bonus1.mp3" type="audio/mpeg"/>
+<itunes:duration>1834.75</itunes:duration>
+<itunes:season>1</itunes:season>
+<itunes:episode>-2</itunes:episode>
+<itunes:episodeType>BONUS</itunes:episodeType>
+</item>
+</channel>
+</rss>

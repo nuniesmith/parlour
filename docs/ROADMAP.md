@@ -115,6 +115,8 @@ spec `docs/UI-AUDIO-REFERENCE.md`.)
 **Owner's note (2026-11-23):** the owner added Phases 10–12 and
 asked for Phase 10's first slice (AB1–AB5) to be built along with
 the plan. Podcasts and the client contract are plan only for now.
+(2026-11-26: Phase 11 has started — POD1's schema and POD2's feed
+checks are built.)
 
 ## Growth after that
 New library types (ebooks, music) as catalog + metadata

@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE rss>
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
+  <channel>
+    <title>  Odd   Ends  </title>
+    <itunes:explicit>clean</itunes:explicit>
+    <itunes:type>daily</itunes:type>
+    <!-- No description, author, language or artwork at all. -->
+    <item>
+      <title>No guid at all</title>
+      <pubDate>2026-11-20T08:15:00-05:00</pubDate>
+      <enclosure url="https://media.example.com/odd/no-guid.mp3" length="1000" type="audio/mpeg"/>
+      <itunes:duration></itunes:duration>
+    </item>
+    <item>
+      <title>Empty guid</title>
+      <guid>   </guid>
+      <pubDate>Fri, 20 Nov 2026 07:00:00 EST</pubDate>
+      <enclosure url="https://media.example.com/odd/empty-guid.mp3"/>
+      <itunes:duration>abc</itunes:duration>
+    </item>
+    <item>
+      <title>A blog post, not an episode</title>
+      <guid>odd-post-1</guid>
+      <pubDate>Thu, 19 Nov 2026 07:00:00 +0000</pubDate>
+      <description>No enclosure here.</description>
+    </item>
+    <item>
+      <title>Enclosure without a URL</title>
+      <guid>odd-no-url</guid>
+      <enclosure url="  " type="audio/mpeg"/>
+    </item>
+    <item>
+      <title>Wrong weekday &nbsp;and an HTML entity</title>
+      <guid>odd-3</guid>
+      <pubDate>Mon, 18 Nov 2026 07:00:00 +0000</pubDate>
+      <enclosure url="https://media.example.com/odd/3.mp3" length="-5"/>
+      <itunes:duration>0</itunes:duration>
+    </item>
+    <item>
+      <title>Same guid again (a feed glitch)</title>
+      <guid>odd-3</guid>
+      <pubDate>Tue, 17 Nov 2026 07:00:00 BST</pubDate>
+      <enclosure url="https://media.example.com/odd/3-dupe.mp3"/>
+      <itunes:duration>12:34:56:78</itunes:duration>
+    </item>
+    <item>
+      <title>Undated</title>
+      <guid>odd-4</guid>
+      <pubDate>sometime last week</pubDate>
+      <enclosure url="https://media.example.com/odd/4.mp3"/>
+      <itunes:duration>1:2:x</itunes:duration>
+    </item>
+    <item>
+      <guid>odd-5</guid>
+      <itunes:title>Only an iTunes title</itunes:title>
+      <pubDate>16 Nov 2026 07:00 +0000</pubDate>
+      <enclosure url="https://media.example.com/odd/5.mp3"/>
+    </item>
+  </channel>
+</rss>

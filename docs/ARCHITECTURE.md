@@ -134,7 +134,9 @@ The owner uses subtitles on most playback.
   `podcasts` / `podcast_episodes` tables inside a `podcasts` library,
   reached through the same per-library grants. Episode progress
   shares `book_progress` with books (D29). See
-  `AUDIOBOOKS-PODCASTS.md`, "Schema (POD1)".
+  `AUDIOBOOKS-PODCASTS.md`, "Schema (POD1)". The rows are filled
+  from the feed by a `refresh_podcasts` job on the Postgres queue,
+  not by the scanner (POD2, "Feed fetch and parse (POD2)").
 - Segments (Phase 9, D15): `media_segments` holds intro / credits /
   recap spans per item — one row per (item, kind, source), sources
   `chapters`, `fingerprint`, `manual`, `heuristic`, each with a 0–1
