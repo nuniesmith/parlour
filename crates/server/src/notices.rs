@@ -72,24 +72,20 @@ impl Severity {
 #[derive(Debug, Clone, Default)]
 pub struct NoticeSettings {
     pub write_dirs: Vec<(String, PathBuf)>,
+    /// XFER7/D39: the environment's nightly backup default. The
+    /// folder in force (the saved setting, or this) joins the
+    /// free-space check as `backups`, read at each pass.
+    pub backup: Option<crate::backup::BackupSettings>,
 }
 
 impl NoticeSettings {
     pub fn from_config(config: &crate::config::Config) -> Self {
         Self {
-            write_dirs: [
+            write_dirs: vec![
                 ("cache".to_string(), config.cache_dir.clone()),
                 ("artwork".to_string(), config.artwork_dir.clone()),
-            ]
-            .into_iter()
-            // XFER7: the nightly backup folder, when one is set.
-            .chain(
-                config
-                    .backup_dir
-                    .clone()
-                    .map(|dir| ("backups".to_string(), dir)),
-            )
-            .collect(),
+            ],
+            backup: crate::backup::BackupSettings::from_config(config),
         }
     }
 }
@@ -246,9 +242,13 @@ pub async fn reconcile(
     pool: &parlour_db::PgPool,
     settings: &NoticeSettings,
 ) -> Result<(), sqlx::Error> {
+    let backup = crate::backup::effective(pool, settings.backup.as_ref())
+        .await?
+        .map(|b| ("backups".to_string(), b.dir));
     let disks: Vec<DiskReading> = settings
         .write_dirs
         .iter()
+        .chain(backup.iter())
         .map(|(label, path)| DiskReading {
             label: label.clone(),
             path: path.clone(),

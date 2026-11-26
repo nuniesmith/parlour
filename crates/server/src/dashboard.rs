@@ -29,10 +29,6 @@ pub struct ServerSettings {
     pub url_lan: Option<String>,
     pub url_tailnet: Option<String>,
     pub url_public: Option<String>,
-    /// XFER7: the nightly backup folder (`PARLOUR_BACKUP_DIR`; `None`
-    /// = no backups) and how many bundles are kept.
-    pub backup_dir: Option<String>,
-    pub backup_keep: u32,
 }
 
 impl Default for ServerSettings {
@@ -43,8 +39,6 @@ impl Default for ServerSettings {
             url_lan: None,
             url_tailnet: None,
             url_public: None,
-            backup_dir: None,
-            backup_keep: crate::backup::DEFAULT_KEEP,
         }
     }
 }
@@ -57,8 +51,6 @@ impl ServerSettings {
             url_lan: config.url_lan.clone(),
             url_tailnet: config.url_tailnet.clone(),
             url_public: config.url_public.clone(),
-            backup_dir: config.backup_dir.as_ref().map(|d| d.display().to_string()),
-            backup_keep: config.backup_keep,
         }
     }
 }
@@ -70,13 +62,17 @@ struct AccessUrls {
     public: Option<String>,
 }
 
-/// XFER7: nightly backups as configured (read-only, like the rest
-/// of the General page).
+/// XFER7: nightly backups as they stand. D39: set on Server →
+/// Import/Export (`/api/v1/admin/backup`); shown here read-only.
 #[derive(Debug, Serialize)]
 struct Backups {
     /// `null` when nightly backups are off.
     folder: Option<String>,
     keep: u32,
+    /// Whether nightly bundles carry password and PIN hashes.
+    include_hashes: bool,
+    /// `saved` (set in the web UI) or `environment` (the default).
+    source: crate::backup::Source,
 }
 
 #[derive(Debug, Serialize)]
@@ -145,6 +141,28 @@ async fn server_info(
     } else {
         None
     };
+    let saved = if db_ok {
+        crate::backup::saved(&state.pool).await.unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "dashboard: backup setting unreadable");
+            None
+        })
+    } else {
+        None
+    };
+    let current = crate::backup::resolve(saved.as_ref(), state.backup.as_ref());
+    let backups = Backups {
+        folder: current.as_ref().map(|b| b.dir.display().to_string()),
+        keep: current
+            .as_ref()
+            .map(|b| b.keep)
+            .unwrap_or(crate::backup::DEFAULT_KEEP),
+        include_hashes: current.as_ref().is_some_and(|b| b.include_hashes),
+        source: if saved.is_some() {
+            crate::backup::Source::Saved
+        } else {
+            crate::backup::Source::Environment
+        },
+    };
     let s = &state.server;
     Ok(Json(ServerInfo {
         name: s.name.clone(),
@@ -156,10 +174,7 @@ async fn server_info(
             tailnet: s.url_tailnet.clone(),
             public: s.url_public.clone(),
         },
-        backups: Backups {
-            folder: s.backup_dir.clone(),
-            keep: s.backup_keep,
-        },
+        backups,
         jobs,
         actions: Actions {
             restart: false,

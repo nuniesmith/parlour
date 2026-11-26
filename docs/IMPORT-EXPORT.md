@@ -345,9 +345,11 @@ a warning (D14).**
   - the database URL and its password;
   - the first-admin bootstrap password.
 
-  These live only in the environment. There is no settings table:
-  config is environment-only, which is why UI6's General page is
-  read-only. No type in the format has a field that could hold one.
+  These live only in the environment. Config is environment-only,
+  which is why UI6's General page is read-only; the one exception is
+  the nightly backup setting (D39, §16.4), which holds no secret and
+  stays out of the bundle. No type in the format has a field that
+  could hold a secret.
 - **Session tokens and invite tokens:** their tables stay behind (§8).
 - **A future settings table:** if runtime settings ever move into the
   database, their secrets stay out too. Their non-secret settings
@@ -397,6 +399,8 @@ the Activity feed. The rest of the schema stays on the old host:
 | `audio_fingerprints` | a cache keyed by file content; segment detection rebuilds it |
 | `item_sidecars` | what this host's scanner last read from the sidecar files (§13); the new host reads the files |
 | `sidecar_artwork` | which `poster.jpg` / `backdrop.jpg` files this host wrote beside its own media (§13.10) |
+| `item_nfos`, `sidecar_nfos` | what this host's scanner last read from `.nfo` files, and which ones it wrote (§13.13) |
+| `backup_settings` | this host's nightly backup folder, count and hash choice (D39, §16.4): a server setting, and the new host's folders are its own |
 | `_sqlx_migrations` | the new host keeps its own ledger |
 | `book_chapters`, `book_progress` | **open — §9** |
 
@@ -532,9 +536,10 @@ route):
   - adds an `export.completed` or `export.failed` Activity row by the
     requesting admin. A completed row's summary says when hashes
     went in.
-- **The Jobs page** offers "Export the server" under *Run now*. It
-  has one option, the artwork opt-in, and shows the estimate as its
-  size warning. A finished export's row has **Download** and
+- **The Jobs page** offered "Export the server" under *Run now*, with
+  the artwork opt-in only. Since XFER8 the export is started on
+  Server → Import/Export (§16.2), which owns the hashes warning. A
+  finished export's row on the Jobs page still has **Download** and
   **Delete from server**, and is marked when the bundle holds hashes.
 - **Order:** this is the order the notes asked for. Names compare
   byte by byte, so uppercase sorts before lowercase.
@@ -1598,6 +1603,15 @@ where they don't spell the detail out.
   setting shown on Server → General; `web/src/routes/admin/jobs/` —
   the "Nightly backup" row. Unit tests in `backup.rs` and `config.rs`
   (run in CI).
+- **XFER8:** `web/src/routes/admin/import-export/+page.svelte` (the
+  page) and `web/src/lib/ImportReport.svelte` (the report);
+  `crates/server/src/backup.rs` — the saved setting
+  (`saved` / `resolve` / `effective`) and `GET`/`PUT`/`DELETE
+  /api/v1/admin/backup`; `crates/server/src/sidecars.rs` — the
+  sidecar summary; `import/mod.rs` — the uploads list;
+  `catalog.rs` + `crates/jobs` — the jobs `kind` filter. Migration
+  `20261128000000_backup_settings.sql`. Unit tests in `backup.rs`,
+  `import/tests.rs` and `crates/jobs` (run in CI).
 - **Fixtures:** `crates/server/tests/fixtures/bundle-v1/`;
   `crates/catalog/tests/fixtures/sidecar-v1/`;
   `crates/catalog/tests/fixtures/nfo/`.
@@ -1667,6 +1681,25 @@ where they don't spell the detail out.
     next night (not the same day). The bundle the nightly job wrote
     imports through §12 into a fresh database with the same users,
     profiles and watch history.
+  - `tests/import_export_page_flow.rs` (XFER8), through the page's
+    endpoints, and the Phase 8 acceptance: every endpoint the page
+    uses is a 404 to a non-admin and a 401 signed out. The source is
+    exported with hashes from the page and found on its job list; a
+    fresh install (a database the test creates) uploads it, lists it
+    as waiting, and reads a dry run that shows D38's take-over and the
+    counts and changes nothing; a hash-less bundle shows D37's locked
+    account before apply and is deleted from the page. Apply, with a
+    replacement folder, reports exactly what the dry run said and
+    deletes the upload; the target then exports the same users,
+    profiles and watch history as the source, and the old passwords
+    work. A later bundle shows and does a create, an update and a
+    conflict. Sidecar status follows the opt-in, the folder check and
+    the notice, and counts the ledgers. Backup settings round-trip;
+    saved off beats the environment, nothing saved and no environment
+    queues nothing, a saved folder beats the environment's, hashes go
+    in only when turned on (and not if turned off before the job runs),
+    the earlier nights still download after the folder changes, the
+    reset brings the environment back, and every change is audited.
 
 ## 15. Nightly backups (XFER7)
 
@@ -1686,9 +1719,10 @@ snapshot, the same documents, the same order, the same checks. The
 only differences are where the zip goes, what it is called, and the
 retention step after it.
 
-**The setting.** Like every other setting, it is environment-only
-(there is no settings table, §6), so it is set in the server's
-`.env` and takes effect at the next start:
+**The setting.** As built in XFER7 it was environment-only, set in
+the server's `.env` and taking effect at the next start. **Since D39
+(XFER8) it is set on Server → Import/Export (§16.4)**; the variables
+below are the bootstrap default until an admin saves it there:
 
 | variable | meaning | when unset |
 |---|---|---|
@@ -1841,3 +1875,236 @@ notes where they don't spell it out:
 7. **Nightly bundles can be downloaded from the Jobs page but not
    deleted there**; retention owns them. Manual exports keep their
    Download / Delete.
+
+**Superseded in part by D39 (XFER8, §16):** the setting is no longer
+environment-only. It is set on Server → Import/Export and stored in
+`backup_settings`; `PARLOUR_BACKUP_DIR` / `PARLOUR_BACKUP_KEEP` are the
+bootstrap default until an admin saves it. Reading 1 above is replaced
+by that, reading 4's "no hashes" now means "no hashes unless the admin
+turned them on there", and reading 7's Download now reads from the
+folder the job wrote to (§16.4). The rest of §15 stands.
+
+## 16. Server → Import/Export (XFER8)
+
+Built 2026-11-25 to D14, D25, D37, D38 and **D39** (decided 2026-11-25,
+recorded in `docs/DECISIONS.md`), with format v1 as it stands. The §9
+audio proposal (D36) is still open, so nothing here carries
+`book_progress` or `book_chapters`. This section sits after §15
+because the page is the admin surface over §11, §12, §13.10–§13.12 and
+§15: it adds no export, import or sidecar logic of its own.
+
+**The page** is `/admin/import-export` (UI6 put it in the Server tree;
+`web/src/routes/admin/import-export/+page.svelte`). It has four parts,
+in this order: Export, Import, Nightly backups, Metadata files beside
+the media.
+
+### 16.1 The endpoints it uses
+
+All admin-only: anyone else gets a 404, and nobody signed in a 401.
+
+| part | endpoint | new in XFER8? |
+|---|---|---|
+| Export | `GET /api/v1/admin/export/estimate`, `POST /api/v1/admin/export`, `…/{job}/download`, `DELETE …/{job}` | no (§11) |
+| Export, backups, imports | `GET /api/v1/admin/jobs?kind=export_bundle` / `?kind=import_bundle` | **the `kind` filter**: one job kind only; an unknown kind is a 400 |
+| Import | `POST /api/v1/admin/import`, `…/{id}/dry-run`, `…/{id}/apply`, `DELETE …/{id}` | no (§12) |
+| Import | `GET /api/v1/admin/import` | **yes**: the uploads waiting here (`{id, bytes, uploaded_at}`, newest first). Only finished `<uuid>.zip` uploads; a `.part` still arriving or a job's staging folder isn't one |
+| Nightly backups | `GET` / `PUT` / `DELETE /api/v1/admin/backup` | **yes** (§16.4) |
+| Metadata files | `GET /api/v1/admin/sidecars` | **yes** (§16.5) |
+
+The switch for writing sidecars stays where XFER5 put it:
+`PUT /api/v1/admin/libraries/{id}/write-sidecars`, from Server → Library.
+
+### 16.2 Export
+
+- **Options:** artwork (with §11's estimate as its size warning) and
+  **password and PIN hashes**. Both off whenever the page loads.
+- **The hashes warning (§6, D14).** Ticking hashes shows the warning
+  in the page, in red, and turns the button into "Export with
+  hashes…". Pressing it asks once more in a confirm dialog that
+  repeats the warning. Only then does the page send
+  `include_hashes: true`. After the export starts the box is unticked
+  again, so the next export is hash-free unless asked again.
+- **Bundles on this server:** the manual export jobs, newest first,
+  with Download / Delete from server, a red "holds password and PIN
+  hashes" chip, an "artwork" chip, progress while running and the
+  error when failed. Nightly bundles are listed under Nightly backups
+  instead.
+
+### 16.3 Import
+
+1. **Upload and check.** The admin picks a `.zip`; the page streams it
+   to `POST /api/v1/admin/import` and renders the dry run that comes
+   back. Uploads that are still waiting (from an earlier visit, or a
+   failed apply) are listed with **Check** (re-runs the dry run) and
+   **Delete**.
+2. **The report** (`web/src/lib/ImportReport.svelte`) renders §12's
+   `Report` as it is, with no second calculation:
+   - the bundle's origin: server version, export time, format version,
+     and a chip for hashes (red) or "no password hashes";
+   - **"Before you apply"**, a bordered box at the top, shown whenever
+     any of these hold:
+     - **D38:** for each `adopt`, "This server's first admin account,
+       "jordan", was never used, so "jordan" from the bundle takes it
+       over", whether it then signs in with the old password
+       (`from_bundle`) or keeps the one it has (`kept`);
+     - **D37:** when any account's `sign_in` is `locked`, how many and
+       which will have no usable password until an admin sets one
+       under Server → Users (linked), and that PIN'd profiles get an
+       unknown PIN;
+     - user conflicts: how many accounts are skipped, with what;
+     - the total number of conflicts;
+   - **Accounts:** username, what happens (new / already here / takes
+     over the first admin / conflict — skipped), how it signs in
+     afterwards, and the report's note;
+   - **Libraries:** what happens, the old host's folders and whether
+     each exists here, and the folders the import adds. Each library
+     that isn't a conflict has a box for **folders on this server
+     instead** (one per line). **Check again with these folders**
+     re-runs the dry run with them as §12's `library_paths`;
+   - **Everything else:** one row per tally (profiles, library access,
+     catalog items, people, credits, segments, images, artwork files,
+     watch history, recent searches, Activity) with New / Updated /
+     Already here / Skipped, plus the provider-id match count;
+   - **Conflicts** (what, key, reason; "…and N more" past the 500
+     listed) and the report's **notes**.
+3. **Apply import…** asks for confirmation (it repeats the locked
+   count and the conflict count), then sends the same folders to
+   `…/apply`. The page follows the job; when it succeeds the upload is
+   gone (§12 deletes it), the page says to scan the imported
+   libraries, and the result appears under **Recent imports**,
+   rendered with the same component ("What happened" instead of
+   "Before you apply"). A failed apply says nothing changed and keeps
+   the upload.
+
+### 16.4 Nightly backups (D39)
+
+**The setting lives in the web UI.** The form has the folder, how many
+to keep (1–365), and "Include password and PIN hashes". Saving sends
+`PUT /api/v1/admin/backup` `{"folder": …, "keep": …, "include_hashes": …}`
+(strict: an unknown field is refused). The answer, and `GET`, is the
+setting in force:
+
+```
+{ "source": "saved" | "environment", "folder": "/backups" | null,
+  "keep": 7, "include_hashes": false,
+  "folder_problem": null | "the backup folder … doesn't exist (…)",
+  "updated_at": …, "updated_by": "jordan",
+  "environment": { "folder": … | null, "keep": 7 } }
+```
+
+- **Stored server-side** in `backup_settings`, one row at most
+  (migration `20261128000000_backup_settings.sql`).
+- **The environment is the bootstrap default.** With no row,
+  `PARLOUR_BACKUP_DIR` / `PARLOUR_BACKUP_KEEP` apply as in §15, never
+  with hashes. Once an admin saves, the row is what counts, folder and
+  all: a saved blank folder is **off even if the environment sets
+  one**. **Use the environment default** (`DELETE`) forgets the row.
+- **Unset folder = no nightly backup queued**, whichever way it is
+  unset. Parlour never picks a folder.
+- **Read fresh, no restart.** The nightly check, the export worker,
+  the Download, the free-space notice (§15) and the Dashboard all read
+  the setting in force when they run (`backup::effective`).
+- **Checks:** the folder must be absolute, as for the environment
+  variable (400 otherwise; blank means off); keep is 1–365. A folder
+  that doesn't exist or can't be written **is saved** — a backup disk
+  may simply not be mounted yet — and the page shows "Tonight's backup
+  would fail: …" with the nightly job's own message (§15's check).
+  Parlour still never creates it.
+- **Hashes (D14/D25/D39).** Off by default and off for the environment
+  default. Ticking the box shows the same warning as the export, and
+  saving with it newly on asks for confirmation first. A nightly job
+  carries hashes only if the setting had them on when the job was
+  queued (its payload says so) **and** still has them on when it runs;
+  turning them off in between wins. A nightly bundle with hashes is
+  marked on its job ("holds password and PIN hashes") and in the
+  Activity feed ("Nightly backup written, with password and PIN
+  hashes").
+- **Audit:** every save and reset is an Activity row,
+  `export.backup_settings`, by the admin (under "Exports"), with the
+  folder, keep and hash choice.
+- **Recent nights:** the last seven nightly jobs, with Download (no
+  Delete: retention owns them), "Removed by retention", or the error.
+- **Download** reads a nightly bundle from the folder its job recorded
+  on its result (the server wrote it there), not from the folder set
+  now, so changing the folder doesn't orphan older nights. The name
+  must still look like a nightly bundle's.
+- **Server → General** no longer lists the two variables as its own
+  settings; it says whether nightly backups are on, where, how many,
+  whether with hashes, and links here.
+- **Nothing is switched on by this task.** No folder is set on any
+  host; a backup exists only once an admin saves a folder here (or
+  sets the variable).
+
+### 16.5 Metadata files beside the media
+
+`GET /api/v1/admin/sidecars`, one row per library, from what already
+exists — no second accounting and no walk of the disk:
+
+| field | from |
+|---|---|
+| `supported` | whether the kind gets sidecars (`movies`, `shows`; audiobooks wait for AB6) |
+| `write_sidecars` | XFER5's opt-in |
+| `folders[]` | each root and whether it can be written now (XFER5's `access(2)` check) |
+| `unwritable_notice` | whether XFER5's "can't write" notice is up |
+| `items` | available movies, series and episodes (what a sidecar can belong to) |
+| `sidecars`, `sidecars_overridden` | rows in `item_sidecars` (read by a scan or written by a match), and those a fix-match overrode |
+| `nfos_read`, `nfos_written` | rows in `item_nfos`, `sidecar_nfos` |
+| `artwork_written` | rows in `sidecar_artwork` |
+
+The page shows Writing as "Off — Parlour only reads", "On", "On, but a
+folder can't be written" (red) or "Not for this kind of library yet",
+each folder as writable or not (with the reason), and links to Server →
+Library for the switch.
+
+### 16.6 What else changed
+
+- **Server → Jobs** no longer has the "Export the server" form; it
+  says exports, imports and nightly backups are started on Import /
+  Export and links there. Finished export, import and backup jobs
+  still appear there with Download / Delete as before, and in the
+  Activity feed.
+- **§8:** `backup_settings` stays behind (a server setting, not state;
+  the new host's folders are its own). §6's "future settings table"
+  rule applies: if any of its fields ever joins the bundle, that is a
+  decision for the owner.
+
+### 16.7 Readings made in XFER8 — for the owner's veto
+
+None is a new decision beyond D39. Each is how this build read D14,
+D25, D37, D38, D39, the TODO or these notes where they don't spell it
+out:
+
+1. **The Jobs page loses its export form.** One place owns the hashes
+   warning (§11's reading 3 deferred it here); two export forms, one
+   without the option, would only confuse. Its rows keep Download /
+   Delete.
+2. **The dry run renders the report as it is**, with D38's take-over
+   and D37's no-password line in a "Before you apply" box above the
+   tables, and the apply asks for confirmation repeating the locked
+   and conflict counts.
+3. **Waiting uploads are listed** (new `GET /api/v1/admin/import`) so a
+   reload or a failed apply doesn't strand an upload that may hold
+   hashes; each can be checked again or deleted.
+4. **Replacement folders are typed per library** in the report and
+   sent as §12's `library_paths`; "Check again" re-runs the dry run
+   with them before apply.
+5. **Sidecar status counts the existing ledgers** (`item_sidecars`,
+   `item_nfos`, `sidecar_nfos`, `sidecar_artwork`) against available
+   movies, series and episodes; the switch stays on Server → Library
+   behind XFER5's confirm.
+6. **Backup settings: a saved row wins whole.** A saved blank folder is
+   off even if the environment sets one; "Use the environment default"
+   deletes the row. The environment never turns hashes on.
+7. **A folder that doesn't exist or can't be written is saved anyway**,
+   with the nightly job's own warning shown on the page — an unmounted
+   backup disk shouldn't block setting it up.
+8. **Nightly hashes need both the queued payload and the setting at run
+   time**, so turning them off always wins.
+9. **A nightly Download reads from the folder its job wrote to**, not
+   the folder set now (replaces §15's reading 7 detail).
+10. **Backup setting changes are audited** as `export.backup_settings`
+    Activity rows under "Exports".
+11. **`backup_settings` is not in the bundle** (§6: non-secret settings
+    need a decision before they join it).
+12. **The audio proposal (§9, D36) is still open.** Nothing here
+    carries audiobook progress or chapters.

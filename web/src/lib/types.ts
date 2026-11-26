@@ -368,8 +368,15 @@ export interface ServerInfo {
   port: number;
   db: 'ok' | 'unreachable';
   urls: { lan: string | null; tailnet: string | null; public: string | null };
-  /** XFER7: nightly backups (`folder` null = off). */
-  backups: { folder: string | null; keep: number };
+  /** XFER7: nightly backups (`folder` null = off). D39: set on
+   *  Server → Import/Export; `source` says whether an admin saved it
+   *  or it is still the environment's default. */
+  backups: {
+    folder: string | null;
+    keep: number;
+    include_hashes: boolean;
+    source: 'saved' | 'environment';
+  };
   jobs: {
     queued: number;
     running: number;
@@ -439,6 +446,112 @@ export interface ExportEstimate {
   /** Cached images whose file is gone or can't be named; they
    *  travel as provider references only. */
   artwork_unavailable: number;
+}
+
+/** XFER8 / D39: the nightly backup setting (`GET /api/v1/admin/backup`). */
+export interface BackupSettingsView {
+  /** `saved` = set on Server → Import/Export; `environment` = nothing
+   *  saved yet, so PARLOUR_BACKUP_DIR / _KEEP apply. */
+  source: 'saved' | 'environment';
+  /** null = nightly backups are off. */
+  folder: string | null;
+  keep: number;
+  include_hashes: boolean;
+  /** Why the folder can't take a bundle right now; null when it can. */
+  folder_problem: string | null;
+  updated_at: string | null;
+  updated_by: string | null;
+  environment: { folder: string | null; keep: number };
+}
+
+/** XFER8: one library's sidecar status (`GET /api/v1/admin/sidecars`),
+ *  from the ledgers XFER4–XFER6 already keep. */
+export interface LibrarySidecars {
+  id: string;
+  name: string;
+  kind: string;
+  supported: boolean;
+  write_sidecars: boolean;
+  folders: FolderAccess[];
+  unwritable_notice: boolean;
+  items: number;
+  sidecars: number;
+  sidecars_overridden: number;
+  nfos_read: number;
+  nfos_written: number;
+  artwork_written: number;
+}
+
+/** XFER8: an uploaded bundle waiting for its dry run and apply. */
+export interface PendingUpload {
+  id: string;
+  bytes: number;
+  uploaded_at: string | null;
+}
+
+/** XFER3's import report (`import::Report`): the dry run's answer and
+ *  the apply job's result. */
+export interface ImportTally {
+  created: number;
+  updated: number;
+  existing: number;
+  skipped: number;
+}
+
+export interface ImportPath {
+  path: string;
+  exists_here: boolean;
+}
+
+export interface ImportReport {
+  dry_run: boolean;
+  manifest: {
+    format: string;
+    format_version: number;
+    server_version: string;
+    exported_at: string;
+    hashes_included: boolean;
+    artwork_included: boolean;
+  };
+  users: {
+    username: string;
+    is_admin: boolean;
+    action: 'create' | 'existing' | 'adopt' | 'conflict';
+    sign_in: 'from_bundle' | 'locked' | 'kept' | 'none';
+    existing_username: string | null;
+    note: string | null;
+  }[];
+  libraries: {
+    name: string;
+    kind: string;
+    action: 'create' | 'existing' | 'conflict';
+    bundle_paths: ImportPath[];
+    paths_added: ImportPath[];
+    note: string | null;
+  }[];
+  conflicts: { what: string; key: string; reason: string }[];
+  conflicts_total: number;
+  profiles: ImportTally;
+  access: ImportTally;
+  items: ImportTally;
+  items_matched_by_provider_id: number;
+  people: ImportTally;
+  credits: ImportTally;
+  segments: ImportTally;
+  images: ImportTally;
+  artwork_files: ImportTally;
+  watch_state: ImportTally;
+  recent_searches: ImportTally;
+  activity: ImportTally;
+  notes: string[];
+}
+
+/** An import job's result is the report; anything else isn't. */
+export function asImportReport(value: unknown): ImportReport | null {
+  const r = value as Partial<ImportReport> | null;
+  return r && typeof r === 'object' && r.manifest && Array.isArray(r.users)
+    ? (r as ImportReport)
+    : null;
 }
 
 export function formatBytes(n: number): string {

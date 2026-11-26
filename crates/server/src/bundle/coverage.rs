@@ -432,6 +432,11 @@ pub const SCHEMA: &[Table] = &[
               media mounts are its own",
     },
     Table::LeftOut {
+        name: "backup_settings",
+        why: "this host's nightly backup folder, count and hash choice (D39, XFER8); a \
+              server setting, not state, and the new host's folders are its own",
+    },
+    Table::LeftOut {
         name: "_sqlx_migrations",
         why: "the new host keeps its own migration ledger",
     },

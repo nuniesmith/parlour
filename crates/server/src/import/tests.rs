@@ -222,3 +222,19 @@ async fn an_upload_over_the_limit_is_refused() {
     assert!(err.to_string().contains("larger than 1000 bytes"), "{err}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn only_finished_uploads_are_listed_as_pending() {
+    let id = Uuid::new_v4();
+    assert_eq!(pending_id(&format!("{id}.zip")), Some(id));
+    // Still arriving, a job's staging folder, or not an upload at all.
+    assert_eq!(pending_id(&format!("{id}.zip.part")), None);
+    assert_eq!(pending_id(&format!("{id}.artwork")), None);
+    assert_eq!(pending_id("parlour-export-20261125-073000.zip"), None);
+    // Only the canonical spelling the upload writes.
+    assert_eq!(
+        pending_id(&format!("{}.zip", id.to_string().to_uppercase())),
+        None
+    );
+    assert_eq!(pending_id(&format!("{}.zip", id.simple())), None);
+}
