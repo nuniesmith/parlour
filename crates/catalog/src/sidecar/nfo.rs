@@ -345,6 +345,9 @@ fn root_name(kind: SidecarKind) -> &'static str {
         SidecarKind::Movie => "movie",
         SidecarKind::Series => "tvshow",
         SidecarKind::Episode => "episodedetails",
+        // Parlour writes no NFO beside a book (AB6): Audiobookshelf's
+        // book NFO is a different, `key: value` format, read only.
+        SidecarKind::Audiobook => "audiobook",
     }
 }
 

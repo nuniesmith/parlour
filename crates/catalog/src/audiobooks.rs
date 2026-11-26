@@ -22,8 +22,17 @@
 //! only `probe_audio` runs ffprobe and only `scan_audiobooks` touches
 //! the database.
 //!
+//! AB6 (D30): a book's metadata is merged from its local sources in
+//! the library's precedence order (`book_meta`): the folder, the
+//! first track's tags, an `.nfo`, `desc.txt` / `reader.txt`, an
+//! `.opf`, Audiobookshelf's `metadata.json`, and Parlour's own
+//! `book.parlour.json` (or the server's copy of it a match left,
+//! `book_sync`). A book with no folder image gets its embedded cover
+//! art, extracted into the artwork cache.
+//!
 //! A book whose files are all unchanged (same paths, sizes and
-//! mtimes as stored) is skipped without probing. When any file of a
+//! mtimes as stored), and whose metadata files and the library's
+//! precedence are unchanged too, is skipped without probing. When any file of a
 //! book is new, changed or gone, every track of that book is probed
 //! again and the book's metadata, track order and chapters are
 //! rebuilt from scratch — book-level facts come from all tracks
@@ -39,6 +48,7 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use uuid::Uuid;
 
+use crate::book_meta::{BookFields, BookSourceFiles, BookSources, MetadataSource};
 use crate::parse::sort_title;
 use crate::scan::{mark_missing, ScanReport};
 
@@ -68,12 +78,26 @@ pub struct DiscoveredAudio {
     pub mtime: SystemTime,
 }
 
+/// A file that may be a book's metadata source (AB6).
+#[derive(Debug, Clone)]
+pub struct SourceFile {
+    pub name: String,
+    pub abs_path: String,
+    pub size_bytes: u64,
+    /// Modification time, µs since the epoch.
+    pub mtime_us: i64,
+}
+
 #[derive(Debug, Default)]
 pub struct AudioWalk {
     pub files: Vec<DiscoveredAudio>,
     /// Folder (relative, `""` for the root) -> absolute path of its
     /// cover image, the first of `COVER_NAMES` present.
     pub covers: HashMap<String, String>,
+    /// Folder (relative) -> its possible metadata sources (`.nfo`,
+    /// `.opf`, `desc.txt`, `reader.txt`, `metadata.json`,
+    /// `*.parlour.json`), sorted by name.
+    pub sources: HashMap<String, Vec<SourceFile>>,
     pub errors: Vec<String>,
 }
 
@@ -145,6 +169,22 @@ pub fn walk_audio(root: &Path) -> AudioWalk {
                 }
                 continue;
             }
+            if crate::book_meta::is_source_name(&name) {
+                let folder = rel
+                    .rsplit_once('/')
+                    .map(|(d, _)| d.to_string())
+                    .unwrap_or_default();
+                if let Ok(meta) = std::fs::metadata(&path) {
+                    out.sources.entry(folder).or_default().push(SourceFile {
+                        name: name.clone(),
+                        abs_path: path.to_string_lossy().to_string(),
+                        size_bytes: meta.len(),
+                        mtime_us: mtime_utc(meta.modified().unwrap_or(SystemTime::UNIX_EPOCH))
+                            .timestamp_micros(),
+                    });
+                }
+                continue;
+            }
             if !AUDIO_EXTENSIONS.contains(&extension(&path).as_str()) {
                 continue;
             }
@@ -162,6 +202,9 @@ pub fn walk_audio(root: &Path) -> AudioWalk {
         }
     }
     out.files.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+    for list in out.sources.values_mut() {
+        list.sort_by(|a, b| a.name.cmp(&b.name));
+    }
     out.covers = covers.into_iter().map(|(k, (_, v))| (k, v)).collect();
     out
 }
@@ -297,9 +340,19 @@ pub struct AudioStream {
     pub is_default: bool,
 }
 
+/// Cover art embedded in an audio file: a picture stream (the
+/// "attached picture" ID3/MP4 covers arrive as).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CoverStream {
+    pub index: i32,
+    pub codec: Option<String>,
+}
+
 /// What ffprobe says about one audio file.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct AudioProbe {
+    /// Embedded cover art, the first picture stream (AB6).
+    pub cover: Option<CoverStream>,
     pub container: Option<String>,
     pub duration_ms: Option<i64>,
     /// Format tags with lowercased keys, then the first audio
@@ -388,7 +441,28 @@ pub fn parse_audio_probe_json(json: &str) -> Result<AudioProbe, String> {
     let mut stream_tags_merged = false;
     for s in out.streams.unwrap_or_default() {
         if s.codec_type.as_deref() != Some("audio") {
-            continue; // cover art arrives as a one-frame "video" stream
+            // Cover art arrives as a one-frame "video" stream: an
+            // attached picture, or a still-image codec.
+            let attached = s
+                .disposition
+                .as_ref()
+                .and_then(|d| d.get("attached_pic"))
+                .copied()
+                == Some(1);
+            let still = matches!(
+                s.codec_name.as_deref(),
+                Some("mjpeg" | "png" | "bmp" | "gif" | "webp")
+            );
+            if s.codec_type.as_deref() == Some("video")
+                && (attached || still)
+                && probe.cover.is_none()
+            {
+                probe.cover = Some(CoverStream {
+                    index: s.index,
+                    codec: s.codec_name.clone(),
+                });
+            }
+            continue;
         }
         let tags = lower_tags(s.tags);
         if !stream_tags_merged {
@@ -497,83 +571,12 @@ pub fn split_genres(value: &str) -> Vec<String> {
         .collect()
 }
 
-fn year_of(value: &str) -> Option<i32> {
-    let v = value.trim();
-    let y: i32 = v.get(0..4)?.parse().ok()?;
-    (1000..=2999).contains(&y).then_some(y)
-}
-
 fn file_stem(rel_path: &str) -> String {
     let name = rel_path.rsplit('/').next().unwrap_or(rel_path);
     name.rsplit_once('.')
         .map(|(s, _)| s)
         .unwrap_or(name)
         .to_string()
-}
-
-/// Book-level facts, from the tracks' tags and the folder layout.
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct BookMeta {
-    pub title: String,
-    pub authors: Vec<String>,
-    pub narrators: Vec<String>,
-    pub year: Option<i32>,
-    pub overview: Option<String>,
-    pub genres: Vec<String>,
-}
-
-/// Pick a book's metadata. `tracks` are in play order; for each
-/// field the first track carrying the tag wins.
-///
-/// - title: `album`; for a single-file book also `title`; else the
-///   book folder's name (or the file's name, for a root file).
-/// - authors: `album_artist`, else `artist`; else the top-level
-///   folder when the book sits in one (`Author/Title`,
-///   `Author/Series/Title`).
-/// - narrators: `composer`.
-/// - year: the first four digits of `date`, else `year`.
-/// - overview: `description`, else `comment`.
-/// - genres: `genre`.
-pub fn book_meta(book_key: &str, root_file: bool, tracks: &[&AudioProbe]) -> BookMeta {
-    let first = |keys: &[&str]| -> Option<String> {
-        keys.iter()
-            .find_map(|k| tracks.iter().find_map(|t| t.tag(k)).map(|s| s.to_string()))
-    };
-    let fallback_title = if root_file {
-        file_stem(book_key)
-    } else {
-        book_key.rsplit('/').next().unwrap_or(book_key).to_string()
-    };
-    let title = if root_file {
-        first(&["album", "title"])
-    } else {
-        first(&["album"])
-    }
-    .unwrap_or(fallback_title);
-    let mut authors = first(&["album_artist"])
-        .or_else(|| first(&["artist"]))
-        .map(|a| split_people(&a))
-        .unwrap_or_default();
-    if authors.is_empty() && !root_file {
-        if let Some((top, _)) = book_key.split_once('/') {
-            authors.push(top.to_string());
-        }
-    }
-    BookMeta {
-        title,
-        authors,
-        narrators: first(&["composer"])
-            .map(|n| split_people(&n))
-            .unwrap_or_default(),
-        year: first(&["date"])
-            .as_deref()
-            .and_then(year_of)
-            .or_else(|| first(&["year"]).as_deref().and_then(year_of)),
-        overview: first(&["description"]).or_else(|| first(&["comment"])),
-        genres: first(&["genre"])
-            .map(|g| split_genres(&g))
-            .unwrap_or_default(),
-    }
 }
 
 // ------------------------------------------------------------ chapters
@@ -652,14 +655,68 @@ struct StoredFile {
     available: bool,
 }
 
+/// One book's metadata files (AB6), and the fingerprint the merge
+/// depends on.
+struct BookSourcePlan {
+    files: BookSourceFiles,
+    fingerprint: String,
+}
+
+/// Which metadata files a book reads: a folder book's from its own
+/// folder (not its disc folders); a book that is one file in a library
+/// root reads only `<stem>.parlour.json` beside it.
+fn plan_sources(
+    key: &str,
+    root_file: bool,
+    sources: &HashMap<String, Vec<SourceFile>>,
+    precedence: &[MetadataSource],
+) -> BookSourcePlan {
+    let (folder, wanted): (&str, Option<String>) = if root_file {
+        let stem = key.rsplit_once('.').map(|(s, _)| s).unwrap_or(key);
+        ("", Some(format!("{stem}{}", crate::sidecar::FILE_SUFFIX)))
+    } else {
+        (key, None)
+    };
+    let list = sources.get(folder).map(Vec::as_slice).unwrap_or(&[]);
+    let files = match &wanted {
+        Some(name) => BookSourceFiles {
+            sidecar: list
+                .iter()
+                .find(|f| &f.name == name)
+                .map(|f| f.abs_path.clone()),
+            ..Default::default()
+        },
+        None => crate::book_meta::pick_source_files(
+            &list
+                .iter()
+                .map(|f| (f.name.clone(), f.abs_path.clone()))
+                .collect::<Vec<_>>(),
+        ),
+    };
+    let used: Vec<(String, u64, i64)> = files
+        .paths()
+        .into_iter()
+        .filter_map(|p| list.iter().find(|f| f.abs_path == p))
+        .map(|f| (f.abs_path.clone(), f.size_bytes, f.mtime_us))
+        .collect();
+    BookSourcePlan {
+        fingerprint: crate::book_meta::sources_fingerprint(precedence, &used),
+        files,
+    }
+}
+
 /// Scan one audiobooks library (AB2). Same contract as the video
 /// scanner: idempotent, progress + per-file errors on the job, and
 /// vanished files marked unavailable only under roots that walked
 /// cleanly (C8) — never deleted, so progress survives a missing disk.
+///
+/// `artwork_dir` is the artwork cache embedded covers are extracted
+/// into (AB6); without one, embedded covers aren't extracted.
 pub async fn scan_audiobooks(
     pool: &parlour_db::PgPool,
     library_id: Uuid,
     job_id: Option<Uuid>,
+    artwork_dir: Option<&Path>,
 ) -> Result<ScanReport, sqlx::Error> {
     let mut report = ScanReport::default();
     let paths: Vec<(String,)> =
@@ -673,6 +730,13 @@ pub async fn scan_audiobooks(
             .push("library has no paths configured".to_string());
         return Ok(report);
     }
+    let precedence: Vec<String> =
+        sqlx::query_scalar("SELECT metadata_precedence FROM libraries WHERE id = $1")
+            .bind(library_id)
+            .fetch_optional(pool)
+            .await?
+            .unwrap_or_default();
+    let precedence = crate::book_meta::stored_precedence(&precedence);
 
     // Walk every root. Book keys are relative to their root, like
     // the video scanner's keys, so adding or re-mounting a root
@@ -681,6 +745,7 @@ pub async fn scan_audiobooks(
     let mut books: BTreeMap<String, Vec<(DiscoveredAudio, Option<u32>)>> = BTreeMap::new();
     let mut book_cover: HashMap<String, String> = HashMap::new();
     let mut book_root_file: HashMap<String, bool> = HashMap::new();
+    let mut book_sources: HashMap<String, BookSourcePlan> = HashMap::new();
     for (root,) in &paths {
         let walk = walk_audio(Path::new(root));
         if walk.errors.is_empty() {
@@ -700,6 +765,12 @@ pub async fn scan_audiobooks(
                 if let Some(cover) = walk.covers.get(&key) {
                     book_cover.insert(key.clone(), cover.clone());
                 }
+            }
+            if !book_sources.contains_key(&key) {
+                book_sources.insert(
+                    key.clone(),
+                    plan_sources(&key, root_file, &walk.sources, &precedence),
+                );
             }
             books.entry(key).or_default().push((file, disc));
         }
@@ -741,6 +812,17 @@ pub async fn scan_audiobooks(
     .fetch_all(pool)
     .await?;
     let items: HashMap<String, Uuid> = items.into_iter().collect();
+    let merged_fps: Vec<(Uuid, Option<String>)> = sqlx::query_as(
+        "SELECT b.item_id, b.sources_fingerprint FROM book_metadata b
+         JOIN media_items i ON i.id = b.item_id WHERE i.library_id = $1",
+    )
+    .bind(library_id)
+    .fetch_all(pool)
+    .await?;
+    let merged_fps: HashMap<Uuid, String> = merged_fps
+        .into_iter()
+        .filter_map(|(id, fp)| fp.map(|fp| (id, fp)))
+        .collect();
 
     let mut seen_paths: HashSet<String> = HashSet::new();
     let mut done = 0i32;
@@ -751,10 +833,12 @@ pub async fn scan_audiobooks(
         }
         report.seen_files += files.len() as i32;
         done += files.len() as i32;
+        let plan = &book_sources[key];
 
         let existing_item = items.get(&stable_key).copied();
         let unchanged = existing_item.is_some_and(|item_id| {
             available_per_item.get(&item_id).copied().unwrap_or(0) == files.len()
+                && merged_fps.get(&item_id) == Some(&plan.fingerprint)
                 && files.iter().all(|(f, _)| {
                     stored.get(&f.abs_path).is_some_and(|s| {
                         s.item_id == item_id
@@ -765,7 +849,7 @@ pub async fn scan_audiobooks(
                 })
         });
 
-        let item_id = if let (true, Some(item_id)) = (unchanged, existing_item) {
+        let (item_id, embedded) = if let (true, Some(item_id)) = (unchanged, existing_item) {
             report.unchanged_files += files.len() as i32;
             sqlx::query(
                 "UPDATE media_files SET last_seen_at = now() WHERE item_id = $1 AND available",
@@ -773,23 +857,37 @@ pub async fn scan_audiobooks(
             .bind(item_id)
             .execute(pool)
             .await?;
-            item_id
+            (item_id, None)
         } else {
             let root_file = book_root_file.get(key).copied().unwrap_or(false);
-            rebuild_book(
-                pool,
+            let book = BookToBuild {
                 library_id,
-                job_id,
-                &stable_key,
+                stable_key: &stable_key,
                 key,
                 root_file,
+                existing: existing_item,
                 files,
-                &mut report,
-            )
-            .await?
+                sources: plan,
+                precedence: &precedence,
+            };
+            let (id, embedded) = rebuild_book(pool, job_id, &book, &mut report).await?;
+            (id, Some(embedded))
         };
 
-        sync_cover(pool, item_id, book_cover.get(key).map(String::as_str)).await?;
+        let cover_errors = sync_cover(
+            pool,
+            item_id,
+            book_cover.get(key).map(String::as_str),
+            embedded.as_ref().map(Option::as_ref),
+            artwork_dir,
+        )
+        .await?;
+        for e in cover_errors {
+            report.errors.push(format!("{key}: {e}"));
+            if let Some(job) = job_id {
+                let _ = parlour_jobs::add_error(pool, job, Some(key), &e).await;
+            }
+        }
 
         if let Some(job) = job_id {
             let _ = parlour_jobs::set_progress(pool, job, done, total).await;
@@ -810,22 +908,64 @@ pub async fn scan_audiobooks(
     Ok(report)
 }
 
+/// Everything `rebuild_book` needs about one book.
+struct BookToBuild<'a> {
+    library_id: Uuid,
+    stable_key: &'a str,
+    key: &'a str,
+    root_file: bool,
+    existing: Option<Uuid>,
+    files: &'a [(DiscoveredAudio, Option<u32>)],
+    sources: &'a BookSourcePlan,
+    precedence: &'a [MetadataSource],
+}
+
+/// An embedded cover found while probing: the track and its picture
+/// stream.
+#[derive(Debug, Clone)]
+pub struct EmbeddedCover {
+    pub abs_path: String,
+    pub stream: CoverStream,
+}
+
+/// Read one local metadata file and parse it; a failure is a scan
+/// error and the source says nothing.
+fn read_source(
+    path: Option<&str>,
+    parse: impl Fn(&[u8]) -> Result<BookFields, String>,
+    errors: &mut Vec<(String, String)>,
+) -> Option<BookFields> {
+    let path = path?;
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) => {
+            errors.push((path.to_string(), e.to_string()));
+            return None;
+        }
+    };
+    match parse(&bytes) {
+        Ok(f) => Some(f),
+        Err(e) => {
+            errors.push((path.to_string(), e));
+            None
+        }
+    }
+}
+
 /// Probe every track of one book and rewrite its item, files,
-/// streams, chapters and people. Returns the book's item id.
-#[allow(clippy::too_many_arguments)]
+/// streams, chapters and people, its metadata merged from its local
+/// sources (AB6). Returns the book's item id and its embedded cover,
+/// if a track has one.
 async fn rebuild_book(
     pool: &parlour_db::PgPool,
-    library_id: Uuid,
     job_id: Option<Uuid>,
-    stable_key: &str,
-    key: &str,
-    root_file: bool,
-    files: &[(DiscoveredAudio, Option<u32>)],
+    book: &BookToBuild<'_>,
     report: &mut ScanReport,
-) -> Result<Uuid, sqlx::Error> {
+) -> Result<(Uuid, Option<EmbeddedCover>), sqlx::Error> {
+    let library_id = book.library_id;
     // Probe all tracks (a failed probe still catalogues the file).
     let mut probed: Vec<(&DiscoveredAudio, Option<u32>, AudioProbe, Option<String>)> = Vec::new();
-    for (file, disc) in files {
+    for (file, disc) in book.files {
         let (probe, err) = match probe_audio(Path::new(&file.abs_path)) {
             Ok(p) => (p, None),
             Err(e) => (AudioProbe::default(), Some(e)),
@@ -856,8 +996,85 @@ async fn rebuild_book(
         )
     });
 
-    let probes: Vec<&AudioProbe> = probed.iter().map(|p| &p.2).collect();
-    let meta = book_meta(key, root_file, &probes);
+    // AB6: the book's metadata, merged from its sources in the
+    // library's precedence order.
+    let files = &book.sources.files;
+    let mut source_errors: Vec<(String, String)> = Vec::new();
+    let mut sources = BookSources {
+        folder: crate::book_meta::folder_fields(book.key, book.root_file),
+        tags: crate::book_meta::tag_fields(book.root_file, probed.first().map(|p| &p.2)),
+        nfo: read_source(
+            files.nfo.as_deref(),
+            crate::book_meta::parse_book_nfo,
+            &mut source_errors,
+        ),
+        txt: None,
+        opf: read_source(
+            files.opf.as_deref(),
+            crate::book_meta::parse_opf,
+            &mut source_errors,
+        ),
+        abs_json: read_source(
+            files.abs_json.as_deref(),
+            crate::book_meta::parse_abs_json,
+            &mut source_errors,
+        ),
+        sidecar: None,
+    };
+    if files.desc.is_some() || files.reader.is_some() {
+        let read = |p: &Option<String>, errors: &mut Vec<(String, String)>| {
+            p.as_deref().and_then(|p| {
+                std::fs::read(p)
+                    .map_err(|e| errors.push((p.to_string(), e.to_string())))
+                    .ok()
+            })
+        };
+        let desc = read(&files.desc, &mut source_errors);
+        let reader = read(&files.reader, &mut source_errors);
+        match crate::book_meta::txt_fields(desc.as_deref(), reader.as_deref()) {
+            Ok(f) => sources.txt = Some(f),
+            Err(e) => source_errors.push((
+                files
+                    .desc
+                    .clone()
+                    .or(files.reader.clone())
+                    .unwrap_or_default(),
+                e,
+            )),
+        }
+    }
+    let file_sidecar = read_source(
+        files.sidecar.as_deref(),
+        |bytes| {
+            let doc = crate::sidecar::parse(bytes).map_err(|e| e.to_string())?;
+            if doc.kind != crate::sidecar::SidecarKind::Audiobook {
+                return Err(format!(
+                    "the sidecar's kind is \"{}\" but its item's is \"audiobook\"",
+                    doc.kind.as_str()
+                ));
+            }
+            Ok(crate::book_meta::sidecar_fields(&doc))
+        },
+        &mut source_errors,
+    )
+    .and_then(|f| {
+        let fp = crate::book_sync::file_fingerprint(Path::new(files.sidecar.as_deref()?))?;
+        Some((f, fp))
+    });
+    let server = match book.existing {
+        Some(id) => crate::book_sync::server_copy(pool, id).await?,
+        None => None,
+    };
+    sources.sidecar = crate::book_sync::choose_sidecar(file_sidecar, server);
+    for (path, e) in &source_errors {
+        report.errors.push(format!("{path}: {e}"));
+        if let Some(job) = job_id {
+            let _ = parlour_jobs::add_error(pool, job, Some(path), e).await;
+        }
+    }
+    let meta = crate::book_meta::merge_sources(book.precedence, &sources);
+    let title = meta.title.clone().unwrap_or_else(|| book.key.to_string());
+
     let (item_id, inserted): (Uuid, bool) = sqlx::query_as(
         "INSERT INTO media_items
              (library_id, parent_id, kind, stable_key, title, sort_title, year,
@@ -870,12 +1087,12 @@ async fn rebuild_book(
          RETURNING id, (xmax = 0) AS inserted",
     )
     .bind(library_id)
-    .bind(stable_key)
-    .bind(&meta.title)
-    .bind(sort_title(&meta.title))
+    .bind(book.stable_key)
+    .bind(&title)
+    .bind(sort_title(&title))
     .bind(meta.year)
     .bind(&meta.overview)
-    .bind(&meta.genres)
+    .bind(meta.genres.clone().unwrap_or_default())
     .fetch_one(pool)
     .await?;
     report.created_items += inserted as i32;
@@ -972,70 +1189,165 @@ async fn rebuild_book(
         .await?;
     }
 
-    // Authors and narrators.
-    sqlx::query("DELETE FROM item_people WHERE item_id = $1 AND role IN ('author', 'narrator')")
-        .bind(item_id)
-        .execute(pool)
-        .await?;
-    for (role, names) in [("author", &meta.authors), ("narrator", &meta.narrators)] {
-        for (order, name) in names.iter().enumerate() {
-            let (person_id,): (Uuid,) = sqlx::query_as(
-                "INSERT INTO people (name) VALUES ($1)
-                 ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
-                 RETURNING id",
-            )
-            .bind(name)
-            .fetch_one(pool)
-            .await?;
-            sqlx::query(
-                "INSERT INTO item_people (item_id, person_id, role, sort_order)
-                 VALUES ($1, $2, $3, $4)
-                 ON CONFLICT (item_id, person_id, role) DO NOTHING",
-            )
-            .bind(item_id)
-            .bind(person_id)
-            .bind(role)
-            .bind(order as i32)
-            .execute(pool)
-            .await?;
-        }
-    }
-    Ok(item_id)
+    // Authors, narrators and the book-only fields (AB6).
+    crate::book_sync::write_people(pool, item_id, &meta).await?;
+    crate::book_sync::write_details(pool, item_id, &meta, Some(&book.sources.fingerprint)).await?;
+
+    // The first track, in play order, that carries a picture.
+    let embedded = probed.iter().find_map(|(file, _, probe, _)| {
+        probe.cover.clone().map(|stream| EmbeddedCover {
+            abs_path: file.abs_path.clone(),
+            stream,
+        })
+    });
+    Ok((item_id, embedded))
 }
 
-/// Keep a book's folder cover in `images` (kind poster, variant
-/// `file`), served by the existing artwork endpoint straight from
-/// the media path. Writes only when it changed.
+/// Extract an embedded cover into `dest_dir` as
+/// `poster-embedded.jpg` (`.png` for a PNG picture): the picture is
+/// copied as it is, or re-encoded to JPEG when it is neither.
+pub fn extract_embedded_cover(cover: &EmbeddedCover, dest_dir: &Path) -> Result<PathBuf, String> {
+    let png = cover.stream.codec.as_deref() == Some("png");
+    let copy = png || cover.stream.codec.as_deref() == Some("mjpeg");
+    let dest = dest_dir.join(if png {
+        "poster-embedded.png"
+    } else {
+        "poster-embedded.jpg"
+    });
+    std::fs::create_dir_all(dest_dir).map_err(|e| format!("{}: {e}", dest_dir.display()))?;
+    let tmp = dest_dir.join(format!(
+        ".poster-embedded.{}.{}",
+        Uuid::new_v4().simple(),
+        if png { "png" } else { "jpg" }
+    ));
+    let output = Command::new("ffmpeg")
+        .args(["-v", "error", "-y", "-i"])
+        .arg(&cover.abs_path)
+        .args([
+            "-map",
+            &format!("0:{}", cover.stream.index),
+            "-frames:v",
+            "1",
+            "-c:v",
+            if copy { "copy" } else { "mjpeg" },
+            "-f",
+            "image2",
+            "-update",
+            "1",
+        ])
+        .arg(&tmp)
+        .output()
+        .map_err(|e| format!("could not run ffmpeg: {e}"))?;
+    let ok = output.status.success()
+        && std::fs::metadata(&tmp)
+            .map(|m| m.len() > 0)
+            .unwrap_or(false);
+    if !ok {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!(
+            "embedded cover could not be extracted: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    std::fs::rename(&tmp, &dest).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("{}: {e}", dest.display())
+    })?;
+    for other in ["poster-embedded.jpg", "poster-embedded.png"] {
+        if dest_dir.join(other) != dest {
+            let _ = std::fs::remove_file(dest_dir.join(other));
+        }
+    }
+    Ok(dest)
+}
+
+/// Keep a book's one poster in `images` (kind `poster`), in this
+/// order (AB6, D30):
+///
+/// 1. a cover an admin's match applied (variant `match`, in the
+///    artwork cache) while its file is there;
+/// 2. the folder's `cover.*` / `folder.*` (variant `file`, served
+///    straight from the media path);
+/// 3. the first track's embedded cover art, extracted into the
+///    artwork cache (variant `embedded`).
+///
+/// `embedded` is known only when the book was just re-probed:
+/// `Some(None)` means "probed, no embedded cover", `None` means "not
+/// probed this scan", and an existing extracted cover is kept. Writes
+/// only when something changed. Returns errors to report.
 async fn sync_cover(
     pool: &parlour_db::PgPool,
     item_id: Uuid,
-    cover: Option<&str>,
-) -> Result<(), sqlx::Error> {
-    let current: Option<(String,)> = sqlx::query_as(
-        "SELECT path FROM images WHERE item_id = $1 AND kind = 'poster' AND variant = 'file'",
-    )
-    .bind(item_id)
-    .fetch_optional(pool)
-    .await?;
-    if current.as_ref().map(|(p,)| p.as_str()) == cover {
-        return Ok(());
+    folder_cover: Option<&str>,
+    embedded: Option<Option<&EmbeddedCover>>,
+    artwork_dir: Option<&Path>,
+) -> Result<Vec<String>, sqlx::Error> {
+    let rows: Vec<(String, String)> =
+        sqlx::query_as("SELECT variant, path FROM images WHERE item_id = $1 AND kind = 'poster'")
+            .bind(item_id)
+            .fetch_all(pool)
+            .await?;
+    let find = |variant: &str| {
+        rows.iter()
+            .find(|(v, p)| v == variant && Path::new(p).is_file())
+            .map(|(_, p)| p.clone())
+    };
+    let only =
+        |variant: &str, path: &str| rows.len() == 1 && rows[0].0 == variant && rows[0].1 == path;
+    if let Some(path) = find("match") {
+        if !only("match", &path) {
+            sqlx::query("DELETE FROM images WHERE item_id = $1 AND kind = 'poster' AND path <> $2")
+                .bind(item_id)
+                .bind(&path)
+                .execute(pool)
+                .await?;
+        }
+        return Ok(Vec::new());
     }
-    sqlx::query("DELETE FROM images WHERE item_id = $1 AND kind = 'poster' AND variant = 'file'")
-        .bind(item_id)
-        .execute(pool)
-        .await?;
-    if let Some(path) = cover {
-        sqlx::query(
-            "INSERT INTO images (item_id, kind, variant, path)
-             VALUES ($1, 'poster', 'file', $2)
-             ON CONFLICT (item_id, kind, path) DO NOTHING",
-        )
-        .bind(item_id)
-        .bind(path)
-        .execute(pool)
-        .await?;
+    if let Some(cover) = folder_cover {
+        if !only("file", cover) {
+            crate::book_sync::set_poster(pool, item_id, "file", cover, None, None).await?;
+        }
+        return Ok(Vec::new());
     }
-    Ok(())
+    let existing_embedded = find("embedded");
+    match (embedded, artwork_dir) {
+        (Some(Some(cover)), Some(dir)) => {
+            let dest_dir = dir.join(item_id.to_string());
+            match extract_embedded_cover(cover, &dest_dir) {
+                Ok(dest) => {
+                    let path = dest.to_string_lossy().to_string();
+                    let hash = std::fs::read(&dest)
+                        .ok()
+                        .map(|b| crate::artwork::sha256_hex(&b));
+                    crate::book_sync::set_poster(
+                        pool,
+                        item_id,
+                        "embedded",
+                        &path,
+                        hash.as_deref(),
+                        None,
+                    )
+                    .await?;
+                    Ok(Vec::new())
+                }
+                Err(e) => Ok(vec![e]),
+            }
+        }
+        // Not re-probed, or no cache to extract into: keep what was
+        // extracted before.
+        (None, _) | (Some(Some(_)), None) if existing_embedded.is_some() => Ok(Vec::new()),
+        // No cover anywhere (or no cache to extract into): no poster.
+        _ => {
+            if !rows.is_empty() {
+                sqlx::query("DELETE FROM images WHERE item_id = $1 AND kind = 'poster'")
+                    .bind(item_id)
+                    .execute(pool)
+                    .await?;
+            }
+            Ok(Vec::new())
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1147,68 +1459,6 @@ mod tests {
         );
     }
 
-    fn probe_with(tags: &[(&str, &str)], duration_ms: i64) -> AudioProbe {
-        AudioProbe {
-            duration_ms: Some(duration_ms),
-            tags: tags
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect(),
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn metadata_prefers_tags_then_folders() {
-        let a = probe_with(
-            &[
-                ("album", "Book One"),
-                ("artist", "Track Artist"),
-                ("album_artist", "Jane Author"),
-                ("composer", "Nick Narrator & Nora Reader"),
-                ("date", "2019-05-01"),
-                ("genre", "Fantasy"),
-                ("comment", "A comment"),
-                ("title", "Opening"),
-            ],
-            1000,
-        );
-        let b = probe_with(&[("description", "Later description")], 1000);
-        let meta = book_meta("Jane Author/Book One", false, &[&a, &b]);
-        assert_eq!(meta.title, "Book One");
-        assert_eq!(meta.authors, vec!["Jane Author"]);
-        assert_eq!(meta.narrators, vec!["Nick Narrator", "Nora Reader"]);
-        assert_eq!(meta.year, Some(2019));
-        // description wins over comment even on a later track.
-        assert_eq!(meta.overview.as_deref(), Some("Later description"));
-        assert_eq!(meta.genres, vec!["Fantasy"]);
-
-        // No tags: folder name for the title, top-level folder for
-        // the author — also through a series folder.
-        let bare = AudioProbe::default();
-        let meta = book_meta("Jane Author/A Series/Book Two", false, &[&bare]);
-        assert_eq!(meta.title, "Book Two");
-        assert_eq!(meta.authors, vec!["Jane Author"]);
-        assert!(meta.narrators.is_empty());
-
-        // A single root file: title tag counts, file stem as fallback,
-        // no folder author.
-        let single = probe_with(&[("title", "The Single")], 1000);
-        let meta = book_meta("Single.m4b", true, &[&single]);
-        assert_eq!(meta.title, "The Single");
-        assert!(meta.authors.is_empty());
-        let meta = book_meta("Loose Book.mp3", true, &[&bare]);
-        assert_eq!(meta.title, "Loose Book");
-        // A folder book's track title is not the book's title.
-        let meta = book_meta("Folder Book", false, &[&single]);
-        assert_eq!(meta.title, "Folder Book");
-        // `year` tag as fallback; nonsense years are ignored.
-        let y = probe_with(&[("year", "1999")], 1);
-        assert_eq!(book_meta("x", false, &[&y]).year, Some(1999));
-        let y = probe_with(&[("date", "unknown")], 1);
-        assert_eq!(book_meta("x", false, &[&y]).year, None);
-    }
-
     #[test]
     fn chapters_come_from_files_or_one_per_track() {
         let embedded = vec![
@@ -1278,7 +1528,9 @@ mod tests {
             {"index": 0, "codec_type": "audio", "codec_name": "opus", "channels": 2,
              "bit_rate": "64000", "disposition": {"default": 1},
              "tags": {"ARTIST": "Stream Artist", "TITLE": "Stream Title", "language": "eng"}},
-            {"index": 1, "codec_type": "video", "codec_name": "mjpeg"}
+            {"index": 1, "codec_type": "video", "codec_name": "mjpeg",
+             "disposition": {"attached_pic": 1}},
+            {"index": 2, "codec_type": "video", "codec_name": "png"}
           ],
           "chapters": [
             {"start_time": "0.000000", "end_time": "2.500000", "tags": {"title": "One"}},
@@ -1296,8 +1548,16 @@ mod tests {
         assert_eq!(p.tag("title"), Some("Format Title"));
         assert_eq!(p.tag("artist"), Some("Stream Artist"));
         assert_eq!(p.tag("track"), Some("3"));
-        // Only the audio stream; the cover's mjpeg is not a track.
+        // Only the audio stream; the cover's mjpeg is not a track, but
+        // it is the embedded cover (the first picture stream, AB6).
         assert_eq!(p.streams.len(), 1);
+        assert_eq!(
+            p.cover,
+            Some(CoverStream {
+                index: 1,
+                codec: Some("mjpeg".into())
+            })
+        );
         assert_eq!(p.streams[0].codec.as_deref(), Some("opus"));
         assert_eq!(p.streams[0].bit_rate, Some(64000));
         assert_eq!(p.streams[0].language.as_deref(), Some("eng"));
@@ -1338,7 +1598,38 @@ mod tests {
         }
         std::fs::write(book.join(".hidden").join("x.mp3"), b"x").unwrap();
         std::fs::write(dir.join("Single.m4b"), b"x").unwrap();
+        for f in ["desc.txt", "book.nfo", "metadata.json", "notes.txt"] {
+            std::fs::write(book.join(f), b"x").unwrap();
+        }
+        std::fs::write(dir.join("Single.parlour.json"), b"{}").unwrap();
         let walk = walk_audio(&dir);
+        let names = |folder: &str| -> Vec<String> {
+            walk.sources[folder]
+                .iter()
+                .map(|f| f.name.clone())
+                .collect()
+        };
+        assert_eq!(
+            names("Author/Book"),
+            ["book.nfo", "desc.txt", "metadata.json"],
+            "metadata sources, sorted; other files aren't"
+        );
+        assert_eq!(names(""), ["Single.parlour.json"]);
+        let plan = plan_sources(
+            "Single.m4b",
+            true,
+            &walk.sources,
+            &crate::book_meta::DEFAULT_PRECEDENCE,
+        );
+        assert!(plan.files.sidecar.unwrap().ends_with("Single.parlour.json"));
+        let plan = plan_sources(
+            "Author/Book",
+            false,
+            &walk.sources,
+            &crate::book_meta::DEFAULT_PRECEDENCE,
+        );
+        assert!(plan.files.nfo.is_some() && plan.files.sidecar.is_none());
+        assert_eq!(plan.fingerprint.lines().count(), 5, "rules, order, 3 files");
         let rels: Vec<&str> = walk.files.iter().map(|f| f.rel_path.as_str()).collect();
         assert_eq!(
             rels,

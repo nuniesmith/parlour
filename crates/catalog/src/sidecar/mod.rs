@@ -17,6 +17,14 @@
 //! per-library opt-in. `nfo` (the format) and `nfo_sync` (the scanner,
 //! matcher and writer steps) are XFER6's Kodi/Emby-style `.nfo`
 //! interop: read as an input source, written under the same opt-in.
+//!
+//! Audiobooks (AB6, D30) use the same v1 document with `kind`
+//! `audiobook` and a few book-only fields (`subtitle`, `publisher`,
+//! `isbn`, `asin`, `language`, `google_books_id`, `open_library_id`);
+//! a book's sidecar is `book.parlour.json` in its folder. The
+//! audiobook scanner and matcher (`crate::book_meta`,
+//! `crate::book_match`) read and write it; the video passes here never
+//! see one.
 
 use std::collections::HashSet;
 use std::io::Write;
@@ -46,6 +54,8 @@ pub const FORMAT: &str = "parlour-sidecar";
 pub const FORMAT_VERSION: u64 = 1;
 /// A series folder's sidecar.
 pub const SERIES_FILE_NAME: &str = "series.parlour.json";
+/// A book folder's sidecar (AB6).
+pub const BOOK_FILE_NAME: &str = "book.parlour.json";
 /// What a movie or episode file's sidecar name ends with.
 pub const FILE_SUFFIX: &str = ".parlour.json";
 /// Confidence of a sidecar's segments: they are manual rows (SEG4),
@@ -59,6 +69,8 @@ pub enum SidecarKind {
     Movie,
     Series,
     Episode,
+    /// A book in an audiobooks library (AB6).
+    Audiobook,
 }
 
 impl SidecarKind {
@@ -67,16 +79,17 @@ impl SidecarKind {
             SidecarKind::Movie => "movie",
             SidecarKind::Series => "series",
             SidecarKind::Episode => "episode",
+            SidecarKind::Audiobook => "audiobook",
         }
     }
 
-    /// The sidecar kind for a `media_items.kind`; seasons and
-    /// audiobooks have none.
+    /// The sidecar kind for a `media_items.kind`; seasons have none.
     pub fn for_item(kind: &str) -> Option<Self> {
         match kind {
             "movie" => Some(SidecarKind::Movie),
             "series" => Some(SidecarKind::Series),
             "episode" => Some(SidecarKind::Episode),
+            "audiobook" => Some(SidecarKind::Audiobook),
             _ => None,
         }
     }
@@ -131,6 +144,9 @@ pub struct Sidecar {
     pub kind: SidecarKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// Audiobooks only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtitle: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub year: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -155,6 +171,20 @@ pub struct Sidecar {
     pub tvdb_id: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub imdb_id: Option<String>,
+    /// Audiobooks only (AB6): the book's publisher, ISBN, ASIN and
+    /// language, and the ids a match recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publisher: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isbn: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asin: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub google_books_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_library_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub people: Option<Vec<SidecarPerson>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -184,6 +214,7 @@ impl Sidecar {
             format_version: FORMAT_VERSION,
             kind,
             title: None,
+            subtitle: None,
             year: None,
             season_number: None,
             episode_number: None,
@@ -196,6 +227,12 @@ impl Sidecar {
             tmdb_id: None,
             tvdb_id: None,
             imdb_id: None,
+            publisher: None,
+            isbn: None,
+            asin: None,
+            language: None,
+            google_books_id: None,
+            open_library_id: None,
             people: None,
             segments: None,
         }
@@ -285,8 +322,25 @@ impl Sidecar {
                 }
             }
         }
+        if self.kind == SidecarKind::Audiobook {
+            self.audiobook_problems(&mut out);
+        } else {
+            for (field, present) in [
+                ("subtitle", self.subtitle.is_some()),
+                ("publisher", self.publisher.is_some()),
+                ("isbn", self.isbn.is_some()),
+                ("asin", self.asin.is_some()),
+                ("language", self.language.is_some()),
+                ("google_books_id", self.google_books_id.is_some()),
+                ("open_library_id", self.open_library_id.is_some()),
+            ] {
+                if present {
+                    out.push(format!("{field} is only for an audiobook"));
+                }
+            }
+        }
         if let Some(segments) = &self.segments {
-            if self.kind == SidecarKind::Series {
+            if matches!(self.kind, SidecarKind::Series | SidecarKind::Audiobook) {
                 out.push("segments are only for a movie or an episode".to_string());
             }
             if segments.size_bytes <= 0 {
@@ -320,6 +374,56 @@ impl Sidecar {
             }
         }
         out
+    }
+
+    /// The rules only a book's sidecar has (AB6): the book-only fields
+    /// are well formed, the video-only ones are absent, and its people
+    /// are authors and narrators.
+    fn audiobook_problems(&self, out: &mut Vec<String>) {
+        for (field, present) in [
+            ("air_date", self.air_date.is_some()),
+            ("content_rating", self.content_rating.is_some()),
+            ("vote_average", self.vote_average.is_some()),
+            ("runtime_minutes", self.runtime_minutes.is_some()),
+            ("tmdb_id", self.tmdb_id.is_some()),
+            ("tvdb_id", self.tvdb_id.is_some()),
+            ("imdb_id", self.imdb_id.is_some()),
+        ] {
+            if present {
+                out.push(format!("{field} is not for an audiobook"));
+            }
+        }
+        for (field, v) in [
+            ("subtitle", &self.subtitle),
+            ("publisher", &self.publisher),
+            ("isbn", &self.isbn),
+            ("asin", &self.asin),
+            ("language", &self.language),
+        ] {
+            if matches!(v, Some(s) if s.trim().is_empty()) {
+                out.push(format!("{field} is empty (leave it out instead)"));
+            }
+        }
+        if matches!(&self.google_books_id, Some(id) if !parlour_metadata::books::valid_google_id(id))
+        {
+            out.push("google_books_id is not a Google Books volume id".to_string());
+        }
+        if matches!(&self.open_library_id, Some(id) if !parlour_metadata::books::valid_open_library_id(id))
+        {
+            out.push("open_library_id must be an Open Library work id (OL…W)".to_string());
+        }
+        for (i, p) in self.people.iter().flatten().enumerate() {
+            if !matches!(p.role.as_str(), "author" | "narrator") {
+                out.push(format!(
+                    "people[{i}].role must be author or narrator for an audiobook"
+                ));
+            }
+            if p.character_name.is_some() || p.tmdb_id.is_some() {
+                out.push(format!(
+                    "people[{i}] of an audiobook has only a name, a role and a sort_order"
+                ));
+            }
+        }
     }
 
     /// The people list with every `sort_order` filled in.

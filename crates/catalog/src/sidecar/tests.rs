@@ -396,7 +396,10 @@ fn sidecar_kinds_follow_item_kinds() {
     assert_eq!(SidecarKind::for_item("series"), Some(SidecarKind::Series));
     assert_eq!(SidecarKind::for_item("episode"), Some(SidecarKind::Episode));
     assert_eq!(SidecarKind::for_item("season"), None);
-    assert_eq!(SidecarKind::for_item("audiobook"), None);
+    assert_eq!(
+        SidecarKind::for_item("audiobook"),
+        Some(SidecarKind::Audiobook)
+    );
 }
 
 // ------------------------------------------------ poster / backdrop (XFER5)

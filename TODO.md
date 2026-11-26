@@ -1081,11 +1081,29 @@ the rest wait on the owner's decisions.
   *Done 2026-11-23:* `web/src/lib/BookShelf.svelte`,
   `web/src/routes/book/[id]`. Checked in headless Chromium against
   a private instance.
-- [ ] AB6 (M) **Metadata providers + embedded covers** —
+- [x] AB6 (M) **Metadata providers + embedded covers** —
   after **D30**. *D30 (2026-11-24): mirror ABS — per-library
   precedence list, manual match (Google Books, Open Library;
   Audnexus after a terms check), embedded covers when no image
   file.*
+  *Done 2026-11-26:* `libraries.metadata_precedence` (default
+  folder → tags → nfo → txt → opf → abs_json → sidecar, later
+  wins; edited per library on Server → Library); tags from the
+  first track only; folder authors split ABS's way; readers for
+  ABS-style `.nfo`, `desc.txt` / `reader.txt`, `.opf`, ABS's
+  `metadata.json` and `book.parlour.json` (`book_meta.rs`).
+  Manual match per book (`/book/[id]`, admin; Google Books or
+  Open Library; the admin picks overwrite or fill gaps) and a
+  library-wide quick match (Google Books, fills gaps only, ABS's
+  confirmed default). The Google key is optional and travels
+  only in a header. Audnexus is left out: no published terms
+  permit it. Embedded covers go into the artwork cache when the
+  folder has no image. A match is kept server-side
+  (`book_sidecars`) and written beside the book only under
+  `write_sidecars` (XFER5). Spec: AUDIOBOOKS-PODCASTS.md
+  "Metadata sources, matching and covers (AB6)" (12 readings for
+  veto); IMPORT-EXPORT.md §13.15. **D40** (does a match travel in
+  the bundle?) and D36 are open.
 - [ ] AB7 (M) **Series + author browsing** — after **D28**.
   *D28 (2026-11-24): mirror ABS — `series` records + a book ↔
   series join with a sequence; series from the
@@ -1094,7 +1112,8 @@ the rest wait on the owner's decisions.
   numbered "Follow-up from D28–D35" list in
   `docs/AUDIOBOOKS-PODCASTS.md` — disc folders without `Part`,
   title-folder parsing, nearest-folder author, author
-  splitting, auto-finish under 10 s remaining, the
+  splitting (folder names done in AB6), auto-finish under 10 s
+  remaining, the
   hide-from-Continue flag, client timestamps.
 - [ ] AB8 (S) **Listening in Now Playing / Activity, Home
   "Continue listening"** — after **D29** / **D35**. *D29

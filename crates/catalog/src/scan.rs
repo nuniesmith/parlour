@@ -266,12 +266,36 @@ pub async fn scan_library(
     library_id: Uuid,
     job_id: Option<Uuid>,
 ) -> Result<ScanReport, sqlx::Error> {
+    scan_library_with(pool, library_id, job_id, &ScanOptions::default()).await
+}
+
+/// What a scan may use beyond the database.
+#[derive(Debug, Clone, Default)]
+pub struct ScanOptions {
+    /// The artwork cache. Audiobook scans extract embedded cover art
+    /// into it (AB6); without one they don't.
+    pub artwork_dir: Option<std::path::PathBuf>,
+}
+
+/// [`scan_library`] with options.
+pub async fn scan_library_with(
+    pool: &parlour_db::PgPool,
+    library_id: Uuid,
+    job_id: Option<Uuid>,
+    options: &ScanOptions,
+) -> Result<ScanReport, sqlx::Error> {
     let kind: Option<(String,)> = sqlx::query_as("SELECT kind FROM libraries WHERE id = $1")
         .bind(library_id)
         .fetch_optional(pool)
         .await?;
     if matches!(kind, Some((ref k,)) if k == "audiobooks") {
-        return crate::audiobooks::scan_audiobooks(pool, library_id, job_id).await;
+        return crate::audiobooks::scan_audiobooks(
+            pool,
+            library_id,
+            job_id,
+            options.artwork_dir.as_deref(),
+        )
+        .await;
     }
     let mut report = ScanReport::default();
 

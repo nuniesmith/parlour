@@ -1,0 +1,25 @@
+{
+  "numFound": 3,
+  "start": 0,
+  "docs": [
+    {
+      "key": "/works/OL1000001W",
+      "title": "The Lantern Keeper",
+      "author_name": ["Ada Fictional"],
+      "first_publish_year": 2010,
+      "publisher": ["Example Press", "Other Example House"],
+      "isbn": ["0000000000", "9780000000002"],
+      "cover_i": 424242,
+      "subject": ["Lighthouses", "Fiction", "Harbours", "Sea stories", "Keepers", "Lamps", "Night"],
+      "language": ["eng"]
+    },
+    {
+      "key": "/works/OL1000002W",
+      "title": "Lantern Keeping, Illustrated"
+    },
+    {
+      "key": "/books/OL1000003M",
+      "title": "An edition, not a work"
+    }
+  ]
+}

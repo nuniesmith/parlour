@@ -10,7 +10,8 @@
 //!
 //! Sidecar writing (XFER5, D14): `libraries.write_sidecars` is the
 //! per-library opt-in that lets Parlour write next to the media
-//! (`*.parlour.json`, `poster.jpg`, `backdrop.jpg`). It is off by
+//! (`*.parlour.json`, `poster.jpg`, `backdrop.jpg`; for an audiobooks
+//! library, AB6: `book.parlour.json` and a matched `cover.jpg`). It is off by
 //! default and is set **only** by its own endpoint,
 //! `PUT /api/v1/admin/libraries/{id}/write-sidecars` — creating or
 //! editing a library refuses the field, and an import never sets it.
@@ -111,9 +112,10 @@ pub struct FolderAccess {
     pub problem: Option<String>,
 }
 
-/// Library kinds whose items get sidecars (and poster / backdrop
-/// copies) today: video libraries. Audiobooks come with AB6 (D30).
-pub const SIDECAR_KINDS: &[&str] = &["movies", "shows"];
+/// Library kinds whose items get sidecars: video libraries (with
+/// poster / backdrop copies, XFER4–XFER6) and, since AB6 (D30),
+/// audiobooks libraries (`book.parlour.json` and a matched cover).
+pub const SIDECAR_KINDS: &[&str] = &["movies", "shows", "audiobooks"];
 
 /// Can this process write in `path`? Asks the kernel (`access(2)` with
 /// `W_OK`), which answers for both the folder's permissions and a
@@ -353,7 +355,7 @@ async fn set_write_sidecars(
     let current = library_detail(&state, id).await?;
     if body.enabled && !SIDECAR_KINDS.contains(&current.kind.as_str()) {
         return Err(AppError::BadRequest(format!(
-            "sidecars are written for movie and show libraries only; {} is a {} library",
+            "sidecars are written for movie, show and audiobook libraries only; {} is a {} library",
             current.name, current.kind
         )));
     }
@@ -521,8 +523,8 @@ mod tests {
     }
 
     #[test]
-    fn only_video_libraries_take_the_opt_in() {
-        assert_eq!(SIDECAR_KINDS, &["movies", "shows"]);
+    fn video_and_audiobook_libraries_take_the_opt_in() {
+        assert_eq!(SIDECAR_KINDS, &["movies", "shows", "audiobooks"]);
         assert!(refuse_sidecar_flag(false).is_ok());
         assert!(refuse_sidecar_flag(true).is_err());
     }

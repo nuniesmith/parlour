@@ -21,6 +21,12 @@
 //!
 //! Users: `GET /items/{id}/artwork/{kind}` serves the cached file.
 //!
+//! Audiobooks (AB6, D30) don't use TMDB/TVDB: matching a library of
+//! books (the same `POST /admin/libraries/{id}/metadata`) runs a
+//! **quick match** against Google Books that only fills gaps, and
+//! needs no key. One book is matched by hand with the endpoints in
+//! `book_match`.
+//!
 //! Sidecars (XFER4): after a match, the job (and a manual fix)
 //! rewrites the item's `*.parlour.json` files when its library has
 //! `write_sidecars` on; with it off nothing touches the media.
@@ -52,6 +58,15 @@ pub struct MetadataSettings {
     pub tvdb_api_key: Option<String>,
     pub tmdb_base: Option<String>,
     pub tvdb_base: Option<String>,
+    /// AB6: Google Books key (optional) and the book providers' base
+    /// URLs (tests point these at a stub).
+    pub google_books_api_key: Option<String>,
+    pub google_books_base: Option<String>,
+    pub open_library_base: Option<String>,
+    pub open_library_covers_base: Option<String>,
+    /// AB6: the wait between books in a library-wide quick match, to
+    /// stay inside the providers' anonymous rate limits.
+    pub quick_match_pace: std::time::Duration,
     pub artwork_dir: PathBuf,
 }
 
@@ -62,6 +77,11 @@ impl Default for MetadataSettings {
             tvdb_api_key: None,
             tmdb_base: None,
             tvdb_base: None,
+            google_books_api_key: None,
+            google_books_base: None,
+            open_library_base: None,
+            open_library_covers_base: None,
+            quick_match_pace: std::time::Duration::from_secs(1),
             artwork_dir: PathBuf::from("artwork"),
         }
     }
@@ -74,7 +94,29 @@ impl MetadataSettings {
             tvdb_api_key: config.tvdb_api_key.clone(),
             tmdb_base: config.tmdb_base.clone(),
             tvdb_base: config.tvdb_base.clone(),
+            google_books_api_key: config.google_books_api_key.clone(),
+            google_books_base: config.google_books_base.clone(),
+            open_library_base: config.open_library_base.clone(),
+            open_library_covers_base: config.open_library_covers_base.clone(),
             artwork_dir: config.artwork_dir.clone(),
+            ..Self::default()
+        }
+    }
+
+    /// A book provider by name (AB6): `google` (the default) or
+    /// `openlibrary`. Neither needs a key, so both are always there.
+    pub fn book_provider(&self, name: &str) -> Option<parlour_metadata::books::BookProvider> {
+        use parlour_metadata::books::{BookProvider, GoogleBooksClient, OpenLibraryClient};
+        match name {
+            "google" => Some(BookProvider::Google(GoogleBooksClient::new(
+                self.google_books_api_key.clone(),
+                self.google_books_base.as_deref(),
+            ))),
+            "openlibrary" => Some(BookProvider::OpenLibrary(OpenLibraryClient::new(
+                self.open_library_base.as_deref(),
+                self.open_library_covers_base.as_deref(),
+            ))),
+            _ => None,
         }
     }
 
@@ -128,6 +170,34 @@ pub async fn run_metadata_job_claimed(
     job: parlour_jobs::Job,
     settings: &MetadataSettings,
 ) {
+    // AB6: a library-wide quick match of an audiobooks library.
+    if let Some(name) = job.payload.get("quick_match").and_then(|v| v.as_str()) {
+        let result = match (job.library_id, settings.book_provider(name)) {
+            (Some(library_id), Some(provider)) => parlour_catalog::book_sync::quick_match_library(
+                &pool,
+                &provider,
+                &parlour_metadata::books::http_client(),
+                &settings.artwork_dir,
+                library_id,
+                Some(job.id),
+                settings.quick_match_pace,
+            )
+            .await
+            .map_err(|e| e.to_string()),
+            (None, _) => Err("quick match without a library".to_string()),
+            (_, None) => Err(format!("no book provider named {name}")),
+        };
+        match result {
+            Ok(summary) => {
+                let _ = parlour_jobs::set_result(&pool, job.id, summary).await;
+                let _ = parlour_jobs::complete(&pool, job.id).await;
+            }
+            Err(e) => {
+                let _ = parlour_jobs::fail(&pool, job.id, &e).await;
+            }
+        }
+        return;
+    }
     let Some(provider) = settings.provider() else {
         let _ = parlour_jobs::fail(&pool, job.id, "no metadata provider is configured").await;
         return;
@@ -282,16 +352,27 @@ async fn match_library_endpoint(
     _admin: AdminUser,
     Path(id): Path<String>,
 ) -> Result<(StatusCode, Json<parlour_jobs::Job>), AppError> {
-    let _ = provider_or_503(&state)?;
     let library_id = parse_id(&id)?;
-    let exists: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM libraries WHERE id = $1")
+    let kind: Option<(String,)> = sqlx::query_as("SELECT kind FROM libraries WHERE id = $1")
         .bind(library_id)
         .fetch_optional(&state.pool)
         .await
         .map_err(AppError::from)?;
-    if exists.is_none() {
+    let Some((kind,)) = kind else {
         return Err(AppError::NotFound("no such library".into()));
+    };
+    if kind == "audiobooks" {
+        // AB6: quick match, Google Books (D30's default), gaps only.
+        let job = enqueue_and_spawn(
+            &state,
+            parlour_jobs::JobKind::FetchMetadata,
+            Some(library_id),
+            serde_json::json!({ "trigger": "manual", "quick_match": "google" }),
+        )
+        .await?;
+        return Ok((StatusCode::ACCEPTED, Json(job)));
     }
+    let _ = provider_or_503(&state)?;
     let job = enqueue_and_spawn(
         &state,
         parlour_jobs::JobKind::FetchMetadata,
@@ -307,8 +388,19 @@ async fn match_item_endpoint(
     _admin: AdminUser,
     Path(id): Path<String>,
 ) -> Result<(StatusCode, Json<parlour_jobs::Job>), AppError> {
-    let _ = provider_or_503(&state)?;
     let item_id = parse_id(&id)?;
+    let kind: Option<(String,)> = sqlx::query_as("SELECT kind FROM media_items WHERE id = $1")
+        .bind(item_id)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(AppError::from)?;
+    if matches!(kind, Some((ref k,)) if k == "audiobook") {
+        return Err(AppError::BadRequest(
+            "a book is matched by hand: GET /api/v1/admin/audiobooks/{id}/match/search, then POST /api/v1/admin/audiobooks/{id}/match"
+                .into(),
+        ));
+    }
+    let _ = provider_or_503(&state)?;
     let library_id = library_of_item(&state, item_id).await?;
     let job = enqueue_and_spawn(
         &state,

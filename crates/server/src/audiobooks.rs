@@ -103,6 +103,27 @@ struct BookRow {
     p_finished_at: Option<DateTime<Utc>>,
     p_last_listened_at: Option<DateTime<Utc>>,
     p_updated_at: Option<DateTime<Utc>>,
+    subtitle: Option<String>,
+    publisher: Option<String>,
+    isbn: Option<String>,
+    asin: Option<String>,
+    language: Option<String>,
+    google_books_id: Option<String>,
+    open_library_id: Option<String>,
+    match_provider: Option<String>,
+    match_provider_id: Option<String>,
+    match_mode: Option<String>,
+    matched_at: Option<DateTime<Utc>>,
+}
+
+/// What an admin's match left on a book (AB6).
+#[derive(Debug, Serialize)]
+pub struct BookMatchDto {
+    pub provider: String,
+    pub provider_id: String,
+    /// `overwrite` or `fill_gaps`.
+    pub mode: String,
+    pub matched_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Serialize)]
@@ -123,6 +144,18 @@ pub struct BookDto {
     pub available: bool,
     pub created_at: DateTime<Utc>,
     pub progress: ProgressDto,
+    /// AB6: the book-only fields, merged from the book's sources and
+    /// any match.
+    pub subtitle: Option<String>,
+    pub publisher: Option<String>,
+    pub isbn: Option<String>,
+    pub asin: Option<String>,
+    pub language: Option<String>,
+    pub google_books_id: Option<String>,
+    pub open_library_id: Option<String>,
+    /// AB6: the match on record, if an admin matched the book.
+    #[serde(rename = "match")]
+    pub matched: Option<BookMatchDto>,
 }
 
 impl From<BookRow> for BookDto {
@@ -152,6 +185,29 @@ impl From<BookRow> for BookDto {
             available: r.available,
             created_at: r.created_at,
             progress,
+            subtitle: r.subtitle,
+            publisher: r.publisher,
+            isbn: r.isbn,
+            asin: r.asin,
+            language: r.language,
+            google_books_id: r.google_books_id,
+            open_library_id: r.open_library_id,
+            matched: match (
+                r.match_provider,
+                r.match_provider_id,
+                r.match_mode,
+                r.matched_at,
+            ) {
+                (Some(provider), Some(provider_id), Some(mode), Some(matched_at)) => {
+                    Some(BookMatchDto {
+                        provider,
+                        provider_id,
+                        mode,
+                        matched_at,
+                    })
+                }
+                _ => None,
+            },
         }
     }
 }
@@ -210,10 +266,16 @@ const BOOKS_SQL: &str = "
            (SELECT COUNT(*) FROM book_chapters c WHERE c.item_id = i.id) AS chapter_count,
            bp.position_ms AS p_position_ms, bp.duration_ms AS p_duration_ms,
            bp.finished AS p_finished, bp.finished_at AS p_finished_at,
-           bp.last_listened_at AS p_last_listened_at, bp.updated_at AS p_updated_at
+           bp.last_listened_at AS p_last_listened_at, bp.updated_at AS p_updated_at,
+           bm.subtitle, bm.publisher, bm.isbn, bm.asin, bm.language,
+           bm.google_books_id, bm.open_library_id,
+           bs.provider AS match_provider, bs.provider_id AS match_provider_id,
+           bs.mode AS match_mode, bs.matched_at
     FROM media_items i
     JOIN library_access a ON a.library_id = i.library_id AND a.profile_id = $1
     LEFT JOIN book_progress bp ON bp.item_id = i.id AND bp.profile_id = $1
+    LEFT JOIN book_metadata bm ON bm.item_id = i.id
+    LEFT JOIN book_sidecars bs ON bs.item_id = i.id
     WHERE i.kind = 'audiobook'
       AND ($2::uuid IS NULL OR i.id = $2)
       AND ($3::uuid IS NULL OR i.library_id = $3)

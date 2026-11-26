@@ -139,6 +139,14 @@ pub const SCHEMA: &[Table] = &[
                      an imported library starts with it off",
                 ),
             ),
+            (
+                "metadata_precedence",
+                Left(
+                    "an audiobooks library's merge order for its books' local metadata \
+                     sources (AB6); not in format v1 — an imported library starts with \
+                     D30's default order",
+                ),
+            ),
         ],
     },
     Table::Carried {
@@ -435,6 +443,17 @@ pub const SCHEMA: &[Table] = &[
         name: "backup_settings",
         why: "this host's nightly backup folder, count and hash choice (D39, XFER8); a \
               server setting, not state, and the new host's folders are its own",
+    },
+    Table::LeftOut {
+        name: "book_metadata",
+        why: "a book's merged book-only fields and its sources fingerprint (AB6); the new \
+              host's scan rebuilds them from the book's files and its match",
+    },
+    Table::Proposed {
+        name: "book_sidecars",
+        proposal: "a book's match — the server's copy of its book.parlour.json (AB6); \
+                   carrying it in catalog.json needs the owner's yes; until then a match \
+                   travels only as the book.parlour.json written beside the book",
     },
     Table::LeftOut {
         name: "_sqlx_migrations",

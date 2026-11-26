@@ -452,16 +452,20 @@ async fn sidecar_optin_flow_end_to_end() {
         .await;
     assert_eq!(s, 400, "editing a library can't turn the opt-in on");
     assert!(!flag(&pool, &library).await);
-    // Only video libraries take it.
-    let (_, books) = client
+    // Only libraries whose items get sidecars take it: video and,
+    // since AB6, audiobooks (book_match_flow covers those). Not
+    // podcasts.
+    let (_, shows_pod) = client
         .req(
             reqwest::Method::POST,
             "/api/v1/admin/libraries",
-            Some(json!({"name": "Books", "kind": "audiobooks", "paths": []})),
+            Some(json!({"name": "Pods", "kind": "podcasts", "paths": []})),
         )
         .await;
-    let (s, _) = client.set_flag(books["id"].as_str().unwrap(), true).await;
-    assert_eq!(s, 400, "an audiobooks library can't write sidecars yet");
+    let (s, _) = client
+        .set_flag(shows_pod["id"].as_str().unwrap(), true)
+        .await;
+    assert_eq!(s, 400, "a podcasts library can't write sidecars");
     // The body is strict.
     let (s, _) = client
         .req(

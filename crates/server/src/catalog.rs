@@ -314,7 +314,10 @@ async fn get_item(
 /// Run one scan job now: claim it, scan, complete/fail it.
 /// Idempotent claiming means the background worker and this direct
 /// runner can race safely — only one wins the row.
-pub async fn run_scan_job(pool: parlour_db::PgPool, job_id: Uuid) {
+///
+/// `artwork_dir` is the artwork cache: an audiobooks scan extracts
+/// embedded covers into it (AB6).
+pub async fn run_scan_job(pool: parlour_db::PgPool, job_id: Uuid, artwork_dir: std::path::PathBuf) {
     match parlour_jobs::claim_by_id(&pool, job_id).await {
         Ok(true) => {}
         Ok(false) => return,
@@ -328,7 +331,7 @@ pub async fn run_scan_job(pool: parlour_db::PgPool, job_id: Uuid) {
         _ => return,
     };
     // Same scan + completion (and activity line) as the worker path.
-    run_scan_job_claimed(pool, job).await;
+    run_scan_job_claimed(pool, job, &artwork_dir).await;
 }
 
 async fn trigger_scan(
@@ -354,7 +357,8 @@ async fn trigger_scan(
     .await
     .map_err(AppError::from)?;
     let pool = state.pool.clone();
-    tokio::spawn(async move { run_scan_job(pool, job_id).await });
+    let artwork_dir = state.metadata.artwork_dir.clone();
+    tokio::spawn(async move { run_scan_job(pool, job_id, artwork_dir).await });
     let job = parlour_jobs::get(&state.pool, job_id)
         .await
         .map_err(AppError::from)?
@@ -505,7 +509,9 @@ pub fn spawn_background(
                     Some(job) if job.kind == "purge_activity" => {
                         run_purge_activity_job(&pool, job).await
                     }
-                    Some(job) => run_scan_job_claimed(pool.clone(), job).await,
+                    Some(job) => {
+                        run_scan_job_claimed(pool.clone(), job, &metadata.artwork_dir).await
+                    }
                     None => tokio::time::sleep(Duration::from_secs(3)).await,
                 }
             }
@@ -556,7 +562,11 @@ pub fn spawn_background(
     }
 }
 
-async fn run_scan_job_claimed(pool: parlour_db::PgPool, job: parlour_jobs::Job) {
+async fn run_scan_job_claimed(
+    pool: parlour_db::PgPool,
+    job: parlour_jobs::Job,
+    artwork_dir: &std::path::Path,
+) {
     let Some(library_id) = job.library_id else {
         let _ = parlour_jobs::fail(&pool, job.id, "scan job without a library").await;
         return;
@@ -570,7 +580,10 @@ async fn run_scan_job_claimed(pool: parlour_db::PgPool, job: parlour_jobs::Job) 
         .map(|(name,)| name)
         .unwrap_or_else(|| "a library".to_string());
     let trigger = job.payload["trigger"].as_str().unwrap_or("manual");
-    match parlour_catalog::scan_library(&pool, library_id, Some(job.id)).await {
+    let options = parlour_catalog::ScanOptions {
+        artwork_dir: Some(artwork_dir.to_path_buf()),
+    };
+    match parlour_catalog::scan_library_with(&pool, library_id, Some(job.id), &options).await {
         Ok(report) => {
             tracing::info!(job_id = %job.id, %library_id, seen = report.seen_files,
                 "library scan finished");

@@ -690,7 +690,93 @@ export interface Book {
   available: boolean;
   created_at: string;
   progress: BookProgress;
+  // AB6: the book-only fields, merged from the book's sources and any
+  // match, and the match on record.
+  subtitle: string | null;
+  publisher: string | null;
+  isbn: string | null;
+  asin: string | null;
+  language: string | null;
+  google_books_id: string | null;
+  open_library_id: string | null;
+  match: BookMatch | null;
 }
+
+/** AB6: what an admin's match left on a book. */
+export interface BookMatch {
+  provider: string;
+  provider_id: string;
+  mode: MatchMode;
+  matched_at: string;
+}
+
+/** AB6 (D30): how a match lays a provider's values over a book. */
+export type MatchMode = 'overwrite' | 'fill_gaps';
+
+/** AB6: the book providers, in D30's order (Google Books is the
+ *  default). Audnexus is deliberately absent (its terms). */
+export const BOOK_PROVIDERS: { id: string; label: string }[] = [
+  { id: 'google', label: 'Google Books' },
+  { id: 'openlibrary', label: 'Open Library' },
+];
+
+/** AB6: one provider search result. */
+export interface BookCandidate {
+  provider: string;
+  provider_id: string;
+  title: string;
+  subtitle: string | null;
+  authors: string[];
+  narrators: string[];
+  publisher: string | null;
+  year: number | null;
+  description: string | null;
+  genres: string[];
+  isbn: string | null;
+  asin: string | null;
+  language: string | null;
+  cover_url: string | null;
+  confidence: number;
+}
+
+export interface BookSearchResult {
+  provider: string;
+  title: string;
+  author: string | null;
+  results: BookCandidate[];
+}
+
+/** AB6: what applying a match did. */
+export interface BookMatchReport {
+  provider: string;
+  provider_id: string;
+  mode: MatchMode;
+  changed: boolean;
+  cover: 'applied' | 'kept' | 'none' | 'failed';
+  sidecar_written: boolean;
+  cover_written: boolean;
+  left_alone: string[];
+  errors: string[];
+}
+
+/** AB6: an audiobooks library's metadata precedence. */
+export interface MetadataPrecedence {
+  library_id: string;
+  sources: string[];
+  default: string[];
+  available: string[];
+}
+
+/** AB6: what each metadata source is, for the precedence editor. */
+export const METADATA_SOURCES: Record<string, string> = {
+  folder: 'Folder names (title, author folder)',
+  tags: "Audio tags (the first track's)",
+  nfo: '.nfo file (Audiobookshelf-style "Key: value")',
+  txt: 'desc.txt and reader.txt',
+  opf: '.opf file',
+  abs_json: "Audiobookshelf's metadata.json",
+  sidecar: "Parlour's book.parlour.json, or a match",
+};
 
 export interface BookTrack {
   index: number;

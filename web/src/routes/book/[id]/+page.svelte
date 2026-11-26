@@ -6,9 +6,12 @@
   // on a seek, and when the page goes away — but only once this
   // page has actually played, so opening a book changes nothing.
   // The last track ending marks the book finished.
+  // AB6: admins can match the book by hand (BookMatch).
   import { onMount, tick } from 'svelte';
   import { page } from '$app/state';
   import { api } from '$lib/api';
+  import BookMatch from '$lib/BookMatch.svelte';
+  import { session } from '$lib/session.svelte';
   import {
     chapterAt,
     formatDurationMs,
@@ -29,6 +32,8 @@
   let playing = $state(false);
   let started = $state(false);
   let saveError = $state<string | null>(null);
+  /** Bumped after a match, so the cover image is fetched again. */
+  let coverKey = $state(0);
 
   let pendingOffsetMs: number | null = null;
   let lastSavedAt = 0;
@@ -142,6 +147,16 @@
     loadAt(v, playing);
   }
 
+  /** After a match: the book's metadata and cover, not the player. */
+  async function reloadMetadata() {
+    if (!book) return;
+    const { data } = await api<BookDetail>(`/api/v1/audiobooks/${book.id}`);
+    if (data && book) {
+      book = { ...data, progress: book.progress };
+      coverKey = Date.now();
+    }
+  }
+
   async function setFinished(finished: boolean) {
     if (!book) return;
     const { data } = await api<BookProgress>(`/api/v1/audiobooks/${book.id}/progress`, {
@@ -178,13 +193,17 @@
   <div class="head">
     <div class="cover">
       {#if book.has_cover}
-        <img src={posterUrl(book.id, 'original')} alt="" />
+        <img
+          src={coverKey ? `${posterUrl(book.id, 'original')}&r=${coverKey}` : posterUrl(book.id, 'original')}
+          alt=""
+        />
       {:else}
         <span class="tile" aria-hidden="true">{book.title.charAt(0).toUpperCase()}</span>
       {/if}
     </div>
     <div class="info">
       <h1>{book.title}</h1>
+      {#if book.subtitle}<p class="subtitle">{book.subtitle}</p>{/if}
       {#if book.authors.length}<p class="by">by {book.authors.join(', ')}</p>{/if}
       {#if book.narrators.length}<p class="dim">Read by {book.narrators.join(', ')}</p>{/if}
       <p class="dim">
@@ -198,8 +217,19 @@
         <p class="status">Resumes at {formatDurationMs(book.progress.position_ms)}</p>
       {/if}
       {#if book.overview}<p class="overview">{book.overview}</p>{/if}
+      {#if book.publisher || book.language || book.isbn}
+        <p class="dim facts">
+          {[book.publisher, book.language, book.isbn ? `ISBN ${book.isbn}` : null]
+            .filter(Boolean)
+            .join(' · ')}
+        </p>
+      {/if}
     </div>
   </div>
+
+  {#if session.me?.user.is_admin}
+    <BookMatch {book} onchanged={reloadMetadata} />
+  {/if}
 
   {#if !book.available || book.tracks.length === 0}
     <p class="error" role="alert">This book's files are not available right now.</p>
@@ -320,6 +350,14 @@
   }
   .by {
     font-size: 1.05rem;
+  }
+  .subtitle {
+    font-size: 1.05rem;
+    color: var(--text-dim);
+    margin-top: -0.2rem !important;
+  }
+  .facts {
+    font-size: 0.85rem;
   }
   .status {
     color: var(--accent);

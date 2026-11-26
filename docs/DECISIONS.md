@@ -851,3 +851,42 @@ on 2026-11-20, which is still open and isn't touched here.)
   folder is off even with the variable set, a missing folder is saved
   with a warning, hashes need both the queued job and the setting at
   run time) is `docs/IMPORT-EXPORT.md` §16.4 and §16.7, for veto.
+
+## 2026-11-26 — A book's match in the export bundle (AB6)
+
+- **D40 — DECISION NEEDED: does a book's match, and an audiobooks
+  library's metadata precedence, travel in the export bundle?**
+  Raised by AB6 (built to D30; `docs/AUDIOBOOKS-PODCASTS.md`,
+  "Metadata sources, matching and covers (AB6)";
+  `docs/IMPORT-EXPORT.md` §13.15). D14/D25 settled the bundle before
+  these existed, and D30 doesn't say. **Nothing is decided by AB6:**
+  format v1 is unchanged, and `coverage.rs` lists `book_sidecars` as
+  *Proposed* and `libraries.metadata_precedence` as left behind until
+  the owner answers.
+
+  *The facts.* An admin's match is kept in the server's own metadata
+  area, `book_sidecars` (D30's default). It is the last word in the
+  book's merge, so a re-scan keeps it. `book_metadata` (the merged
+  book-only fields and a fingerprint) is rebuilt by a scan and stays
+  behind either way. On a new host the first scan re-merges every
+  book from its local files. So **a match that isn't carried is lost
+  on migration**, unless the library had `write_sidecars` on and the
+  match was written beside the book as `book.parlour.json`. A video
+  fix-match, by contrast, survives because `catalog.json` carries the
+  item's values and the video scanner doesn't re-merge them. A
+  library's precedence list is an admin's setting, like a library's
+  name or paths, which do travel.
+
+  *Options.* (a) Leave both behind (today's state); the ops note is
+  "turn on `write_sidecars` for audiobooks libraries before
+  migrating". (b) Carry both: each matched book gains an optional
+  `match` object in `catalog.json` (the sidecar document, provider,
+  id, mode), and each library its `metadata_precedence`. (c) Carry
+  only the precedence list. Because XFER2 has shipped, (b) and (c)
+  bump the bundle to **format version 2** (§3). If D36 (the audio
+  tables) is answered yes as well, both can share one bump.
+
+  *Recommendation:* (b), decided together with D36 so the format
+  changes once. A match is an admin's deliberate work, the same kind
+  of thing D14 carries for video, and (a) makes migration lose it
+  silently unless an opt-in was on beforehand.
