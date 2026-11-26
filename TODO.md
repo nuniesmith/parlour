@@ -1186,8 +1186,28 @@ the rest wait on the owner's decisions.
 - [ ] AB9 (M) **CANCELLED 2026-11-24 by D27 — not to be
   built.** Original: importer from the owner's Audiobookshelf
   (progress + finished) — only if **D27** says yes.
-- [ ] AB10 (S) **Transcode fallback** for book codecs a
+- [x] AB10 (S) **Transcode fallback** for book codecs a
   client profile can't play (AAC), using CL5's profiles.
+  *Done 2026-11-26:* audio profiles in `parlour_playback`
+  (`AudioProfile`, `decide_audio`): `web` (browsers: MP3, AAC in MP4,
+  16/8-bit WAV), `android` for phones and Fire TV (ExoPlayer's platform
+  decoders: adds FLAC and Ogg Opus/Vorbis/FLAC) and `ios`/`tvos`
+  (AVPlayer: adds ALAC and FLAC), as container + codec pairs, named by
+  the client, never sniffed. `GET /api/v1/audiobooks/{id}?client=`
+  gives each track a `plan`, and a track the profile can't play gets
+  `GET /api/v1/stream/{file}/aac.m4a`: AAC in MP4 (ADTS AAC copied,
+  everything else converted), made once per track by the runner the
+  video remux now shares, kept and stamped with its source, index first
+  so Range seeks it, 503 + `Retry-After` until ready, same stream token
+  (an admin stop revokes it). Without `client` the answer is AB3's. The
+  book detail starts the resume track's copy; the web book page names
+  `web`, waits for a copy with a visible note (seeks kept), asks for the
+  next track's ahead, and says why a track is converted; Now Playing
+  shows a book's plan. Sessions, progress writes, auto-finish, the hide
+  flag and the shelves are unchanged. No migration; bundle untouched.
+  First play of a converted track waits ~40 s per hour of audio (oryx,
+  ffmpeg 5.1). Spec: AUDIOBOOKS-PODCASTS.md "Transcode fallback and
+  audio profiles (AB10)" (13 readings for veto).
 - **Done when:** the owner's real audiobook folders scan into
   Parlour with sensible titles, authors and chapters; a book
   plays in the web UI; and a position written by one client is
@@ -1266,6 +1286,10 @@ Phases 3 and 6; app shape and order is **D34**.
 - [ ] CL5 (S) **Audio capability profiles** (AVPlayer,
   ExoPlayer on Fire OS, browsers) → direct play vs AAC
   fallback.
+  *AB10 (2026-11-26) built the profiles and the fallback on the server,
+  used by the web player; CL5 is what a native client needs on top: it
+  names its profile (`?client=`), the profile contents are confirmed on
+  real devices (AB10 readings 2–3), and the CL6 contract.*
 - [ ] CL6 (S) **`docs/API-AUDIO.md`**: the contract with
   examples, written when CL2 lands.
 - **Done when:** a native client can sign in once, pull

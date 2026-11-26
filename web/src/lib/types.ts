@@ -289,7 +289,8 @@ export interface Job {
 export interface StreamPlan {
   action: string;
   reason: string;
-  delivery: 'file' | 'hls';
+  /** 'aac': AB10's audio fallback copy of a book track. */
+  delivery: 'file' | 'hls' | 'aac';
   client: string;
   network: string;
   container: string | null;
@@ -865,6 +866,25 @@ export interface BookTrack {
   content_type: string;
   size_bytes: number;
   stream_url: string;
+  /** AB10: the decision for the profile the page named (`?client=web`);
+   *  null when it named none. */
+  plan: BookTrackPlan | null;
+}
+
+/** AB10: one track's stream decision. Anything but DirectPlay means
+ *  `stream_url` is the AAC fallback, which answers 503 + Retry-After
+ *  until the server has made it. */
+export interface BookTrackPlan {
+  action: 'DirectPlay' | 'Remux' | 'Transcode';
+  reason: 'Direct' | 'ContainerUnsupported' | 'CodecUnsupported';
+  mode: 'direct_play' | 'copy' | 'transcode';
+  delivery: 'file' | 'aac';
+  client: string;
+}
+
+/** AB10: does this track play through the AAC fallback? */
+export function usesFallback(t: BookTrack): boolean {
+  return !!t.plan && t.plan.action !== 'DirectPlay';
 }
 
 export interface BookChapter {

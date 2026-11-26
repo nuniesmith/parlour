@@ -6,6 +6,9 @@
 //!   that follows with the profile's autoplay choice (SEG6)
 //! - `GET /api/v1/stream/{file_id}` — Range streaming (P2)
 //! - `GET /api/v1/stream/{file_id}/hls/{asset}` — remux (P3)
+//! - `GET /api/v1/stream/{file_id}/aac.m4a` — a book track as AAC in
+//!   MP4, for a client profile that can't play the original (AB10);
+//!   made once by the same cached-ffmpeg runner as the remux
 //! - `POST /api/v1/playback/{start,progress,stopped}` — reporting
 //!   into `user_data` + the live-session registry (P4, P8)
 //! - `POST /api/v1/items/{id}/{played,favorite}` — marks (P5)
@@ -153,9 +156,69 @@ pub struct StreamPlan {
     decided_at: DateTime<Utc>,
 }
 
+impl StreamPlan {
+    /// AB10: a book's plan as Now Playing shows it — the decision for
+    /// its tracks under the profile the book page named, `delivery`
+    /// "file" (the original) or "aac" (the fallback copy).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn for_book(
+        plan: parlour_core::PlaybackPlan,
+        delivery: &'static str,
+        client: ClientKind,
+        network: NetworkKind,
+        container: Option<String>,
+        bitrate_kbps: Option<i64>,
+        codec: Option<String>,
+        channels: Option<i32>,
+    ) -> Self {
+        Self {
+            action: format!("{:?}", plan.action),
+            reason: format!("{:?}", plan.reason),
+            delivery,
+            client: client_name(client),
+            network: network_name(network),
+            container,
+            bitrate_kbps,
+            video: None,
+            audio: Some(AudioPlan {
+                codec,
+                language: None,
+                channels,
+                is_default: true,
+                mode: stream_mode(plan.action),
+            }),
+            decided_at: Utc::now(),
+        }
+    }
+}
+
+/// AB10: keep the plan a book's detail just handed this profile, for
+/// the listening session's start report to pick up (as playback-info's
+/// plan is for a video's). Kept under (profile, book).
+pub(crate) fn remember_book_plan(
+    state: &PlaybackState,
+    profile_id: Uuid,
+    book_id: Uuid,
+    plan: StreamPlan,
+) {
+    let now = Utc::now();
+    let mut plans = state.plans.lock().unwrap();
+    plans.retain(|_, p| (now - p.decided_at).num_seconds() <= TOKEN_TTL_SECS);
+    plans.insert((profile_id, book_id), plan);
+}
+
+fn book_plan(state: &PlaybackState, profile_id: Uuid, book_id: Uuid) -> Option<StreamPlan> {
+    state
+        .plans
+        .lock()
+        .unwrap()
+        .get(&(profile_id, book_id))
+        .cloned()
+}
+
 /// Per-stream mode for an overall action. A remux copies every
 /// stream into the new container untouched.
-fn stream_mode(action: parlour_core::PlaybackAction) -> &'static str {
+pub(crate) fn stream_mode(action: parlour_core::PlaybackAction) -> &'static str {
     match action {
         parlour_core::PlaybackAction::DirectPlay => "direct_play",
         parlour_core::PlaybackAction::Remux => "copy",
@@ -229,7 +292,9 @@ pub struct PlaybackState {
     /// Admin stop (UI3): stream tokens for (profile, file) issued
     /// at or before this instant (ms) are refused.
     revoked: Mutex<HashMap<(Uuid, Uuid), i64>>,
-    remux: std::sync::Arc<Mutex<HashMap<Uuid, (PathBuf, RemuxStatus)>>>,
+    /// Cached ffmpeg jobs (P3's remux, AB10's audio fallback) by output
+    /// folder: the stamp each was started for, and where it stands.
+    remux: std::sync::Arc<Mutex<HashMap<PathBuf, (String, RemuxStatus)>>>,
 }
 
 impl PlaybackState {
@@ -553,6 +618,48 @@ fn is_text_sub(format: Option<&str>) -> bool {
         .unwrap_or(false)
 }
 
+/// A client's capability profile by the name it sends (`?client=`):
+/// `web`, `android`, `androidtv` / `firetv`, `ios`, `tvos`. `None` for
+/// a missing or unknown name; each caller says what that means.
+pub(crate) fn parse_client(name: Option<&str>) -> Option<ClientKind> {
+    match name? {
+        "web" => Some(ClientKind::Web),
+        "android" => Some(ClientKind::AndroidPhone),
+        "androidtv" | "firetv" => Some(ClientKind::AndroidTv),
+        "ios" => Some(ClientKind::Ios),
+        "tvos" => Some(ClientKind::TvOs),
+        _ => None,
+    }
+}
+
+pub(crate) fn client_name(client: ClientKind) -> &'static str {
+    match client {
+        ClientKind::Web => "web",
+        ClientKind::AndroidPhone => "android",
+        ClientKind::AndroidTv => "androidtv",
+        ClientKind::Ios => "ios",
+        ClientKind::TvOs => "tvos",
+    }
+}
+
+/// The network a client says it is on (`?network=`); LAN unless it
+/// says otherwise.
+pub(crate) fn parse_network(name: Option<&str>) -> NetworkKind {
+    match name {
+        Some("tailnet") => NetworkKind::Tailnet,
+        Some("public") => NetworkKind::Public,
+        _ => NetworkKind::Lan,
+    }
+}
+
+pub(crate) fn network_name(network: NetworkKind) -> &'static str {
+    match network {
+        NetworkKind::Lan => "lan",
+        NetworkKind::Tailnet => "tailnet",
+        NetworkKind::Public => "public",
+    }
+}
+
 async fn playback_info(
     State(app): State<AppState>,
     user: AuthUser,
@@ -642,18 +749,9 @@ async fn playback_info(
     .await
     .map_err(AppError::from)?;
 
-    let client = match q.client.as_deref() {
-        Some("android") => ClientKind::AndroidPhone,
-        Some("androidtv") | Some("firetv") => ClientKind::AndroidTv,
-        Some("ios") => ClientKind::Ios,
-        Some("tvos") => ClientKind::TvOs,
-        _ => ClientKind::Web,
-    };
-    let network = match q.network.as_deref() {
-        Some("tailnet") => NetworkKind::Tailnet,
-        Some("public") => NetworkKind::Public,
-        _ => NetworkKind::Lan,
-    };
+    // Video reads a missing or unknown profile name as the browser's.
+    let client = parse_client(q.client.as_deref()).unwrap_or(ClientKind::Web);
+    let network = parse_network(q.network.as_deref());
     let plan = decide(
         &FileFacts {
             container: file.container.clone(),
@@ -669,7 +767,7 @@ async fn playback_info(
     let token = make_token(&app.playback, file.id, profile_id);
     let (stream_kind, stream_url) = match plan.action {
         parlour_core::PlaybackAction::Remux => {
-            ensure_remux(&app, &file).await;
+            ensure_remux(&app, &file);
             (
                 "hls",
                 format!("/api/v1/stream/{}/hls/playlist.m3u8?token={token}", file.id),
@@ -691,18 +789,8 @@ async fn playback_info(
                 action: format!("{:?}", plan.action),
                 reason: format!("{:?}", plan.reason),
                 delivery: stream_kind,
-                client: match client {
-                    ClientKind::Web => "web",
-                    ClientKind::AndroidPhone => "android",
-                    ClientKind::AndroidTv => "androidtv",
-                    ClientKind::Ios => "ios",
-                    ClientKind::TvOs => "tvos",
-                },
-                network: match network {
-                    NetworkKind::Lan => "lan",
-                    NetworkKind::Tailnet => "tailnet",
-                    NetworkKind::Public => "public",
-                },
+                client: client_name(client),
+                network: network_name(network),
                 container: file.container.clone(),
                 bitrate_kbps,
                 video: video_facts.map(|(codec, width, height, hdr_format)| VideoPlan {
@@ -936,98 +1024,157 @@ fn parse_range(headers: &HeaderMap, total: u64) -> RangeResult {
 }
 
 // ---------------------------------------------------------------------
-// P3: remux to HLS/fMP4
+// P3: remux to HLS/fMP4 — and AB10's audio fallback, through the same
+// runner: one ffmpeg per output folder, run once, its result kept on
+// disk behind a `.ready` marker.
 
-async fn ensure_remux(app: &AppState, file: &FileRow) {
-    let dir = app
-        .playback
-        .cache_dir
-        .join("remux")
-        .join(file.id.to_string());
-    if dir.join(".ready").exists() {
+/// One cached ffmpeg output folder.
+struct CacheJob {
+    dir: PathBuf,
+    /// What the output was made from. `.ready` holds it, and a folder
+    /// whose `.ready` holds anything else is out of date and made
+    /// again. The video remux's stamp is empty (its `.ready` always
+    /// was).
+    stamp: String,
+    args: Vec<String>,
+    /// Renamed `(from, to)` inside `dir` once ffmpeg succeeds, so a
+    /// half-written output is never under the served name.
+    publish: Option<(&'static str, &'static str)>,
+}
+
+/// Where a job stands. Ready only when `.ready` holds the job's stamp;
+/// otherwise this process's record, then a `.failed` left on disk.
+fn job_status(app: &AppState, dir: &std::path::Path, stamp: &str) -> RemuxStatus {
+    if std::fs::read_to_string(dir.join(".ready")).is_ok_and(|s| s == stamp) {
+        return RemuxStatus::Ready;
+    }
+    if let Some((job_stamp, status)) = app.playback.remux.lock().unwrap().get(dir) {
+        if job_stamp == stamp {
+            return status.clone();
+        }
+    }
+    if let Ok(msg) = std::fs::read_to_string(dir.join(".failed")) {
+        return RemuxStatus::Failed(msg);
+    }
+    RemuxStatus::Running
+}
+
+/// Start the job unless its output is ready or it is already running.
+/// A job that failed runs again when `retry_failed` (the video remux,
+/// as P3 always did); otherwise it stays failed until its source
+/// changes or the server restarts (AB10: a file ffmpeg can't read
+/// isn't re-read on every request).
+fn ensure_job(app: &AppState, job: CacheJob, retry_failed: bool) {
+    if std::fs::read_to_string(job.dir.join(".ready")).is_ok_and(|s| s == job.stamp) {
         return; // finished in a previous run; cache is on disk
     }
     {
         let mut map = app.playback.remux.lock().unwrap();
-        if let Some((_, status)) = map.get(&file.id) {
-            if *status == RemuxStatus::Ready || *status == RemuxStatus::Running {
-                return;
+        if let Some((stamp, status)) = map.get(&job.dir) {
+            let same = *stamp == job.stamp;
+            match status {
+                // One ffmpeg per folder, whatever it was started for: a
+                // copy of a since-changed source finishes first, and the
+                // next request (still answered 503) starts the new one.
+                RemuxStatus::Running => return,
+                RemuxStatus::Ready if same => return,
+                RemuxStatus::Failed(_) if same && !retry_failed => return,
+                _ => {}
             }
         }
-        map.insert(file.id, (dir.clone(), RemuxStatus::Running));
+        map.insert(job.dir.clone(), (job.stamp.clone(), RemuxStatus::Running));
     }
     let map = app.playback.remux.clone();
-    let file_id = file.id;
-    let src = file.path.clone();
     let ffmpeg = std::env::var("PARLOUR_FFMPEG").unwrap_or_else(|_| "ffmpeg".to_string());
     tokio::spawn(async move {
+        let CacheJob {
+            dir,
+            stamp,
+            args,
+            publish,
+        } = job;
         let _ = tokio::fs::create_dir_all(&dir).await;
         let _ = tokio::fs::remove_file(dir.join(".failed")).await;
+        let _ = tokio::fs::remove_file(dir.join(".ready")).await;
         // Bare filenames + current_dir: the HLS muxer fails to
         // open the fMP4 init segment when given an absolute path
         // for -hls_fmp4_init_filename.
         let result = tokio::process::Command::new(ffmpeg)
             .current_dir(&dir)
-            .args([
-                "-y",
-                "-v",
-                "error",
-                "-i",
-                &src,
-                // Video + first audio only: subtitles travel as
-                // separate WebVTT tracks, and the HLS muxer
-                // rejects copied subtitle streams outright.
-                "-map",
-                "0:v:0",
-                "-map",
-                "0:a:0?",
-                "-c",
-                "copy",
-                "-f",
-                "hls",
-                "-hls_time",
-                "6",
-                "-hls_segment_type",
-                "fmp4",
-                "-hls_fmp4_init_filename",
-                "init.mp4",
-                "-hls_segment_filename",
-                "seg-%05d.m4s",
-                "-hls_playlist_type",
-                "vod",
-                "playlist.m3u8",
-            ])
+            .args(&args)
             .status()
             .await;
-        let status = match result {
+        let mut status = match result {
             Ok(s) if s.success() => RemuxStatus::Ready,
             Ok(s) => RemuxStatus::Failed(format!("ffmpeg exited {s}")),
             Err(e) => RemuxStatus::Failed(e.to_string()),
         };
+        if let (RemuxStatus::Ready, Some((from, to))) = (&status, publish) {
+            if let Err(e) = tokio::fs::rename(dir.join(from), dir.join(to)).await {
+                status = RemuxStatus::Failed(e.to_string());
+            }
+        }
         match &status {
             RemuxStatus::Ready => {
-                let _ = tokio::fs::write(dir.join(".ready"), b"").await;
+                let _ = tokio::fs::write(dir.join(".ready"), stamp.as_bytes()).await;
             }
             RemuxStatus::Failed(msg) => {
+                tracing::warn!(dir = %dir.display(), %msg, "cached ffmpeg job failed");
                 let _ = tokio::fs::write(dir.join(".failed"), msg).await;
             }
             RemuxStatus::Running => {}
         }
-        map.lock().unwrap().insert(file_id, (dir, status));
+        map.lock().unwrap().insert(dir, (stamp, status));
     });
 }
 
-fn remux_status(app: &AppState, file_id: Uuid, dir: &std::path::Path) -> RemuxStatus {
-    if dir.join(".ready").exists() {
-        return RemuxStatus::Ready;
-    }
-    if let Ok(msg) = std::fs::read_to_string(dir.join(".failed")) {
-        return RemuxStatus::Failed(msg);
-    }
-    let map = app.playback.remux.lock().unwrap();
-    map.get(&file_id)
-        .map(|(_, s)| s.clone())
-        .unwrap_or(RemuxStatus::Running)
+fn remux_dir(app: &AppState, file_id: Uuid) -> PathBuf {
+    app.playback
+        .cache_dir
+        .join("remux")
+        .join(file_id.to_string())
+}
+
+fn ensure_remux(app: &AppState, file: &FileRow) {
+    let args = [
+        "-y",
+        "-v",
+        "error",
+        "-i",
+        &file.path,
+        // Video + first audio only: subtitles travel as
+        // separate WebVTT tracks, and the HLS muxer
+        // rejects copied subtitle streams outright.
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a:0?",
+        "-c",
+        "copy",
+        "-f",
+        "hls",
+        "-hls_time",
+        "6",
+        "-hls_segment_type",
+        "fmp4",
+        "-hls_fmp4_init_filename",
+        "init.mp4",
+        "-hls_segment_filename",
+        "seg-%05d.m4s",
+        "-hls_playlist_type",
+        "vod",
+        "playlist.m3u8",
+    ];
+    ensure_job(
+        app,
+        CacheJob {
+            dir: remux_dir(app, file.id),
+            stamp: String::new(),
+            args: args.iter().map(|a| a.to_string()).collect(),
+            publish: None,
+        },
+        true,
+    );
 }
 
 async fn stream_hls(
@@ -1041,14 +1188,10 @@ async fn stream_hls(
         return Err(AppError::NotFound("not found".into()));
     }
     let file = load_file(&app, file_id).await?;
-    let dir = app
-        .playback
-        .cache_dir
-        .join("remux")
-        .join(file_id.to_string());
-    ensure_remux(&app, &file).await;
+    let dir = remux_dir(&app, file_id);
+    ensure_remux(&app, &file);
     if asset == "playlist.m3u8" {
-        match remux_status(&app, file_id, &dir) {
+        match job_status(&app, &dir, "") {
             RemuxStatus::Ready => {}
             RemuxStatus::Failed(msg) => return Err(AppError::Internal(msg)),
             RemuxStatus::Running => {
@@ -1073,6 +1216,192 @@ async fn stream_hls(
         "video/mp4"
     };
     Ok(([(header::CONTENT_TYPE, content_type)], bytes).into_response())
+}
+
+// ---------------------------------------------------------------------
+// AB10: the AAC fallback for a book track a client profile can't play
+
+/// The recipe's version, part of every stamp: changing the arguments
+/// below makes every kept copy again.
+const AUDIO_FALLBACK_RECIPE: &str = "aac-1";
+/// The served copy, and the name ffmpeg writes it under first.
+const AUDIO_FALLBACK_FILE: &str = "audio.m4a";
+const AUDIO_FALLBACK_PART: &str = "audio.part.m4a";
+/// AAC bit rate per channel; mono books stay mono, more than two
+/// channels are folded to stereo.
+const AUDIO_FALLBACK_KBPS_PER_CHANNEL: i32 = 64;
+
+/// The ffmpeg arguments that turn `src`'s first audio stream into an
+/// AAC-in-MP4 file with its index at the front (`+faststart`), so a
+/// player seeks it by byte range from the first request. `copy` keeps
+/// AAC as it is (only the container was the problem). Pictures, tags
+/// and chapters are dropped: the book's chapters and cover come from
+/// the catalog, not the stream.
+pub fn audio_fallback_args(src: &str, copy: bool, channels: Option<i32>) -> Vec<String> {
+    let mut args: Vec<String> = [
+        "-y",
+        "-v",
+        "error",
+        "-i",
+        src,
+        "-map",
+        "0:a:0",
+        "-vn",
+        "-sn",
+        "-dn",
+        "-map_metadata",
+        "-1",
+        "-map_chapters",
+        "-1",
+    ]
+    .iter()
+    .map(|a| a.to_string())
+    .collect();
+    if copy {
+        args.extend(["-c:a".into(), "copy".into()]);
+    } else {
+        let channels = channels.filter(|c| *c > 0).unwrap_or(2);
+        let out_channels = channels.min(2);
+        args.extend([
+            "-c:a".into(),
+            "aac".into(),
+            // ffmpeg's faster AAC coder: ~1.5x the default's speed for
+            // speech that doesn't need the slower search.
+            "-aac_coder".into(),
+            "fast".into(),
+            "-b:a".into(),
+            format!("{}k", AUDIO_FALLBACK_KBPS_PER_CHANNEL * out_channels),
+        ]);
+        if channels > 2 {
+            args.extend(["-ac".into(), "2".into()]);
+        }
+    }
+    args.extend([
+        "-movflags".into(),
+        "+faststart".into(),
+        "-f".into(),
+        "mp4".into(),
+        AUDIO_FALLBACK_PART.into(),
+    ]);
+    args
+}
+
+/// What the stamp says a copy was made from: the recipe, and the
+/// source's size and modification time as the last scan saw them.
+pub fn audio_fallback_stamp(size_bytes: i64, mtime: DateTime<Utc>) -> String {
+    format!(
+        "{AUDIO_FALLBACK_RECIPE}:{size_bytes}:{}",
+        mtime.timestamp_micros()
+    )
+}
+
+#[derive(FromRow)]
+struct AudioSource {
+    id: Uuid,
+    path: String,
+    size_bytes: i64,
+    mtime: DateTime<Utc>,
+    codec: Option<String>,
+    channels: Option<i32>,
+}
+
+/// An available book track (the fallback is for audio items only: a
+/// video file's sound is never converted this way).
+async fn load_audio_source(app: &AppState, file_id: Uuid) -> Result<AudioSource, AppError> {
+    sqlx::query_as::<_, AudioSource>(
+        "SELECT f.id, f.path, f.size_bytes, f.mtime,
+                s.codec, s.channels
+         FROM media_files f
+         JOIN media_items i ON i.id = f.item_id
+         LEFT JOIN LATERAL (
+             SELECT codec, channels FROM media_streams
+             WHERE file_id = f.id AND kind = 'audio'
+             ORDER BY is_default DESC, stream_index LIMIT 1
+         ) s ON true
+         WHERE f.id = $1 AND f.available AND i.kind = 'audiobook'",
+    )
+    .bind(file_id)
+    .fetch_optional(&app.pool)
+    .await
+    .map_err(AppError::from)?
+    .ok_or_else(|| AppError::NotFound("no such audio track".into()))
+}
+
+fn audio_fallback_dir(app: &AppState, file_id: Uuid) -> PathBuf {
+    app.playback
+        .cache_dir
+        .join("audio-aac")
+        .join(file_id.to_string())
+}
+
+fn audio_fallback_job(app: &AppState, src: &AudioSource) -> CacheJob {
+    let copy = src
+        .codec
+        .as_deref()
+        .is_some_and(|c| c.eq_ignore_ascii_case(parlour_playback::FALLBACK_AUDIO_CODEC));
+    CacheJob {
+        dir: audio_fallback_dir(app, src.id),
+        stamp: audio_fallback_stamp(src.size_bytes, src.mtime),
+        args: audio_fallback_args(&src.path, copy, src.channels),
+        publish: Some((AUDIO_FALLBACK_PART, AUDIO_FALLBACK_FILE)),
+    }
+}
+
+/// Start making a track's AAC copy now, so it is ready (or nearly) by
+/// the time the player asks: the book detail does this for the track a
+/// profile will resume in, as playback-info starts a video's remux.
+pub(crate) async fn prepare_audio_fallback(app: &AppState, file_id: Uuid) {
+    if let Ok(src) = load_audio_source(app, file_id).await {
+        let job = audio_fallback_job(app, &src);
+        ensure_job(app, job, false);
+    }
+}
+
+/// `GET /api/v1/stream/{file_id}/aac.m4a` — a book track as AAC in
+/// MP4, with Range, authorised like the file itself (the same stream
+/// token, so an admin stop revokes both). Made once and kept; until
+/// it is ready the answer is 503 with `Retry-After`, as the video
+/// remux's playlist is.
+async fn stream_aac(
+    State(app): State<AppState>,
+    headers: HeaderMap,
+    user: MaybeUser,
+    Path(file_id): Path<Uuid>,
+    Query(q): Query<TokenQuery>,
+) -> Result<Response, AppError> {
+    authorise_media(&app, file_id, q.token.as_deref(), user.0.as_ref()).await?;
+    let src = load_audio_source(&app, file_id).await?;
+    let job = audio_fallback_job(&app, &src);
+    let (dir, stamp) = (job.dir.clone(), job.stamp.clone());
+    ensure_job(&app, job, false);
+    match job_status(&app, &dir, &stamp) {
+        RemuxStatus::Ready => {}
+        RemuxStatus::Failed(_) => {
+            return Err(AppError::Internal(
+                "this track could not be converted to AAC".into(),
+            ))
+        }
+        RemuxStatus::Running => {
+            return Ok((
+                StatusCode::SERVICE_UNAVAILABLE,
+                [(header::RETRY_AFTER, "2")],
+                "converting to AAC",
+            )
+                .into_response());
+        }
+    }
+    let out = dir.join(AUDIO_FALLBACK_FILE);
+    let size = tokio::fs::metadata(&out)
+        .await
+        .map_err(|_| AppError::NotFound("file".into()))?
+        .len();
+    serve_range(
+        out.to_str().unwrap_or_default(),
+        size as i64,
+        &headers,
+        "audio/mp4",
+    )
+    .await
 }
 
 // ---------------------------------------------------------------------
@@ -1426,7 +1755,7 @@ async fn listen_start(
             last_seen: now,
             position_ms: beat.position_ms,
             duration_ms: beat.duration_ms,
-            plan: None,
+            plan: book_plan(&app.playback, profile_id, body.item_id),
             client,
             remote,
             stopped: false,
@@ -1508,7 +1837,7 @@ async fn listen_progress(
             last_seen: now,
             position_ms: session.position_ms,
             duration_ms: session.duration_ms,
-            plan: None,
+            plan: book_plan(&app.playback, profile_id, body.item_id),
             client: ClientInfo {
                 name: session.client_name.clone(),
                 version: session.client_version.clone(),
@@ -1902,6 +2231,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/items/{id}/playback-info", get(playback_info))
         .route("/api/v1/stream/{file_id}", get(stream_file))
         .route("/api/v1/stream/{file_id}/hls/{asset}", get(stream_hls))
+        .route("/api/v1/stream/{file_id}/aac.m4a", get(stream_aac))
         .route("/api/v1/playback/start", post(report_start))
         .route("/api/v1/playback/progress", post(report_progress))
         .route("/api/v1/playback/stopped", post(report_stopped))
@@ -1909,4 +2239,78 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/subtitles/{track_id}", get(subtitle_vtt))
         .route("/api/v1/admin/sessions", get(list_sessions))
         .route("/api/v1/admin/sessions/{id}/stop", post(stop_session))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn after<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
+        args.iter()
+            .position(|a| a == flag)
+            .and_then(|i| args.get(i + 1))
+            .map(|s| s.as_str())
+    }
+
+    #[test]
+    fn the_aac_fallback_recipe() {
+        // Stereo (or unknown): 128 kb/s AAC, first audio stream only,
+        // index at the front, written under the part name.
+        let args = audio_fallback_args("/media/b/01.opus", false, Some(2));
+        assert_eq!(after(&args, "-i"), Some("/media/b/01.opus"));
+        assert_eq!(after(&args, "-map"), Some("0:a:0"));
+        assert_eq!(after(&args, "-c:a"), Some("aac"));
+        assert_eq!(after(&args, "-b:a"), Some("128k"));
+        assert_eq!(after(&args, "-movflags"), Some("+faststart"));
+        assert_eq!(after(&args, "-f"), Some("mp4"));
+        assert_eq!(args.last().map(|s| s.as_str()), Some(AUDIO_FALLBACK_PART));
+        assert!(!args.iter().any(|a| a == "-ac"));
+        assert_eq!(
+            after(&audio_fallback_args("x", false, None), "-b:a"),
+            Some("128k")
+        );
+        // Mono stays mono, at half the rate; surround folds to stereo.
+        let mono = audio_fallback_args("x", false, Some(1));
+        assert_eq!(after(&mono, "-b:a"), Some("64k"));
+        assert!(!mono.iter().any(|a| a == "-ac"));
+        let surround = audio_fallback_args("x", false, Some(6));
+        assert_eq!(after(&surround, "-b:a"), Some("128k"));
+        assert_eq!(after(&surround, "-ac"), Some("2"));
+        // AAC in the wrong container is copied, not re-encoded.
+        let copy = audio_fallback_args("x.aac", true, Some(2));
+        assert_eq!(after(&copy, "-c:a"), Some("copy"));
+        assert!(!copy.iter().any(|a| a == "-b:a"));
+    }
+
+    #[test]
+    fn a_changed_source_or_recipe_changes_the_stamp() {
+        let t = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let a = audio_fallback_stamp(1000, t);
+        assert!(a.starts_with(AUDIO_FALLBACK_RECIPE));
+        assert_ne!(a, audio_fallback_stamp(1001, t));
+        assert_ne!(
+            a,
+            audio_fallback_stamp(1000, t + chrono::Duration::microseconds(1))
+        );
+        // Never the video remux's empty stamp.
+        assert!(!a.is_empty());
+    }
+
+    #[test]
+    fn client_profile_names() {
+        assert_eq!(parse_client(Some("web")), Some(ClientKind::Web));
+        assert_eq!(parse_client(Some("firetv")), Some(ClientKind::AndroidTv));
+        assert_eq!(parse_client(Some("androidtv")), Some(ClientKind::AndroidTv));
+        assert_eq!(parse_client(Some("roku")), None);
+        assert_eq!(parse_client(None), None);
+        for c in [
+            ClientKind::Web,
+            ClientKind::AndroidPhone,
+            ClientKind::AndroidTv,
+            ClientKind::Ios,
+            ClientKind::TvOs,
+        ] {
+            assert_eq!(parse_client(Some(client_name(c))), Some(c));
+        }
+    }
 }

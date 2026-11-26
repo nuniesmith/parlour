@@ -9,6 +9,11 @@
 //! `CodecUnsupported` — the best Phase 1 can offer, and the UI
 //! says so plainly.
 //!
+//! AB10: audio-only media (book tracks) has its own explicit
+//! profiles, [`AudioProfile`], and [`decide_audio`] does plan a
+//! Transcode — to AAC, the one codec every profile plays. Video is
+//! unchanged.
+//!
 //! Also here: the subtitle auto-pick rules (P6) and the segment
 //! precedence rule (SEG1), pure so the server and future clients
 //! agree on them.
@@ -151,6 +156,129 @@ pub fn decide(
         };
     }
     PlaybackPlan::direct()
+}
+
+// ---------------------------------------------------------------------
+// Audio capability profiles and the AAC fallback (AB10, CL5's
+// profiles; `docs/AUDIOBOOKS-PODCASTS.md`, "Transcode fallback and
+// audio profiles (AB10)")
+
+/// What a client plays directly for **audio-only** media (book tracks;
+/// podcast episodes later). The same explicit-profile rule as video
+/// (ARCHITECTURE §4): the client names its profile, nothing is sniffed.
+///
+/// Unlike [`ClientCaps`], a profile lists **pairs**: each container
+/// (ffprobe's first `format_name` token, as the catalog stores it) with
+/// the codecs that play in it, so "Opus in Ogg" and "Opus in MP4" are
+/// different claims. A codec only goes in when a source says the player
+/// decodes it in that container on every version the profile covers;
+/// anything uncertain falls back, because a needless conversion costs a
+/// short wait while a wrong "direct" costs a book that doesn't play.
+#[derive(Debug, Clone, Copy)]
+pub struct AudioProfile {
+    /// The profile's name on the wire (`?client=`'s family).
+    pub name: &'static str,
+    pub formats: &'static [(&'static str, &'static [&'static str])],
+}
+
+/// The 16- and 8-bit PCM that every WAV player handles.
+const WAV_PCM: &[&str] = &["pcm_s16le", "pcm_u8"];
+
+/// Browsers (`<audio>`): only what Chrome, Firefox and Safari on macOS
+/// and iOS all play. Ogg Opus/Vorbis reached Safari only in 18.4, FLAC on
+/// iOS Safari is disputed, ALAC is Safari-only: all of those convert.
+/// Raw ADTS `.aac` is copied into MP4 for exact seeking.
+pub const WEB_AUDIO: AudioProfile = AudioProfile {
+    name: "web",
+    formats: &[("mov", &["aac"]), ("mp3", &["mp3"]), ("wav", WAV_PCM)],
+};
+
+/// Android's Media3 ExoPlayer with the platform decoders only (no FFmpeg
+/// extension): phones and Android TV / Fire TV (Fire OS 8 is Android 11).
+/// No ALAC, AC-3 or WMA; ADTS is copied because ExoPlayer seeks it only
+/// with constant-bitrate seeking switched on.
+pub const ANDROID_AUDIO: AudioProfile = AudioProfile {
+    name: "android",
+    formats: &[
+        ("mov", &["aac"]),
+        ("mp3", &["mp3"]),
+        ("flac", &["flac"]),
+        ("ogg", &["opus", "vorbis", "flac"]),
+        ("wav", WAV_PCM),
+    ],
+};
+
+/// Apple's AVPlayer (iOS, iPadOS, tvOS): no Ogg container at all, so
+/// Opus and Vorbis convert; ALAC plays.
+pub const APPLE_AUDIO: AudioProfile = AudioProfile {
+    name: "apple",
+    formats: &[
+        ("mov", &["aac", "alac"]),
+        ("mp3", &["mp3"]),
+        ("flac", &["flac"]),
+        ("wav", WAV_PCM),
+    ],
+};
+
+pub fn audio_profile_for(client: ClientKind) -> AudioProfile {
+    match client {
+        ClientKind::Web => WEB_AUDIO,
+        ClientKind::AndroidPhone | ClientKind::AndroidTv => ANDROID_AUDIO,
+        ClientKind::Ios | ClientKind::TvOs => APPLE_AUDIO,
+    }
+}
+
+/// The codec every profile plays, and so the one the fallback makes.
+pub const FALLBACK_AUDIO_CODEC: &str = "aac";
+
+/// Decide one audio track for a profile:
+///
+/// - the container and codec are a pair the profile lists → direct play;
+/// - the codec is AAC in a container it doesn't list → remux (the AAC is
+///   copied into MP4 untouched), reason `ContainerUnsupported`;
+/// - any other codec the profile doesn't list in that container →
+///   transcode to AAC, reason `CodecUnsupported` when the profile lists
+///   the codec nowhere, `ContainerUnsupported` when it does elsewhere.
+///
+/// A track whose codec the probe didn't find plays as it is, as an
+/// unknown codec does for video: there is nothing to convert from.
+pub fn decide_audio(
+    container: Option<&str>,
+    codec: Option<&str>,
+    client: ClientKind,
+) -> PlaybackPlan {
+    let profile = audio_profile_for(client);
+    let Some(codec) = codec else {
+        return PlaybackPlan::direct();
+    };
+    let container = container.unwrap_or("");
+    let plays_in = |c: &str| {
+        profile
+            .formats
+            .iter()
+            .any(|(k, codecs)| k.eq_ignore_ascii_case(c) && contains(codecs, codec))
+    };
+    if plays_in(container) {
+        return PlaybackPlan::direct();
+    }
+    if codec.eq_ignore_ascii_case(FALLBACK_AUDIO_CODEC) {
+        return PlaybackPlan {
+            action: PlaybackAction::Remux,
+            reason: PlaybackReason::ContainerUnsupported,
+        };
+    }
+    let codec_known = profile
+        .formats
+        .iter()
+        .any(|(_, codecs)| contains(codecs, codec));
+    PlaybackPlan {
+        action: PlaybackAction::Transcode,
+        reason: if codec_known {
+            PlaybackReason::ContainerUnsupported
+        } else {
+            PlaybackReason::CodecUnsupported
+        },
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -552,5 +680,102 @@ mod tests {
         assert!(segment_at(&segs, SegmentKind::Intro, 19_999).is_some());
         assert!(segment_at(&segs, SegmentKind::Intro, 20_000).is_none());
         assert!(segment_at(&segs, SegmentKind::Credits, 15_000).is_none());
+    }
+
+    // -----------------------------------------------------------------
+    // AB10: audio profiles
+
+    fn audio(container: &str, codec: &str, client: ClientKind) -> (PlaybackAction, PlaybackReason) {
+        let plan = decide_audio(Some(container), Some(codec), client);
+        (plan.action, plan.reason)
+    }
+
+    const DIRECT: (PlaybackAction, PlaybackReason) =
+        (PlaybackAction::DirectPlay, PlaybackReason::Direct);
+    const CONVERT: (PlaybackAction, PlaybackReason) =
+        (PlaybackAction::Transcode, PlaybackReason::CodecUnsupported);
+    const CONVERT_CONTAINER: (PlaybackAction, PlaybackReason) = (
+        PlaybackAction::Transcode,
+        PlaybackReason::ContainerUnsupported,
+    );
+    const COPY: (PlaybackAction, PlaybackReason) =
+        (PlaybackAction::Remux, PlaybackReason::ContainerUnsupported);
+
+    #[test]
+    fn the_audio_profiles_as_specified() {
+        use ClientKind::*;
+        // (container, codec, web, android, apple), the table in
+        // AUDIOBOOKS-PODCASTS.md "Transcode fallback and audio profiles".
+        let table = [
+            ("mov", "aac", DIRECT, DIRECT, DIRECT),
+            ("mp3", "mp3", DIRECT, DIRECT, DIRECT),
+            ("wav", "pcm_s16le", DIRECT, DIRECT, DIRECT),
+            ("mov", "alac", CONVERT, CONVERT, DIRECT),
+            ("flac", "flac", CONVERT, DIRECT, DIRECT),
+            ("ogg", "flac", CONVERT, DIRECT, CONVERT_CONTAINER),
+            ("ogg", "opus", CONVERT, DIRECT, CONVERT),
+            ("ogg", "vorbis", CONVERT, DIRECT, CONVERT),
+            ("aac", "aac", COPY, COPY, COPY),
+            ("asf", "wmav2", CONVERT, CONVERT, CONVERT),
+            ("mov", "ac3", CONVERT, CONVERT, CONVERT),
+            ("wav", "pcm_s24le", CONVERT, CONVERT, CONVERT),
+            // MP3 inside MP4 is not claimed for any player.
+            (
+                "mov",
+                "mp3",
+                CONVERT_CONTAINER,
+                CONVERT_CONTAINER,
+                CONVERT_CONTAINER,
+            ),
+        ];
+        for (container, codec, web, android, apple) in table {
+            assert_eq!(audio(container, codec, Web), web, "web {container}/{codec}");
+            for client in [AndroidPhone, AndroidTv] {
+                assert_eq!(
+                    audio(container, codec, client),
+                    android,
+                    "{client:?} {container}/{codec}"
+                );
+            }
+            for client in [Ios, TvOs] {
+                assert_eq!(
+                    audio(container, codec, client),
+                    apple,
+                    "{client:?} {container}/{codec}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_profile_plays_the_fallback_it_is_given() {
+        for client in [
+            ClientKind::Web,
+            ClientKind::AndroidPhone,
+            ClientKind::AndroidTv,
+            ClientKind::Ios,
+            ClientKind::TvOs,
+        ] {
+            assert_eq!(audio("mov", FALLBACK_AUDIO_CODEC, client), DIRECT);
+        }
+    }
+
+    #[test]
+    fn audio_names_match_case_blind_and_unknowns_play_as_they_are() {
+        assert_eq!(audio("MOV", "AAC", ClientKind::Web), DIRECT);
+        // No codec found by the probe: nothing to convert from.
+        assert_eq!(
+            decide_audio(Some("ogg"), None, ClientKind::Web),
+            PlaybackPlan::direct()
+        );
+        // A known codec in an unknown container converts.
+        assert_eq!(
+            decide_audio(None, Some("mp3"), ClientKind::Web).action,
+            PlaybackAction::Transcode
+        );
+        assert_eq!(
+            decide_audio(None, Some("aac"), ClientKind::Web).action,
+            PlaybackAction::Remux
+        );
     }
 }

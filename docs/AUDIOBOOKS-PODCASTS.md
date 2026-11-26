@@ -169,7 +169,8 @@ profile's** library access (no access reads as 404, like items).
 | Method + path | What |
 |---|---|
 | `GET /audiobooks?library_id=&q=&sort=title\|added\|recent` | Books the profile can reach, with authors, narrators, duration, track and chapter counts, cover flag, and this profile's progress inline |
-| `GET /audiobooks/{id}` | One book: the above plus `tracks` (index, file id, title, `start_ms`, `duration_ms`, codec, size, a tokenised `stream_url`) and `chapters` |
+| `GET /audiobooks/{id}?client=` | One book: the above plus `tracks` (index, file id, title, `start_ms`, `duration_ms`, codec, size, a tokenised `stream_url`) and `chapters`. *AB10:* with `client` (a profile name) each track has a `plan`, and a track that profile can't play has the AAC fallback as its `stream_url` |
+| `GET /stream/{file_id}/aac.m4a` | *AB10:* a book track as AAC in MP4, with Range; 503 + `Retry-After` until it is made; same token as the file |
 | `GET /audiobooks/{id}/tracks/{index}/stream` | Track audio with HTTP Range (single range, 206/416), authorised by stream token or session, the same rules as `/stream/{file_id}` |
 | `GET /audiobooks/{id}/progress` | This profile's progress (zeros when never started) |
 | `PUT /audiobooks/{id}/progress` | `{position_ms?, finished?, hidden?, client_updated_at?}` (the last two AB11); position is clamped to the book's length; returns the stored row |
@@ -831,7 +832,8 @@ goes through the same three reports video uses —
 `POST /api/v1/playback/{start,progress,stopped}` with the book's id as
 `item_id` and book-global positions — and sits in the same live
 registry, so **Now Playing** (`GET /api/v1/admin/sessions`) lists it
-beside the viewing sessions (`item_kind: "audiobook"`, no stream plan)
+beside the viewing sessions (`item_kind: "audiobook"`, no stream plan;
+*AB10: a plan when the book page named its profile*)
 and the admin **Stop** works on it. The video session shape carries
 audio without breaking video; what it can't carry (listening time, a
 record that outlives the process) is in the new `listening_sessions`
@@ -1007,6 +1009,220 @@ decision.
     every progress write. Sessions don't finish a book; the progress
     write does.
 
+### Transcode fallback and audio profiles (AB10, built 2026-11-26)
+
+Built to TODO AB10 ("transcode fallback for book codecs a client
+profile can't play (AAC), using CL5's profiles") and ARCHITECTURE §4's
+rule that an **explicit, named client profile** decides a stream, never
+sniffing. This builds CL5's profiles on the server and uses them for
+the web player; the native apps' side (naming their profile, testing
+the contents on devices, the CL6 contract) stays with CL5/CL6. ABS
+behaviour was read from its server source on 2026-11-26
+(`PlaybackSessionManager.js`, `Stream.js`, `Book.js`, `constants.js`;
+behaviour only, nothing copied). What each player decodes was read the
+same day from MDN's audio codec and container guides, caniuse and
+WebKit's Safari 18.4 notes (browsers), Android's Media3 and platform
+supported-formats pages (ExoPlayer), and Apple's HLS authoring
+specification (AVPlayer). Code: `crates/playback/src/lib.rs`
+(`AudioProfile`, `decide_audio`), `crates/server/src/playback.rs` (the
+cached-ffmpeg runner the remux now shares, `/aac.m4a`, the book's plan
+for Now Playing), `crates/server/src/audiobooks.rs` (`?client=`); web
+`routes/book/[id]`, `lib/NowPlaying.svelte`, `lib/types.ts`. No
+migration and no new table: the profiles are code, like video's, and
+the copies are cache files. The export bundle is untouched (format v1).
+
+**The profiles.** A profile lists **pairs**: a container (ffprobe's
+first format name, as the catalog stores it) with the codecs that play
+in it. A pair goes in only when a source says the player decodes it in
+that container on every version the profile covers; anything uncertain
+converts, because a needless conversion costs a wait and a wrong
+"direct" costs a book that doesn't play. Clients name a profile the way
+they name one for video (`?client=`):
+
+| Source (container / codec) | `web` (browsers) | `android`, `androidtv`, `firetv` (ExoPlayer) | `ios`, `tvos` (AVPlayer) |
+|---|---|---|---|
+| MP4 (`.m4a`/`.m4b`) / AAC | direct | direct | direct |
+| MP3 / MP3 | direct | direct | direct |
+| WAV / 16- or 8-bit PCM | direct | direct | direct |
+| MP4 / ALAC | AAC | AAC | direct |
+| FLAC / FLAC | AAC | direct | direct |
+| Ogg (`.ogg`/`.oga`/`.opus`) / Opus, Vorbis | AAC | direct | AAC |
+| Ogg / FLAC | AAC | direct | AAC |
+| ADTS (`.aac`) / AAC | copied into MP4 | copied into MP4 | copied into MP4 |
+| ASF (`.wma`) / WMA | AAC | AAC | AAC |
+| anything else (AC-3, 24-bit WAV, MP3 inside MP4, …) | AAC | AAC | AAC |
+
+**The decision** (`decide_audio`, pure, unit-tested against the table):
+a pair the profile lists plays directly; AAC in a container it doesn't
+list is **copied** into MP4 (`Remux`, reason `ContainerUnsupported`);
+any other codec it doesn't list in that container is **converted to
+AAC** (`Transcode`, reason `CodecUnsupported`, or `ContainerUnsupported`
+when the profile plays that codec in some other container). A track
+whose codec the probe didn't find plays as it is, as an unknown codec
+does for video. AAC in MP4 is the fallback because every profile plays
+it.
+
+**The API.** `GET /api/v1/audiobooks/{id}?client=<profile>` decides
+every track for that profile. Each track gains a `plan` (`action`,
+`reason`, `mode` = `direct_play` | `copy` | `transcode`, `delivery` =
+`file` | `aac`, `client`), and a track that doesn't play directly gets
+the fallback as its `stream_url` (`content_type` `audio/mp4`); `codec`
+and `container` stay the source's. Without `client` the answer is
+AB3's — every `stream_url` the original file, `plan` null — so existing
+callers see no change. An unknown profile name is a 400. `network` is
+accepted as for video's playback-info and only recorded with the plan
+(audio has no bit-rate cap).
+
+**The fallback stream.** `GET /api/v1/stream/{file_id}/aac.m4a` serves
+a book track as AAC-LC in MP4, made **once per track** by ffmpeg and
+kept under `<PARLOUR_CACHE_DIR>/audio-aac/<file id>/audio.m4a`, with
+its index first (`+faststart`), so it is served with HTTP Range like
+any file and a player seeks anywhere in it by byte range. It is
+authorised exactly as the file is — the same 6-hour stream token (or a
+session with library access) — so an admin stop that revokes a book's
+tracks revokes their copies too. Until the copy is made the answer is
+**503 with `Retry-After: 2`**, as the video remux's playlist is. The
+first request for a copy starts it; the book detail starts the copy of
+the track the profile will resume in. The recipe: the first audio
+stream only; ffmpeg's AAC encoder with its fast coder at 64 kb/s per
+channel (mono stays mono, more than two channels fold to stereo); AAC
+sources copied instead; tags, pictures and chapters dropped (the
+catalog has them). Each copy is stamped with the recipe's version and
+the source's size and modification time as the last scan saw them; a
+re-scan that sees the file change makes the copy again (one ffmpeg per
+track at a time: a copy still being made of the old file finishes
+first). A video file's sound is never converted this way (404).
+
+**Reusing the video machinery.** The remux and the fallback now share
+one runner (one ffmpeg per output folder, run once, `.ready` / `.failed`
+markers, 503 while running), the stream tokens, the plan registry that
+Now Playing reads, the live session registry and the Range server. The
+**HLS muxer itself is not shared**: the remux maps a video stream
+unconditionally (`0:v:0`), so an audio-only file fails there; it writes
+HLS, which the book page's `<audio>` would need hls.js for; and it waits
+for the whole file before serving anyway, so a progressive `.m4a` gives
+the same wait with simpler seeking for every player. The remux's ffmpeg
+arguments and its retry after a failure are unchanged.
+
+**Sessions, progress and Now Playing.** Nothing about AB4/AB11/AB8
+changes: the web player still reports its listening session through
+`POST /api/v1/playback/{start,progress,stopped}` and writes the
+book-global position through `PUT /api/v1/audiobooks/{id}/progress`;
+auto-finish, hand finish / un-finish, the hide flag, the client
+timestamp, Activity and the Home shelves are as built. What's new is
+that a book's session in **Now Playing** carries a stream plan when the
+book page named its profile: the book detail remembers its plan for the
+profile, and the session's start picks it up, as a video's start picks
+up playback-info's. The card reads, for example, "Original file → AAC
+file (transcode)", "Audio ALAC → Transcoded", "This codec is outside
+the client's audio profile, so the audio is converted to AAC."
+
+**Web.** The book page asks for `?client=web`. For a track that plays
+through the fallback it waits for the copy (polling with `HEAD`, as the
+video player polls the remux playlist), saying "Converting this part of
+the book to AAC for this browser… It is kept once made" and showing the
+seconds; play, seeks and chapter jumps made meanwhile are kept and
+applied when the copy is ready. Playing a converted track, it says why
+("Playing an AAC copy: ALAC isn't in the web player's profile."). As
+each track starts it asks for the next converted track's copy, so a
+multi-track book doesn't wait between tracks. Direct-play books behave
+exactly as before.
+
+**Measured on oryx (2026-11-26)** with the runtime image's ffmpeg 5.1,
+16 cores: an hour of stereo audio converts in about 61 s with the
+default AAC coder and **39 s with the fast coder** (decoding alone:
+7 s). So the first play of a converted track waits roughly 40 s per
+hour of that track; after that it starts at once.
+
+#### Readings made in AB10 — for the owner's veto
+
+Each is a reading inside TODO AB10/CL5 and ARCHITECTURE §4, not a new
+decision.
+
+1. **The browser profile is what every current browser plays**: MP3,
+   AAC in MP4, and 16/8-bit WAV. Ogg Opus and Vorbis convert because
+   Safari plays Ogg only from 18.4 (macOS 15.4 / iOS 18.4, March 2025);
+   FLAC converts because sources disagree on iOS Safari (caniuse yes,
+   MDN no); ALAC is Safari-only. Chrome and Firefox would play Ogg and
+   FLAC as they are, so this costs them a conversion. The alternative is
+   a generous `web` profile (adding FLAC and Ogg), at the price of books
+   that fail on older Safari; there is no per-browser profile, because
+   telling browsers apart is the sniffing §4 rules out. WAV is in on
+   its long-standing support in all three; the pages read didn't settle
+   it browser by browser.
+2. **The Android profile is ExoPlayer with the platform decoders
+   only** (no FFmpeg extension), one profile for phones and Fire TV:
+   AAC in MP4, MP3, FLAC (as `.flac` and in Ogg), Opus and Vorbis in Ogg,
+   16/8-bit WAV. Out: ALAC and WMA (no platform decoder); AC-3 / E-AC-3
+   (no source confirms them, and Amazon's Fire TV spec pages list no
+   audio codecs); FLAC, Opus or MP3 inside MP4 (Android 10+ only);
+   ADTS (ExoPlayer seeks it only with constant-bitrate seeking turned
+   on). ExoPlayer seeks MP3 by its Xing/VBRI index or with that same
+   flag: a note for the Android app (CL5/Phase 3).
+3. **The Apple profile is AVPlayer**: AAC and ALAC in MP4, MP3, FLAC,
+   16/8-bit WAV; no Ogg container at all (so no Opus or Vorbis), no
+   WMA. AC-3 / E-AC-3 are left out although Apple's HLS table lists
+   them for A7 and later: no book uses them, and converting is harmless.
+   **Lower confidence than the other two:** the Apple documents read
+   cover HLS, not files; local MP3, WAV and `.flac` playback (FLAC since
+   iOS 11) is from general knowledge. CL5 / S1 should confirm on a
+   device.
+4. **Codec and container pairs, not ABS's MIME type.** ABS decides by
+   a MIME type taken from the file's extension, so an `.m4b` is
+   `audio/mp4` whatever its codec and an ALAC book plays "directly" in
+   Chrome and fails. Parlour decides by the probed codec in its
+   container.
+5. **The profile is named, not asked of the browser.** ABS's web
+   client builds its list by asking the browser (`canPlayType`); §4
+   says a named profile decides, so the book page names `web`. An
+   unknown name is a 400 (video reads an unknown name as `web`; for
+   books a typo would quietly pick a profile). No name at all keeps
+   AB3's answer, so a native client must name its profile to get the
+   fallback (the CL5/CL6 contract).
+6. **Per track, not per book.** ABS converts the whole book into one
+   stream when any track fails its check (and copies only when the
+   first track allows it). Parlour decides each track and converts only
+   the ones that need it; the player keeps playing track after track,
+   and positions stay book-global. A book of mixed formats (rare) plays
+   some tracks as they are.
+7. **A kept `.m4a` per track, not a live HLS stream.** ABS streams HLS
+   (MPEG-TS segments) from the session's position, restarts ffmpeg
+   when a seek lands more than a minute past what it has made, and
+   deletes the stream when the session closes. Parlour makes each
+   track's copy once and keeps it: seeking anywhere is a byte range,
+   every player plays a progressive `.m4a`, and the next listen costs
+   nothing. The price is the **first-play wait** above, worst for a
+   long single-file book in a format the profile can't play (a 10-hour
+   Opus file is about 7 minutes before it starts). A stream made on
+   demand around the play position, as ABS does, belongs with Phase 2's
+   transcode engine.
+8. **The recipe**: ffmpeg's own AAC encoder with its fast coder (1.5×
+   the default's speed for speech), 64 kb/s per channel, mono kept,
+   more than two channels folded to stereo, the first audio stream
+   only, tags/pictures/chapters dropped. ABS sets no bit rate (ffmpeg's
+   default) except for AC-3 sources.
+9. **AAC in a container the profile doesn't list is copied, not
+   re-encoded** (§4's remux), and every profile copies raw ADTS into
+   MP4 for exact seeking (ExoPlayer can't seek ADTS by default; browsers
+   estimate).
+10. **Copies are kept until their source changes** (the stamp: recipe,
+    size, modification time as scanned). There is no eviction, as for
+    the remux cache; D9's LRU cache index arrives with Phase 2. A copy
+    that failed is not retried until its source changes or the server
+    restarts (the video remux still retries, as before).
+11. **No limit on simultaneous conversions**, as for the remux (D8's
+    admission control is Phase 2's). In practice: the resume track per
+    book opened, plus the next track per playing page.
+12. **Now Playing shows one plan per book**: the furthest-reaching
+    decision among its tracks (convert, then copy, then direct), with
+    that track's codec, channels and container, as decided when the
+    book page loaded. It doesn't change per track: a session is per
+    book. A session from a client that named no profile still has no
+    plan, as in AB8.
+13. **The fallback URL serves any book track to anyone authorised for
+    it, whatever the decision** (a client may prefer AAC), and never a
+    video file.
+
 ### Later in Phase 10 (blocked on decisions)
 
 AB6 metadata providers and embedded covers (D30), AB7 series and
@@ -1020,7 +1236,10 @@ for codecs a client can't play (CL5).
 D29 + D35; the details are in the list below. *2026-11-26: AB6 is
 built (above). AB7 is built (above, "Series and authors (AB7)").
 AB11 is built (above, "Aligning with Audiobookshelf (AB11)"). AB8 is
-built (above, "Listening sessions and Home shelves (AB8)").*
+built (above, "Listening sessions and Home shelves (AB8)"). AB10 is
+built (above, "Transcode fallback and audio profiles (AB10)"); Phase 10
+has no task left but the owner's real-library check in its "Done
+when".*
 
 ### Follow-up from D28–D35 (where AB1–AB5 differ from ABS)
 
@@ -1273,6 +1492,12 @@ D33/D35 …", read the decisions above.
    ExoPlayer (Fire OS) and browsers play directly, so the server can
    fall back to an AAC stream only when it must. This is the same
    explicit-profile rule as video (ARCHITECTURE §4).
+   *AB10 (2026-11-26) built the profiles and the AAC fallback on the
+   server, and the web player uses the `web` profile ("Transcode
+   fallback and audio profiles (AB10)"). CL5 is what a native client
+   needs on top: naming its profile (`?client=ios` / `android` /
+   `firetv`), confirming the profile contents on real devices (AB10
+   readings 2–3), and the contract in CL6.*
 6. **Contract doc** (CL6): `docs/API-AUDIO.md`, with request and
    response examples, written when CL2 lands.
 

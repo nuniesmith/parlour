@@ -72,6 +72,14 @@ capability profile (web, android-phone, android-tv/fire-tv, ios —
 not User-Agent guessing); session context (LAN / tailnet / public,
 per-user remote cap).
 
+Audio-only media (book tracks; podcast episodes later) has its own
+profiles under the same rule (AB10, CL5's profiles:
+`parlour_playback::AudioProfile`): container + codec pairs per
+client family, and a track a profile can't play is served as a kept
+AAC-in-MP4 copy (`/api/v1/stream/{file}/aac.m4a`). See
+`AUDIOBOOKS-PODCASTS.md`, "Transcode fallback and audio profiles
+(AB10)".
+
 ## 5. Transcoding — all vendors, probed
 
 FFmpeg/ffprobe run as subprocesses. Do not build a transcoding
