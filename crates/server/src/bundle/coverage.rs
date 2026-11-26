@@ -440,7 +440,9 @@ pub const SCHEMA: &[Table] = &[
         name: "book_progress",
         proposal: "carried under user_data.json profiles[].books[] like watch state; needs the \
                    owner's yes (D36). AB11's columns (hidden, client_updated_at) are part of \
-                   the same open question and are not carried either",
+                   the same open question and are not carried either. POD1's podcast-episode \
+                   rows (episode_id set, item_id NULL) share the table (D29) and are not \
+                   carried: the episodes they point at stay behind (podcast_episodes)",
     },
     Table::LeftOut {
         name: "sidecar_artwork",
@@ -494,6 +496,18 @@ pub const SCHEMA: &[Table] = &[
                    D29/D35); per-profile state like book_progress, so whether and how they \
                    travel is the same open question (D36) and a format change; not carried. \
                    A closed session's Activity line travels with the Activity feed (D25)",
+    },
+    Table::LeftOut {
+        name: "podcasts",
+        why: "a podcasts library's shows and their per-show settings (POD1, D31/D32); not \
+              in format v1 — the shows' place in the bundle is later work (a format \
+              change), so until then an admin adds them again on the new host",
+    },
+    Table::LeftOut {
+        name: "podcast_episodes",
+        why: "a show's episodes as its feed lists them, and where this host downloaded \
+              them (POD1, D32); the new host's feed checks rebuild the list, and the \
+              downloaded files live in this host's own podcast folder",
     },
     Table::LeftOut {
         name: "_sqlx_migrations",

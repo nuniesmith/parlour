@@ -146,6 +146,10 @@ so the author page (AB7, built) is a query, not a migration.
   filters, the Emby importer and the export draft). D29 asks
   whether it should be folded into `user_data` instead. Switching is
   one migration.
+  *POD1 (2026-11-26): the same table also holds podcast-episode
+  progress (D29). A row has `item_id` (a book) or `episode_id` (an
+  episode), never both; the primary key became `UNIQUE (profile_id,
+  item_id)`. Book queries are unchanged ("Schema (POD1)").*
 - `position_ms` is **book-global**: milliseconds from the start of
   track 0. Clients map it to (track, offset) with the track list's
   `start_ms` values. One number per book is what makes cross-device
@@ -1315,6 +1319,9 @@ not yet scheduled in a PR:
     progress model for books and episodes; POD1 puts episode
     progress in the same table and shape rather than a parallel
     one (a `kind` column or a generalised name, decided in POD1).
+    *Done in POD1: neither — a nullable `episode_id` beside `item_id`,
+    exactly one set, each unique per profile; the table keeps its name
+    (POD1 reading 2).*
 12. **Metadata precedence and match (AB6, D30).** Per-library
     precedence, ABS's order (folder → tags → NFO → `desc.txt` /
     `reader.txt` → OPF → sidecar, later wins), with Parlour's
@@ -1332,7 +1339,7 @@ not yet scheduled in a PR:
 
 ---
 
-## Phase 11 — Podcasts (plan only; no code yet)
+## Phase 11 — Podcasts (POD1's schema built 2026-11-26; the rest is plan)
 
 The server owns the feeds. Clients never fetch RSS themselves, which
 is what lets a Fire Stick, a tablet and the phone agree.
@@ -1375,6 +1382,8 @@ kept below it.
   stores the link), and server-side Smart Speed / Voice Boost.
 
 **Original shape sketch (2026-11-23, to be confirmed by D31/D32):**
+*POD1 (2026-11-26) built the schema; it is "Schema (POD1)" at the
+end of this section, and replaces the table bullets below.*
 
 - `podcasts` — feed URL, title, author, description, artwork,
   `etag` / `last_modified`, refresh state and the last error.
@@ -1411,6 +1420,274 @@ episode lists, and the shared audio player from AB5.
 the enclosure if it isn't downloaded, per D32), `GET|PUT|DELETE
 /episodes/{id}/progress`, `GET /podcasts/opml`, and the bulk sync
 in Phase 12.
+
+### Schema (POD1, built 2026-11-26)
+
+Migration `20261203000000_pod1_podcasts.sql`: the timestamp is an
+ordering key only, and the migration was written on 2026-11-26.
+POD1 is schema only. Nothing fetches, parses or downloads yet, and
+there is no API and no UI. POD2 (feed fetch and parse) and POD3
+(download and retention) write these columns, and POD4–POD6 read
+them. The flow `crates/server/tests/podcast_schema_flow.rs` checks
+the shapes and rules below on a fresh database.
+
+Audiobookshelf's behaviour quoted here was checked on 2026-11-26
+against its server source on `master` (the podcast, episode and
+media-progress models, the podcast manager and the cron manager).
+That reading was for behaviour only, and nothing was copied.
+
+**`podcasts`: one row per feed in a `podcasts` library.**
+
+| Column | What |
+|---|---|
+| `library_id` | The podcasts library the show is in. Deleting the library deletes its shows. |
+| `feed_url` | The RSS address. Unique per library: a feed is in a library once, and another podcasts library may hold it too. |
+| `title`, `sort_title` | The feed's title. `sort_title` is made the way the catalog makes it (`parlour_catalog::parse::sort_title`). |
+| `author`, `description`, `language`, `explicit`, `podcast_type`, `genres`, `itunes_id` | The show as its feed last described it, with the iTunes namespace used where RSS has no field. `podcast_type` is `episodic` or `serial`. |
+| `image_url`, `image_path` | The feed's artwork address, and the copy in Parlour's artwork cache once one is fetched. |
+| `folder_path` | Where the show's episodes are written (below). NULL until the show is given one. |
+| `etag`, `last_modified` | The validators from the feed's last 200 response. They are kept as the header text and sent back as `If-None-Match` / `If-Modified-Since`. |
+| `last_checked_at`, `last_error`, `consecutive_failures` | The refresh state: when the feed was last checked (successful or not), why the last check failed (NULL after a success), and how many checks in a row have failed. |
+| `auto_download` | D32: download new episodes on the schedule. **Off** by default. |
+| `check_schedule` | D32: a five-field cron expression. Default `0 * * * *` (hourly). |
+| `max_episodes_to_keep` | D32: **0** = keep all (default). When over, POD3 deletes the oldest, at most one per check. |
+| `max_new_episodes_per_check` | D32: default **3**. 0 means no cap, as in ABS. |
+
+**`podcast_episodes`: one row per feed item that has an enclosure.**
+
+| Column | What |
+|---|---|
+| `podcast_id` | The show. Deleting the show deletes its episodes. |
+| `guid` | The feed's identity for the episode, or the enclosure URL when the item has no guid. Unique within the show. |
+| `title`, `subtitle`, `description`, `published_at`, `season`, `episode_number`, `episode_type` | As the feed gives them. `episode_type` is `full`, `trailer` or `bonus`. |
+| `duration_ms` | The length the feed gives (`itunes:duration`). |
+| `enclosure_url`, `enclosure_type`, `enclosure_length` | The audio the feed points at. The URL is required: a feed item without an enclosure isn't an episode. |
+| `chapters_url`, `transcript_url`, `transcript_type` | The Podcasting 2.0 links, stored as URLs. Showing transcripts is deferred (D35). |
+| `file_path`, `file_size_bytes`, `file_duration_ms`, `file_container`, `file_codec`, `downloaded_at` | The local copy once POD3 downloads it: its absolute path, size, probed length, container and audio codec. All NULL until then. `file_path` and `downloaded_at` are set together. No two episodes share a file. |
+
+**Where downloaded files live (D32).** An episode's `file_path` sits
+under its show's `folder_path`, and that folder sits inside the
+podcasts library's own folder (`library_paths`). That library folder
+is the **writable podcast store** D32 describes. It is a folder
+Parlour owns, set up as an explicit ops step like XFER5's sidecar
+opt-in. It is never a video or book media mount, and never a
+read-only mount flipped to writable. POD1 creates no store, changes
+no mount and writes nothing to disk. Which disk on sullivan holds the
+store is still waiting on the owner, and it must be answered before
+POD3 runs in production.
+
+**Subscriptions (D31): none.** There is no `subscriptions` table and
+no per-profile follow. A show belongs to a podcasts library, and a
+profile reaches it only through that library's `library_access`
+grant, the same grant that admits it to an audiobooks library's
+books. A profile with the grant sees every show in the library; a
+profile without it sees none. That is the whole of "subscriptions
+shaped by D31": nothing in the schema expresses it except the
+existing grant. The grant path every podcast query takes is:
+
+```sql
+podcast_episodes e
+JOIN podcasts p ON p.id = e.podcast_id
+JOIN library_access a ON a.library_id = p.library_id AND a.profile_id = $profile
+```
+
+The per-profile follow / hide list is not built. It has no ABS
+equivalent and is deferred until the owner asks.
+
+**Episode progress lives in `book_progress` (D29; follow-up item
+11).** ABS keeps one progress model for books and episodes, so
+episodes don't get a parallel table:
+
+- `book_progress` gains `episode_id`, which references
+  `podcast_episodes` and is deleted with the episode. `item_id` may
+  now be NULL.
+- A row is a book's (`item_id`) or an episode's (`episode_id`), never
+  both and never neither (`book_progress_one_target_check`).
+- Each kind of row is unique per profile:
+  - `UNIQUE (profile_id, item_id)` replaces the old primary key, so
+    AB4's `ON CONFLICT (profile_id, item_id)` upsert is unchanged.
+  - `UNIQUE (profile_id, episode_id)` is the episode key.
+- Every other column means what it means for a book: `position_ms`,
+  `duration_ms`, `finished` / `finished_at`, `last_listened_at`, the
+  `hidden` flag, `client_updated_at`, and `updated_at` (the sync
+  cursor). Progress is per profile per episode (D31).
+- Every existing book query reaches the table through an inner join
+  on `item_id`, so an episode's row never appears in a book list, a
+  shelf or the book sync (`GET /api/v1/audiobooks/progress`).
+
+**Progress writes for an episode follow AB11's rules unchanged.**
+POD5 writes episode progress with the same pure `apply_write`, which
+takes these inputs:
+
+- **The episode's length:** `file_duration_ms`, or `duration_ms`
+  when there is no file.
+- **The finish rule:** the podcasts library's own
+  `finish_remaining_seconds` / `finish_percent`, with ABS's 10 s by
+  default.
+
+The write behaves as for a book:
+
+- **Position.** A position is clamped to the episode's length and
+  stamps `last_listened_at`.
+- **Auto-finish.** A position within the finish rule finishes the
+  episode. A finished episode that is moved back is unfinished.
+- **Manual finish.** Un-finishing by hand puts the position back
+  to 0.
+- **Hide flag.** A write that changes the position or the finished
+  flag clears `hidden`.
+- **Timestamps.** `client_updated_at` is stored as the client sent
+  it (or the server's time). The last write to arrive wins.
+
+The upsert is the book's, keyed on `(profile_id, episode_id)`. The
+flow test makes exactly these writes.
+
+**What later tasks need to know.**
+
+- **POD2.**
+  - **New episodes.** A feed item is the same episode as a stored row
+    when its guid matches, or (as ABS checks) when its enclosure URL
+    matches.
+  - **Schedule.** The scheduled check runs only while
+    `auto_download` is on (reading 5).
+  - **Failures.** Every check stamps `last_checked_at`. A failure
+    sets `last_error` and adds one to `consecutive_failures`. The
+    24th failure in a row turns `auto_download` off. A successful
+    check clears `last_error` and the count. Feeds failing repeatedly
+    raise the Dashboard notice.
+- **POD3.**
+  - **Store.** It writes into `folder_path` inside the writable
+    store, and fills the `file_*` columns and `downloaded_at`.
+  - **Retention.** When retention removes an episode, ABS deletes
+    the file, the episode and its progress. Here a feed episode keeps
+    its row, so POD3 must choose between two ways:
+    - delete the row (the progress goes too, by cascade);
+    - clear the `file_*` columns, leaving "not downloaded".
+
+    If it deletes the row, the next feed check must not treat the
+    episode as new and fetch it again.
+- **POD5 / POD6.**
+  - **Playback.** AB10's audio plan reads `file_container` /
+    `file_codec`. The AAC fallback serves only `kind = 'audiobook'`
+    files today and needs widening.
+  - **Sessions.** `listening_sessions` is still book-only (`item_id`
+    NOT NULL). An episode's listening session needs the same
+    `episode_id` treatment.
+  - **Explicit shows.** `explicit` is stored, but nothing yet decides
+    how a grant's `max_rating` treats an explicit show (ABS has a
+    per-user "explicit content" permission instead). That is POD5's
+    to raise.
+  - **Settings API.** AB11's settings API (`…/audiobook-settings`)
+    accepts audiobooks libraries only, so editing a podcasts
+    library's finish rule needs it widened (POD4/POD5).
+- **Bundle (format v1 unchanged).** `podcasts` and `podcast_episodes`
+  are *left out* in `coverage.rs`:
+  - The shows are an admin's deliberate work. Their place in the
+    bundle is later work (a format change); until then they are added
+    again on a new host, or carried by POD4's OPML export.
+  - The episode list is rebuilt by the new host's feed checks, and
+    downloaded files live in the old host's store.
+  - Episode progress rows are part of `book_progress`, which stays
+    *Proposed*. **D36 is still open**, and no episode progress is
+    carried.
+
+#### Readings made in POD1 — for the owner's veto
+
+1. **Shows and episodes are their own tables, not `media_items`
+   rows.**
+   - *Why:*
+     - TODO and the plan name `podcasts` / `podcast_episodes`.
+     - The `media_items` kinds are mirrored by bundle format v1
+       (`ItemKind`), and every `media_items` row travels in
+       `catalog.json`. New kinds would change format v1, which this
+       step may not do.
+     - An episode isn't a file a scan found: until it is downloaded
+       it has no file at all.
+   - *Cost:* a show or episode gets none of the item machinery for
+     free (search, the `images` table, Activity's item links). POD5
+     and POD6 build their own paths. This is the one place podcasts
+     part from ARCHITECTURE §7's "one catalog", which now says so.
+2. **Episode progress shares `book_progress`, not a parallel table.**
+   - *How:* a nullable `episode_id` beside `item_id`, exactly one of
+     them set, each unique per profile.
+   - *Why this mechanism:*
+     - There is no `kind` column: which id is set says what the row
+       is, the role of ABS's media-item type.
+     - The table keeps its name. Renaming it (e.g. `audio_progress`)
+       would touch every book query for no change in behaviour; it
+       would be one migration later if wanted.
+   - *Detail:* the old primary key became `UNIQUE (profile_id,
+     item_id)`, which every existing upsert still finds.
+3. **Every feed episode gets a row; only downloaded ones have a
+   file.**
+   - *ABS differs:* it stores only downloaded episodes and reads the
+     rest from the feed live.
+   - *Why rows here:*
+     - The TODO line names the local file as a column of the episode.
+     - The behaviour D32 describes is the same either way: a feed
+       list in which undownloaded episodes are marked and can be
+       downloaded by hand.
+     - Rows also give CL2 "new episodes" to sync.
+4. **An episode's identity is its `guid`, unique per show.**
+   - The enclosure URL stands in when the item has no guid (the
+     plan's sketch).
+   - An item without an enclosure is not stored.
+5. **The schedule is `auto_download`, as in ABS.**
+   - *What ABS does:* it schedules a show's check only while
+     auto-download is on, and the 24-failure rule turns
+     auto-download off. So there is no separate "schedule on" flag,
+     and `check_schedule` is kept when it turns off.
+   - *Consequence:* with ABS's default (auto-download off), a show is
+     not checked on its own until an admin turns auto-download on.
+     Until then its list refreshes when an admin asks (POD4's
+     "refresh now"). Phase 11's "Done when" needs auto-download on
+     for its feed.
+   - *If vetoed:* a separate flag is one column.
+6. **The failure count is stored.**
+   - *ABS differs:* it keeps the count in memory, so a restart resets
+     it.
+   - *Why stored:* Parlour's checks run as jobs on the Postgres
+     queue, so the count lives with the show and survives restarts.
+     It stays at its value after auto-download turns off, until the
+     next successful check, so the Dashboard notice can show it.
+7. **Per-show settings are columns on `podcasts`.** That is how
+   per-library settings are stored (columns on `libraries`). The
+   defaults are ABS's: off, hourly as cron, 0, 3. A cron expression,
+   not an interval, because ABS's schedule is one.
+8. **Conditional GET state is stored, though ABS has none.**
+   - ABS fetches feeds with a plain GET.
+   - Parlour's TODO asks for ETag / Last-Modified. Listeners see no
+     difference, and publishers get fewer full downloads.
+   - The validators are kept as raw header text and sent back
+     verbatim.
+9. **Two lengths per episode.**
+   - `duration_ms` is the feed's, for the list before a download.
+   - `file_duration_ms` is the downloaded file's, and is what
+     progress clamps and auto-finishes against. Only downloaded
+     episodes play, so that is the length a listener hears.
+   - The feed's length is the fallback when there is no file (for a
+     mark-finished on an undownloaded episode, if POD5 allows one).
+10. **Episodes auto-finish under their podcasts library's rule.**
+    - AB11's `finish_remaining_seconds` / `finish_percent` are on
+      every library row, so ABS's 10 s applies to episodes by
+      default.
+    - ABS's progress code applies the same rule to both kinds.
+11. **Files have absolute paths and one owner.**
+    - `folder_path` and `file_path` are absolute, as
+      `media_files.path` is.
+    - A file belongs to one episode.
+    - The show's folder is NULL until POD3/POD4 names it (ABS fixes a
+      show's folder when it is added).
+12. **More of the feed is kept than the plan's sketch listed.**
+    - *Added, show:* `sort_title`, `language`, `explicit`,
+      `podcast_type` (a serial show lists its episodes oldest
+      first), `genres` and `itunes_id` (POD7 can mark a search result
+      already added). ABS keeps the same.
+    - *Added, episode:* `subtitle`, `season` and `episode_number` (as
+      integers; ABS keeps text, and a feed's non-numeric value is
+      dropped), and `episode_type`.
+    - *Not kept:* episode artwork, the raw `pubDate` text, the feed's
+      `<link>` and chapter bodies. A later task adds a column if its
+      screen needs one.
 
 ---
 
@@ -1529,6 +1806,10 @@ intervals) and what syncs through the server is **D35**.
   owner's yes; format v1 carries neither table until then.
   Audiobook *items* are ordinary catalog rows and are already in
   the bundle's `catalog.json`.
+  *2026-11-26 (POD1):* `podcasts` and `podcast_episodes` are left out
+  of format v1 (`coverage.rs`); their place in the bundle is later
+  work. Episode progress rows sit in `book_progress`, so they follow
+  its open proposal (D36) and are not carried.
 - **Sidecars (Phase 8, D14).** ABS-style `metadata.json` /
   `desc.txt` / `reader.txt` next to books are a possible metadata
   input (D30). Writing sidecars into audiobook folders needs the

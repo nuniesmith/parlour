@@ -367,9 +367,10 @@ must be accounted for, and the mirrored CHECK sets must match. A
 migration that adds a table, a column or a value fails that test
 until the format and this doc say where it goes.
 
-At 2026-11-26 the schema has 32 tables (AB6 added `book_metadata`
-and `book_sidecars`, AB7 `series` and `book_series`), 13 of them
-carried:
+At 2026-11-26 the schema has 38 tables, counting sqlx's own
+`_sqlx_migrations` (AB6 added `book_metadata` and `book_sidecars`,
+AB7 `series` and `book_series`, AB8 `listening_sessions`, POD1
+`podcasts` and `podcast_episodes`), 13 of them carried:
 
 | table | lands in |
 |---|---|
@@ -419,6 +420,8 @@ the Activity feed. The rest of the schema stays on the old host:
 | `book_sidecars` | a book's match, the server's copy of its `book.parlour.json` (AB6): **open — D40, §13.15** |
 | `series`, `book_series` | audiobook series and each book's place in them (AB7); the new host's scan rebuilds them from each book's series folder and tags. Nothing but a scan writes them, so nothing is lost |
 | `listening_sessions` | each profile's listening sessions, its listening history and stats (AB8): **open — §9**, with `book_progress`. A closed session's Activity line (`playback.listened`) is part of the Activity feed, which travels (D25) |
+| `podcasts` | a podcasts library's shows and their per-show settings (POD1, D31/D32). Not in format v1: their place in the bundle is later work (a format change). Until then an admin adds them again on the new host (POD4's OPML export can carry the list) |
+| `podcast_episodes` | a show's episodes as its feed lists them, and where this host downloaded them (POD1, D32). The new host's feed checks rebuild the list; the downloaded files live in this host's own podcast store |
 
 ## 9. Proposed — needs the owner's yes: the audio tables
 
@@ -468,6 +471,13 @@ says yes.**
   labels). The closed sessions' Activity lines already travel with the
   Activity feed (D25), so a migrated server's feed shows past listens
   even while the sessions themselves stay behind.
+- **POD1 (2026-11-26) put podcast-episode progress in
+  `book_progress`** (D29): a row is a book's (`item_id`) or an
+  episode's (`episode_id`). Episode rows are per-profile state of the
+  same table, so they follow the same answer and are not carried. If
+  the answer is yes they need more than `books[]`: the episodes they
+  point at stay behind (§8), so an episode would have to be named by
+  its show's feed URL and its guid.
 - **`book_chapters`: leave it out.** Every scan of the book rebuilds
   it from the files' tags and chapters, as it does the file rows.
 - **If the answer is yes:**
