@@ -671,6 +671,10 @@ export interface BookProgress {
   finished_at: string | null;
   last_listened_at: string | null;
   updated_at: string | null;
+  /** AB11: hidden from Continue Listening until the position next moves. */
+  hidden: boolean;
+  /** AB11: when the last writer says it made the update (its own clock). */
+  client_updated_at: string | null;
 }
 
 export interface Book {
@@ -825,6 +829,18 @@ export interface MetadataPrecedence {
   sources: string[];
   default: string[];
   available: string[];
+}
+
+/** AB11: an audiobooks library's own settings (Audiobookshelf's). */
+export interface AudiobookSettingsValues {
+  parse_subtitles: boolean;
+  finish_remaining_seconds: number;
+  finish_percent: number | null;
+}
+
+export interface AudiobookSettings extends AudiobookSettingsValues {
+  library_id: string;
+  default: AudiobookSettingsValues;
 }
 
 /** AB6: what each metadata source is, for the precedence editor. */

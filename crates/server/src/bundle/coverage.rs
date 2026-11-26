@@ -147,6 +147,27 @@ pub const SCHEMA: &[Table] = &[
                      D30's default order",
                 ),
             ),
+            (
+                "parse_subtitles",
+                Left(
+                    "an audiobooks library's parse-subtitles setting (AB11); not in format \
+                     v1 — an imported library starts with it off, ABS's default",
+                ),
+            ),
+            (
+                "finish_remaining_seconds",
+                Left(
+                    "an audiobooks library's auto-finish time rule (AB11); not in format v1 \
+                     — an imported library starts with ABS's 10 s",
+                ),
+            ),
+            (
+                "finish_percent",
+                Left(
+                    "an audiobooks library's auto-finish share (AB11); not in format v1 — \
+                     an imported library starts with it off, ABS's default",
+                ),
+            ),
         ],
     },
     Table::Carried {
@@ -417,7 +438,9 @@ pub const SCHEMA: &[Table] = &[
     },
     Table::Proposed {
         name: "book_progress",
-        proposal: "carried under user_data.json profiles[].books[] like watch state; needs the owner's yes",
+        proposal: "carried under user_data.json profiles[].books[] like watch state; needs the \
+                   owner's yes (D36). AB11's columns (hidden, client_updated_at) are part of \
+                   the same open question and are not carried either",
     },
     Table::LeftOut {
         name: "sidecar_artwork",

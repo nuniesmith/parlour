@@ -387,6 +387,10 @@ Columns of those tables that stay behind:
 - `libraries.metadata_precedence` (an audiobooks library's merge
   order, AB6): **open, D40** (§13.15). Until then an imported
   library starts with D30's default order;
+- `libraries.parse_subtitles`, `libraries.finish_remaining_seconds`,
+  `libraries.finish_percent` (an audiobooks library's own settings,
+  AB11): not in format v1, so an imported library starts with
+  Audiobookshelf's defaults (subtitles off, 10 s, no percentage);
 - `images.path` (a path in the old host's cache; `file` replaces it
   when artwork is included);
 - `images.width` / `images.height` (nothing writes them).
@@ -411,7 +415,7 @@ the Activity feed. The rest of the schema stays on the old host:
 | `backup_settings` | this host's nightly backup folder, count and hash choice (D39, §16.4): a server setting, and the new host's folders are its own |
 | `_sqlx_migrations` | the new host keeps its own ledger |
 | `book_metadata` | a book's merged book-only fields and its sources fingerprint (AB6); the new host's scan rebuilds them from the book's files and its match |
-| `book_chapters`, `book_progress` | **open — §9** |
+| `book_chapters`, `book_progress` | **open — §9** (AB11's `book_progress.hidden` and `client_updated_at` included) |
 | `book_sidecars` | a book's match, the server's copy of its `book.parlour.json` (AB6): **open — D40, §13.15** |
 | `series`, `book_series` | audiobook series and each book's place in them (AB7); the new host's scan rebuilds them from each book's series folder and tags. Nothing but a scan writes them, so nothing is lost |
 
@@ -448,6 +452,11 @@ says yes.**
   ```
 
   `position_ms` is book-global, as AB4 stores it.
+- **AB11 (2026-11-26) added two columns** to `book_progress`:
+  `hidden` (hide from Continue Listening) and `client_updated_at` (the
+  client's own time of the last update). They are per-profile state of
+  the same row, so they follow the same answer; until then neither is
+  carried.
 - **`book_chapters`: leave it out.** Every scan of the book rebuilds
   it from the files' tags and chapters, as it does the file rows.
 - **If the answer is yes:**

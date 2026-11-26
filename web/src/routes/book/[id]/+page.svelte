@@ -6,6 +6,10 @@
   // on a seek, and when the page goes away — but only once this
   // page has actually played, so opening a book changes nothing.
   // The last track ending marks the book finished.
+  // AB11 (as Audiobookshelf): the server also finishes a book whose
+  // position leaves less than the library's threshold, un-finishing by
+  // hand puts the position back to 0, and every write carries this
+  // browser's own time (client_updated_at).
   // AB6: admins can match the book by hand (BookMatch).
   // AB7: its authors and series link to their pages.
   import { onMount, tick } from 'svelte';
@@ -107,7 +111,11 @@
     lastSavedPos = pos;
     const { data, error: err } = await api<BookProgress>(`/api/v1/audiobooks/${book.id}/progress`, {
       method: 'PUT',
-      body: JSON.stringify({ position_ms: pos, ...extra }),
+      body: JSON.stringify({
+        position_ms: pos,
+        ...extra,
+        client_updated_at: new Date().toISOString(),
+      }),
     });
     if (data && book) {
       book = { ...book, progress: data };
@@ -128,7 +136,7 @@
       credentials: 'same-origin',
       keepalive: true,
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ position_ms: pos }),
+      body: JSON.stringify({ position_ms: pos, client_updated_at: new Date().toISOString() }),
     }).catch(() => {});
   }
 
@@ -162,9 +170,17 @@
     if (!book) return;
     const { data } = await api<BookProgress>(`/api/v1/audiobooks/${book.id}/progress`, {
       method: 'PUT',
-      body: JSON.stringify({ finished }),
+      body: JSON.stringify({ finished, client_updated_at: new Date().toISOString() }),
     });
-    if (data && book) book = { ...book, progress: data };
+    if (data && book) {
+      book = { ...book, progress: data };
+      // Un-finishing by hand starts the book over (AB11): follow the
+      // server, or the next save would put the old position back.
+      if (!finished && data.position_ms !== Math.round(position)) {
+        lastSavedPos = data.position_ms;
+        loadAt(data.position_ms, playing);
+      }
+    }
   }
 
   async function startOver() {

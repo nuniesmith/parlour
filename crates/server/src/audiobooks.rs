@@ -16,9 +16,12 @@
 //!   of this profile changed after `since` (client sync)
 //!
 //! Progress is per profile, one book-global position (ms from the
-//! start of track 0), an explicit `finished` flag and
-//! `last_listened_at`; writes are last-write-wins. All of that is
-//! provisional until the owner's D29 / D33 (see DECISIONS.md).
+//! start of track 0), a `finished` flag and `last_listened_at`; writes
+//! are last-write-wins (D29/D33). AB11 aligned the rules with
+//! Audiobookshelf: the library's auto-finish rule, un-finishing by
+//! hand resets the position, a hide-from-Continue-Listening flag that
+//! the next change clears, and the client's own update time stored
+//! (`apply_write`).
 //! No access to a book's library reads as 404, like items.
 //!
 //! AB7 adds each book's `series` (with its sequence) and
@@ -60,6 +63,142 @@ pub fn clamp_position(position_ms: i64, duration_ms: Option<i64>) -> i64 {
     }
 }
 
+/// An audiobooks library's auto-finish rule (AB11, D29): a book is
+/// finished when less than `remaining_ms` of it is left, or — when
+/// `percent` is set — once the position reaches that share of the
+/// book, which then replaces the time rule (Audiobookshelf's library
+/// settings; 10 s and off by default).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FinishRule {
+    pub remaining_ms: i64,
+    pub percent: Option<i32>,
+}
+
+impl Default for FinishRule {
+    fn default() -> Self {
+        FinishRule {
+            remaining_ms: i64::from(crate::book_settings::DEFAULT_FINISH_REMAINING_SECONDS) * 1000,
+            percent: None,
+        }
+    }
+}
+
+/// Whether a position has reached the rule's finishing point, as
+/// Audiobookshelf compares: less than `remaining_ms` left (strictly),
+/// or with a percentage, a position strictly past that share of the
+/// book. A book of unknown length never finishes by itself; a time
+/// rule of 0 is off.
+pub fn reaches_finish(position_ms: i64, duration_ms: Option<i64>, rule: FinishRule) -> bool {
+    let Some(d) = duration_ms.filter(|d| *d > 0) else {
+        return false;
+    };
+    match rule.percent {
+        Some(p) => position_ms.saturating_mul(100) > d.saturating_mul(i64::from(p)),
+        None => rule.remaining_ms > 0 && d - position_ms < rule.remaining_ms,
+    }
+}
+
+/// What is stored for a profile and book before a write (zeros when
+/// there is no row yet).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct StoredProgress {
+    pub position_ms: i64,
+    pub finished: bool,
+    pub hidden: bool,
+}
+
+/// One progress write, as a client sent it (the position already
+/// clamped onto the book).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ProgressWrite {
+    pub position_ms: Option<i64>,
+    pub finished: Option<bool>,
+    pub hidden: Option<bool>,
+}
+
+/// What `finished_at` does on a write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FinishedAt {
+    Keep,
+    Now,
+    Clear,
+}
+
+/// The row a write leaves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NextProgress {
+    pub position_ms: i64,
+    pub finished: bool,
+    pub finished_at: FinishedAt,
+    pub hidden: bool,
+    /// The write sent a position, so it counts as listening
+    /// (`last_listened_at`).
+    pub listened: bool,
+}
+
+/// Audiobookshelf's progress rules (AB11, D29), applied to one write:
+///
+/// - **un-finishing by hand** (`finished: false` on a finished book)
+///   puts the position back to 0, and a position sent with it is
+///   ignored;
+/// - **finishing by hand** (`finished: true`) finishes the book and
+///   leaves the position where it is (or where the write puts it);
+/// - otherwise, when the write sends a position and the book's length
+///   is known, the library's rule decides: reaching the finishing
+///   point finishes the book, and a finished book moved back before it
+///   is unfinished again; a write without a position leaves
+///   `finished` alone;
+/// - `hidden` (hide from Continue Listening) takes the value the write
+///   sends; otherwise a change of the position clears it, and a change
+///   of `finished` alone does not.
+pub fn apply_write(
+    stored: StoredProgress,
+    write: ProgressWrite,
+    duration_ms: Option<i64>,
+    rule: FinishRule,
+) -> NextProgress {
+    let mut position = write.position_ms.unwrap_or(stored.position_ms);
+    let mut listened = write.position_ms.is_some();
+    let finished = match write.finished {
+        Some(false) if stored.finished => {
+            position = 0;
+            listened = false;
+            false
+        }
+        Some(f) => f,
+        None => match write.position_ms {
+            Some(_) if duration_ms.is_some_and(|d| d > 0) => {
+                if reaches_finish(position, duration_ms, rule) {
+                    true
+                } else {
+                    // A finished book moved back before the point is
+                    // unfinished; an unmoved one stays as it was.
+                    stored.finished && position == stored.position_ms
+                }
+            }
+            _ => stored.finished,
+        },
+    };
+    let finished_at = match (stored.finished, finished) {
+        (false, true) => FinishedAt::Now,
+        (_, false) => FinishedAt::Clear,
+        (true, true) => FinishedAt::Keep,
+    };
+    let moved = position != stored.position_ms;
+    let hidden = match write.hidden {
+        Some(true) => true,
+        Some(false) => false,
+        None => stored.hidden && !moved,
+    };
+    NextProgress {
+        position_ms: position,
+        finished,
+        finished_at,
+        hidden,
+        listened,
+    }
+}
+
 /// Book-global start of each track: the sum of the lengths before
 /// it (an unknown length counts as 0, as chapters do).
 pub fn track_offsets(durations: &[Option<i64>]) -> Vec<i64> {
@@ -82,6 +221,13 @@ pub struct ProgressDto {
     pub finished_at: Option<DateTime<Utc>>,
     pub last_listened_at: Option<DateTime<Utc>>,
     pub updated_at: Option<DateTime<Utc>>,
+    /// AB11: hidden from Continue Listening; cleared by the next write
+    /// that changes the position or the finished flag.
+    pub hidden: bool,
+    /// AB11: when the last writer says it made the update (its own
+    /// clock; the server's when it sent none). `updated_at` stays the
+    /// server's time.
+    pub client_updated_at: Option<DateTime<Utc>>,
 }
 
 #[derive(FromRow)]
@@ -107,6 +253,8 @@ pub(crate) struct BookRow {
     p_finished_at: Option<DateTime<Utc>>,
     p_last_listened_at: Option<DateTime<Utc>>,
     p_updated_at: Option<DateTime<Utc>>,
+    p_hidden: Option<bool>,
+    p_client_updated_at: Option<DateTime<Utc>>,
     subtitle: Option<String>,
     publisher: Option<String>,
     isbn: Option<String>,
@@ -192,6 +340,8 @@ impl From<BookRow> for BookDto {
             finished_at: r.p_finished_at,
             last_listened_at: r.p_last_listened_at,
             updated_at: r.p_updated_at,
+            hidden: r.p_hidden.unwrap_or(false),
+            client_updated_at: r.p_client_updated_at,
         };
         BookDto {
             id: r.id,
@@ -300,6 +450,7 @@ pub(crate) const BOOKS_SQL: &str = "
            bp.position_ms AS p_position_ms, bp.duration_ms AS p_duration_ms,
            bp.finished AS p_finished, bp.finished_at AS p_finished_at,
            bp.last_listened_at AS p_last_listened_at, bp.updated_at AS p_updated_at,
+           bp.hidden AS p_hidden, bp.client_updated_at AS p_client_updated_at,
            bm.subtitle, bm.publisher, bm.isbn, bm.asin, bm.language,
            bm.google_books_id, bm.open_library_id,
            bs.provider AS match_provider, bs.provider_id AS match_provider_id,
@@ -537,6 +688,8 @@ struct ProgressRow {
     finished_at: Option<DateTime<Utc>>,
     last_listened_at: Option<DateTime<Utc>>,
     updated_at: DateTime<Utc>,
+    hidden: bool,
+    client_updated_at: Option<DateTime<Utc>>,
 }
 
 impl From<ProgressRow> for ProgressDto {
@@ -548,6 +701,8 @@ impl From<ProgressRow> for ProgressDto {
             finished_at: r.finished_at,
             last_listened_at: r.last_listened_at,
             updated_at: Some(r.updated_at),
+            hidden: r.hidden,
+            client_updated_at: r.client_updated_at,
         }
     }
 }
@@ -566,12 +721,22 @@ async fn get_progress(
 struct ProgressBody {
     position_ms: Option<i64>,
     finished: Option<bool>,
+    /// AB11: hide from (true) or return to (false) Continue Listening.
+    hidden: Option<bool>,
+    /// AB11: when the client made this update, by its own clock.
+    client_updated_at: Option<DateTime<Utc>>,
 }
 
-/// Write this profile's progress. `position_ms` moves the position
-/// (clamped to the book) and stamps `last_listened_at`; `finished`
-/// sets or clears the flag (and `finished_at`). Either may be sent
-/// alone; whatever is left out keeps its stored value.
+/// Write this profile's progress (AB4, aligned with Audiobookshelf in
+/// AB11). `position_ms` moves the position (clamped to the book) and
+/// stamps `last_listened_at`; `finished` sets or clears the flag (and
+/// `finished_at`); `hidden` hides the book from Continue Listening.
+/// Any of them may be sent alone; whatever is left out keeps its
+/// stored value, except as [`apply_write`] has it: a position at the
+/// library's finishing point finishes the book, un-finishing by hand
+/// puts the position back to 0, and a change clears `hidden`.
+/// `client_updated_at` is stored as sent (the server's time when
+/// absent). The last write to arrive wins.
 async fn put_progress(
     State(app): State<AppState>,
     user: AuthUser,
@@ -580,9 +745,9 @@ async fn put_progress(
 ) -> Result<Json<ProgressDto>, AppError> {
     let profile_id = active_profile(&user)?;
     let book = load_book(&app, profile_id, parse_id(&id)?).await?;
-    if body.position_ms.is_none() && body.finished.is_none() {
+    if body.position_ms.is_none() && body.finished.is_none() && body.hidden.is_none() {
         return Err(AppError::BadRequest(
-            "send position_ms, finished, or both".into(),
+            "send position_ms, finished or hidden".into(),
         ));
     }
     if body.position_ms.is_some_and(|p| p < 0) {
@@ -591,37 +756,80 @@ async fn put_progress(
         ));
     }
     let duration = Some(book.duration_ms).filter(|d| *d > 0);
-    let position = body.position_ms.map(|p| clamp_position(p, duration));
-    let row = sqlx::query_as::<_, ProgressRow>(
-        "INSERT INTO book_progress
-             (profile_id, item_id, position_ms, duration_ms, finished, finished_at,
-              last_listened_at, updated_at)
-         VALUES ($1, $2, COALESCE($3::bigint, 0), $4, COALESCE($5::boolean, false),
-                 CASE WHEN $5::boolean THEN now() END,
-                 CASE WHEN $3::bigint IS NOT NULL THEN now() END, now())
-         ON CONFLICT (profile_id, item_id) DO UPDATE SET
-             position_ms = COALESCE($3::bigint, book_progress.position_ms),
-             duration_ms = COALESCE($4, book_progress.duration_ms),
-             finished = COALESCE($5::boolean, book_progress.finished),
-             finished_at = CASE
-                 WHEN $5::boolean IS TRUE AND book_progress.finished THEN book_progress.finished_at
-                 WHEN $5::boolean IS TRUE THEN now()
-                 WHEN $5::boolean IS FALSE THEN NULL
-                 ELSE book_progress.finished_at END,
-             last_listened_at = CASE WHEN $3::bigint IS NOT NULL THEN now()
-                                     ELSE book_progress.last_listened_at END,
-             updated_at = now()
-         RETURNING position_ms, duration_ms, finished, finished_at, last_listened_at,
-                   updated_at",
+    let write = ProgressWrite {
+        position_ms: body.position_ms.map(|p| clamp_position(p, duration)),
+        finished: body.finished,
+        hidden: body.hidden,
+    };
+
+    let mut tx = app.pool.begin().await.map_err(AppError::from)?;
+    let (remaining_s, percent): (i32, Option<i32>) = sqlx::query_as(
+        "SELECT finish_remaining_seconds, finish_percent FROM libraries WHERE id = $1",
+    )
+    .bind(book.library_id)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(AppError::from)?;
+    let rule = FinishRule {
+        remaining_ms: i64::from(remaining_s) * 1000,
+        percent,
+    };
+    let stored: Option<(i64, bool, bool)> = sqlx::query_as(
+        "SELECT position_ms, finished, hidden FROM book_progress
+         WHERE profile_id = $1 AND item_id = $2 FOR UPDATE",
     )
     .bind(profile_id)
     .bind(book.id)
-    .bind(position)
-    .bind(duration)
-    .bind(body.finished)
-    .fetch_one(&app.pool)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(AppError::from)?;
+    let stored = stored
+        .map(|(position_ms, finished, hidden)| StoredProgress {
+            position_ms,
+            finished,
+            hidden,
+        })
+        .unwrap_or_default();
+    let next = apply_write(stored, write, duration, rule);
+    let finished_at = match next.finished_at {
+        FinishedAt::Keep => "keep",
+        FinishedAt::Now => "now",
+        FinishedAt::Clear => "clear",
+    };
+    let row = sqlx::query_as::<_, ProgressRow>(
+        "INSERT INTO book_progress
+             (profile_id, item_id, position_ms, duration_ms, finished, finished_at,
+              last_listened_at, updated_at, hidden, client_updated_at)
+         VALUES ($1, $2, $3, $4, $5, CASE WHEN $6 = 'now' THEN now() END,
+                 CASE WHEN $7 THEN now() END, now(), $8, COALESCE($9, now()))
+         ON CONFLICT (profile_id, item_id) DO UPDATE SET
+             position_ms = $3,
+             duration_ms = COALESCE($4, book_progress.duration_ms),
+             finished = $5,
+             finished_at = CASE $6 WHEN 'now' THEN now()
+                                   WHEN 'clear' THEN NULL
+                                   ELSE book_progress.finished_at END,
+             last_listened_at = CASE WHEN $7 THEN now()
+                                     ELSE book_progress.last_listened_at END,
+             updated_at = now(),
+             hidden = $8,
+             client_updated_at = COALESCE($9, now())
+         RETURNING position_ms, duration_ms, finished, finished_at, last_listened_at,
+                   updated_at, hidden, client_updated_at",
+    )
+    .bind(profile_id)
+    .bind(book.id)
+    .bind(next.position_ms)
+    .bind(duration)
+    .bind(next.finished)
+    .bind(finished_at)
+    .bind(next.listened)
+    .bind(next.hidden)
+    .bind(body.client_updated_at)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(AppError::from)?;
+    tx.commit().await.map_err(AppError::from)?;
     Ok(Json(row.into()))
 }
 
@@ -655,6 +863,8 @@ struct ProgressSyncRow {
     finished_at: Option<DateTime<Utc>>,
     last_listened_at: Option<DateTime<Utc>>,
     updated_at: DateTime<Utc>,
+    hidden: bool,
+    client_updated_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Serialize)]
@@ -677,7 +887,7 @@ async fn sync_progress(
         .map_err(AppError::from)?;
     let progress = sqlx::query_as::<_, ProgressSyncRow>(
         "SELECT bp.item_id, bp.position_ms, bp.duration_ms, bp.finished, bp.finished_at,
-                bp.last_listened_at, bp.updated_at
+                bp.last_listened_at, bp.updated_at, bp.hidden, bp.client_updated_at
          FROM book_progress bp
          JOIN media_items i ON i.id = bp.item_id
          JOIN library_access a ON a.library_id = i.library_id AND a.profile_id = $1
@@ -722,6 +932,177 @@ mod tests {
         // Unknown or zero length: no upper bound to clamp to.
         assert_eq!(clamp_position(5000, None), 5000);
         assert_eq!(clamp_position(5000, Some(0)), 5000);
+    }
+
+    const TEN_S: FinishRule = FinishRule {
+        remaining_ms: 10_000,
+        percent: None,
+    };
+
+    #[test]
+    fn the_finishing_point_is_audiobookshelfs() {
+        let d = Some(3_600_000);
+        // Less than 10 s left finishes; exactly 10 s doesn't.
+        assert!(reaches_finish(3_590_001, d, TEN_S));
+        assert!(!reaches_finish(3_590_000, d, TEN_S));
+        assert!(reaches_finish(3_600_000, d, TEN_S));
+        // Unknown length, or the time rule off: never by itself.
+        assert!(!reaches_finish(3_600_000, None, TEN_S));
+        assert!(!reaches_finish(3_600_000, Some(0), TEN_S));
+        let off = FinishRule {
+            remaining_ms: 0,
+            percent: None,
+        };
+        assert!(!reaches_finish(3_600_000, d, off));
+        // A percentage replaces the time rule, and must be passed.
+        let pct = FinishRule {
+            remaining_ms: 10_000,
+            percent: Some(95),
+        };
+        assert!(!reaches_finish(950_000, Some(1_000_000), pct));
+        assert!(reaches_finish(950_001, Some(1_000_000), pct));
+        assert!(
+            !reaches_finish(
+                995_000,
+                Some(1_000_000),
+                FinishRule {
+                    percent: Some(100),
+                    ..pct
+                }
+            ),
+            "at 100 % the point can't be passed"
+        );
+        let fine = FinishRule {
+            remaining_ms: 10_000,
+            percent: Some(99),
+        };
+        assert!(
+            !reaches_finish(3_559_000, d, fine),
+            "the percentage, not the 10 s, decides"
+        );
+    }
+
+    fn stored(position_ms: i64, finished: bool, hidden: bool) -> StoredProgress {
+        StoredProgress {
+            position_ms,
+            finished,
+            hidden,
+        }
+    }
+
+    fn write(
+        position_ms: Option<i64>,
+        finished: Option<bool>,
+        hidden: Option<bool>,
+    ) -> ProgressWrite {
+        ProgressWrite {
+            position_ms,
+            finished,
+            hidden,
+        }
+    }
+
+    #[test]
+    fn writes_follow_audiobookshelfs_progress_rules() {
+        let d = Some(100_000);
+        let apply = |s, w| apply_write(s, w, d, TEN_S);
+
+        // A plain position write.
+        let n = apply(stored(0, false, false), write(Some(5_000), None, None));
+        assert_eq!(
+            (n.position_ms, n.finished, n.finished_at),
+            (5_000, false, FinishedAt::Clear)
+        );
+        assert!(n.listened);
+
+        // Reaching the point finishes, once.
+        let n = apply(stored(5_000, false, false), write(Some(95_000), None, None));
+        assert_eq!((n.finished, n.finished_at), (true, FinishedAt::Now));
+        let n = apply(stored(95_000, true, false), write(Some(99_000), None, None));
+        assert_eq!((n.finished, n.finished_at), (true, FinishedAt::Keep));
+
+        // Moved back before the point: unfinished again, position kept.
+        let n = apply(stored(95_000, true, false), write(Some(1_000), None, None));
+        assert_eq!(
+            (n.position_ms, n.finished, n.finished_at),
+            (1_000, false, FinishedAt::Clear)
+        );
+        // Not moved: stays finished, even before the point.
+        let n = apply(stored(1_000, true, false), write(Some(1_000), None, None));
+        assert!(n.finished);
+        // Unknown length: positions never change `finished`.
+        let n = apply_write(
+            stored(1_000, true, false),
+            write(Some(2), None, None),
+            None,
+            TEN_S,
+        );
+        assert!(n.finished);
+        let n = apply_write(
+            stored(0, false, false),
+            write(Some(9), None, None),
+            None,
+            TEN_S,
+        );
+        assert!(!n.finished);
+
+        // By hand: finishing keeps the position; un-finishing resets
+        // it to 0 and ignores a position sent with it.
+        let n = apply(stored(40_000, false, false), write(None, Some(true), None));
+        assert_eq!(
+            (n.position_ms, n.finished, n.finished_at),
+            (40_000, true, FinishedAt::Now)
+        );
+        assert!(!n.listened, "marking is not listening");
+        let n = apply(
+            stored(40_000, true, false),
+            write(Some(30_000), Some(false), None),
+        );
+        assert_eq!(
+            (n.position_ms, n.finished, n.finished_at),
+            (0, false, FinishedAt::Clear)
+        );
+        assert!(!n.listened);
+        // Un-finishing an unfinished book changes nothing else.
+        let n = apply(stored(40_000, false, false), write(None, Some(false), None));
+        assert_eq!((n.position_ms, n.finished), (40_000, false));
+        // An explicit finished wins over the rule both ways.
+        let n = apply(
+            stored(0, false, false),
+            write(Some(99_000), Some(false), None),
+        );
+        assert!(!n.finished);
+        let n = apply(
+            stored(0, false, false),
+            write(Some(5_000), Some(true), None),
+        );
+        assert_eq!((n.position_ms, n.finished), (5_000, true));
+    }
+
+    #[test]
+    fn the_hide_flag_clears_when_the_position_next_moves() {
+        let d = Some(100_000);
+        let apply = |s, w| apply_write(s, w, d, TEN_S);
+        let n = apply(stored(5_000, false, false), write(None, None, Some(true)));
+        assert!(n.hidden);
+        assert_eq!(n.position_ms, 5_000);
+        // A move clears it, unless the same write hides it again.
+        assert!(!apply(stored(5_000, false, true), write(Some(6_000), None, None)).hidden);
+        assert!(
+            apply(
+                stored(5_000, false, true),
+                write(Some(6_000), None, Some(true))
+            )
+            .hidden
+        );
+        // No move: it stays.
+        assert!(apply(stored(5_000, false, true), write(Some(5_000), None, None)).hidden);
+        // Finishing alone doesn't clear it; un-finishing moves the
+        // position to 0, which does.
+        assert!(apply(stored(5_000, false, true), write(None, Some(true), None)).hidden);
+        assert!(!apply(stored(5_000, true, true), write(None, Some(false), None)).hidden);
+        // Sent false: shown again without a move.
+        assert!(!apply(stored(5_000, false, true), write(None, None, Some(false))).hidden);
     }
 
     #[test]
