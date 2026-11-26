@@ -7,9 +7,10 @@ or Silo** — behavioural parity and similar information
 architecture are fine; their code and branding are not.
 
 ## Start here
+- The shared agent context: `soul.md` and `memory.md` (§3a) in the [agents repo](https://github.com/nuniesmith/agents) — read alongside this file.
 - `TODO.md` — the living checklist; work items top-down by
   phase, check boxes off in the same PR that does the work.
-- `docs/DECISIONS.md` — settled judgment calls (D1–D15).
+- `docs/DECISIONS.md` — settled judgment calls (D1–D40).
   Don't relitigate; if one must change, say so in the PR.
 - `docs/ROADMAP.md`, `docs/ARCHITECTURE.md`,
   `docs/WEBUI-EMBY-NOTES.md` (UI spec for Phase 7),
