@@ -1,0 +1,33 @@
+{
+  "format": "parlour-sidecar",
+  "format_version": 1,
+  "kind": "audiobook",
+  "title": "The Lantern Keeper",
+  "subtitle": "A Harbour Tale",
+  "year": 2011,
+  "overview": "A keeper of lights.",
+  "genres": [
+    "Fiction"
+  ],
+  "publisher": "Example Press",
+  "isbn": "9780000000002",
+  "language": "en",
+  "google_books_id": "gBk0001-_x",
+  "people": [
+    {
+      "name": "Ada Fictional",
+      "role": "author",
+      "sort_order": 0
+    },
+    {
+      "name": "Bo Imaginary",
+      "role": "author",
+      "sort_order": 1
+    },
+    {
+      "name": "Nell Reader",
+      "role": "narrator",
+      "sort_order": 0
+    }
+  ]
+}

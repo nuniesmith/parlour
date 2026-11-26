@@ -16,6 +16,11 @@
 //! - `audiobooks` — audiobooks libraries (Phase 10, AB2): audio
 //!   folders grouped into books, ordered tracks, tag metadata,
 //!   chapters on the book's timeline, folder covers.
+//! - `book_meta` / `book_sync` — AB6 (D30): a book's metadata merged
+//!   from its local sources in the library's precedence order, the
+//!   admin's manual match against Google Books / Open Library (per
+//!   book, or a library-wide quick match that fills gaps), embedded
+//!   covers, and the `book.parlour.json` sidecar.
 //! - `fingerprint` — the audio-fingerprint pass in the same job:
 //!   chromaprint over each episode's head and tail, cached by file
 //!   hash, matched across the whole season (SEG3, D20).
@@ -31,6 +36,8 @@
 
 pub mod artwork;
 pub mod audiobooks;
+pub mod book_meta;
+pub mod book_sync;
 pub mod emby;
 pub mod fingerprint;
 pub mod metadata_sync;
@@ -46,7 +53,7 @@ pub use emby::{run_import, EmbyClient, EmbyError, EmbySettings, ImportReport};
 pub use metadata_sync::{apply_manual, match_item, match_library, MatchError, MatchOutcome};
 pub use parse::{parse_file_name, ParsedName};
 pub use probe::{probe_file, ProbeResult};
-pub use scan::{scan_library, ScanReport};
+pub use scan::{scan_library, scan_library_with, ScanOptions, ScanReport};
 pub use segments::{detect_library, needs_detection, DetectError, DetectReport};
 pub use sidecar::{copy_item_artwork, write_item_sidecars, ArtworkCopyReport, SidecarWriteReport};
 pub use walk::{walk_library, DiscoveredVideo, SidecarSubtitle, WalkResult};

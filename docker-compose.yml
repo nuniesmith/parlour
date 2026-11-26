@@ -33,6 +33,8 @@ services:
       # TMDB_API_KEY (the name already in use on the servers).
       PARLOUR_TMDB_API_KEY: ${TMDB_API_KEY:-${PARLOUR_TMDB_API_KEY:-}}
       PARLOUR_TVDB_API_KEY: ${PARLOUR_TVDB_API_KEY:-}
+      # Audiobook matching (AB6): optional; Google Books works without one.
+      PARLOUR_GOOGLE_BOOKS_API_KEY: ${PARLOUR_GOOGLE_BOOKS_API_KEY:-}
       PARLOUR_ARTWORK_DIR: /artwork
       PARLOUR_CACHE_DIR: /cache
       PARLOUR_EMBY_URL: ${PARLOUR_EMBY_URL:-}

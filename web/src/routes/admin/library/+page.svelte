@@ -3,16 +3,23 @@
   // the scan / metadata-match / artwork actions. Also the per-library
   // opt-in to writing next to the media (XFER5, D14): off by default,
   // turned on only here, behind a confirm that says what gets written.
+  // AB6 (D30): an audiobooks library's "Match metadata" is a quick
+  // match (Google Books, fills gaps only), and its books' local
+  // metadata sources merge in an order set here.
   import { onMount } from 'svelte';
   import { api } from '$lib/api';
   import { loadSession } from '$lib/session.svelte';
-  import type { LibraryDetail } from '$lib/types';
+  import { METADATA_SOURCES, type LibraryDetail, type MetadataPrecedence } from '$lib/types';
 
   let error = $state<string | null>(null);
   let notice = $state<string | null>(null);
   let loaded = $state(false);
   let libraries = $state<LibraryDetail[]>([]);
   let libForm = $state({ id: '', name: '', kind: 'movies', paths: '' });
+  /** AB6: each audiobooks library's precedence as edited here: every
+   *  source in order, and whether it is read. */
+  let precedence = $state<Record<string, { id: string; on: boolean }[]>>({});
+  let precedenceDefault = $state<string[]>([]);
 
   async function loadLibraries() {
     const { data, error: err } = await api<LibraryDetail[]>('/api/v1/admin/libraries');
@@ -25,7 +32,42 @@
         return detail.data ?? { ...lib, paths: [], write_sidecars: false, folders: [] };
       }),
     );
+    for (const lib of libraries.filter((l) => l.kind === 'audiobooks')) {
+      const { data: p } = await api<MetadataPrecedence>(
+        `/api/v1/admin/libraries/${lib.id}/metadata-precedence`,
+      );
+      if (p) setPrecedence(p);
+    }
     loaded = true;
+  }
+
+  function setPrecedence(p: MetadataPrecedence) {
+    precedenceDefault = p.default;
+    precedence[p.library_id] = [
+      ...p.sources.map((id) => ({ id, on: true })),
+      ...p.available.filter((id) => !p.sources.includes(id)).map((id) => ({ id, on: false })),
+    ];
+  }
+
+  function moveSource(libId: string, i: number, by: number) {
+    const list = [...precedence[libId]];
+    const j = i + by;
+    if (j < 0 || j >= list.length) return;
+    [list[i], list[j]] = [list[j], list[i]];
+    precedence[libId] = list;
+  }
+
+  async function savePrecedence(lib: LibraryDetail, sources: string[]) {
+    error = null;
+    notice = null;
+    const { data, error: err } = await api<MetadataPrecedence>(
+      `/api/v1/admin/libraries/${lib.id}/metadata-precedence`,
+      { method: 'PUT', body: JSON.stringify({ sources }) },
+    );
+    if (data) {
+      setPrecedence(data);
+      notice = `${lib.name}: metadata sources saved. The next scan merges every book again in this order.`;
+    } else error = err ?? 'Could not save the metadata sources.';
   }
 
   onMount(loadLibraries);
@@ -65,19 +107,27 @@
     void loadSession();
   }
 
-  // Video libraries only: the writer covers movies and shows today.
-  const SIDECAR_KINDS = ['movies', 'shows'];
+  // Libraries whose items get sidecars: video, and audiobooks (AB6).
+  const SIDECAR_KINDS = ['movies', 'shows', 'audiobooks'];
 
   async function setWriteSidecars(lib: LibraryDetail, enabled: boolean) {
     error = null;
     notice = null;
     if (enabled) {
+      const what =
+        lib.kind === 'audiobooks'
+          ? 'It will write book.parlour.json in the folder of each book you match, and the ' +
+            "matched cover as cover.jpg where the folder has no cover image of its own — only " +
+            "in a folder that holds that one book. It never deletes anything, and never " +
+            "replaces a cover.jpg it didn't write."
+          : 'It will write a .parlour.json and a .nfo beside each matched video, ' +
+            'series.parlour.json and tvshow.nfo in each series folder, and poster.jpg / ' +
+            'backdrop.jpg in folders that hold one item. It never deletes anything, and never ' +
+            "replaces a .nfo or a poster.jpg it didn't write.";
       const sure = confirm(
         `Let Parlour write files next to the media of "${lib.name}"?\n\n` +
-          'It will write a .parlour.json and a .nfo beside each matched video, ' +
-          'series.parlour.json and tvshow.nfo in each series folder, and poster.jpg / ' +
-          'backdrop.jpg in folders that hold one item. It never deletes anything, and never ' +
-          "replaces a .nfo or a poster.jpg it didn't write.\n\n" +
+          what +
+          '\n\n' +
           "Nothing is written until the library's folders are also mounted writable on the " +
           'server host. That is a change you make outside Parlour.',
       );
@@ -90,7 +140,9 @@
     if (data) {
       libraries = libraries.map((l) => (l.id === data.id ? data : l));
       notice = enabled
-        ? `${lib.name} may now write next to its media. Sidecars and .nfo files are written by the next metadata match, poster and backdrop copies by the next artwork download.`
+        ? lib.kind === 'audiobooks'
+          ? `${lib.name} may now write next to its books. book.parlour.json and cover.jpg are written when a book is matched.`
+          : `${lib.name} may now write next to its media. Sidecars and .nfo files are written by the next metadata match, poster and backdrop copies by the next artwork download.`
         : `${lib.name} no longer writes next to its media. Files already written stay where they are.`;
     } else error = err ?? 'Could not change that setting.';
   }
@@ -128,12 +180,24 @@
             onclick={() => runJob(`/api/v1/admin/libraries/${lib.id}/scan`, 'Scan started.')}
             >Scan</button
           >
-          <button
-            class="btn small"
-            onclick={() =>
-              runJob(`/api/v1/admin/libraries/${lib.id}/metadata`, 'Metadata match started.')}
-            >Match metadata</button
-          >
+          {#if lib.kind === 'audiobooks'}
+            <button
+              class="btn small"
+              title="Google Books, first close result; fills only what each book is missing"
+              onclick={() =>
+                runJob(
+                  `/api/v1/admin/libraries/${lib.id}/metadata`,
+                  'Quick match started (Google Books; it fills only what each book is missing).',
+                )}>Quick match</button
+            >
+          {:else}
+            <button
+              class="btn small"
+              onclick={() =>
+                runJob(`/api/v1/admin/libraries/${lib.id}/metadata`, 'Metadata match started.')}
+              >Match metadata</button
+            >
+          {/if}
           <button
             class="btn small"
             onclick={() =>
@@ -199,6 +263,61 @@
             </p>
           {/if}
         {/if}
+      </section>
+    {/each}
+  </div>
+{/if}
+
+{#if libraries.some((l) => l.kind === 'audiobooks')}
+  <h2>Audiobook metadata sources</h2>
+  <p class="dim">
+    Where each book's details come from, in order: a later source replaces what an earlier
+    one gave, field by field. The default is Audiobookshelf's order, with Parlour's own
+    <span class="mono">book.parlour.json</span> (or a match made here) as the last word. A
+    source that is switched off isn't read. Changes apply at the next scan.
+  </p>
+  <div class="sidecar-list">
+    {#each libraries.filter((l) => l.kind === 'audiobooks' && precedence[l.id]) as lib (lib.id)}
+      <section class="sidecar-card" aria-label={`Metadata sources of ${lib.name}`}>
+        <div class="sidecar-head"><h3>{lib.name}</h3></div>
+        <ol class="sources">
+          {#each precedence[lib.id] as src, i (src.id)}
+            <li class:off={!src.on}>
+              <label
+                ><input type="checkbox" bind:checked={precedence[lib.id][i].on} />
+                {METADATA_SOURCES[src.id] ?? src.id}</label
+              >
+              <span class="moves">
+                <button
+                  class="btn small"
+                  aria-label="Earlier (weaker)"
+                  disabled={i === 0}
+                  onclick={() => moveSource(lib.id, i, -1)}>↑</button
+                >
+                <button
+                  class="btn small"
+                  aria-label="Later (stronger)"
+                  disabled={i === precedence[lib.id].length - 1}
+                  onclick={() => moveSource(lib.id, i, 1)}>↓</button
+                >
+              </span>
+            </li>
+          {/each}
+        </ol>
+        <div class="actions">
+          <button
+            class="btn small primary"
+            disabled={!precedence[lib.id].some((s) => s.on)}
+            onclick={() =>
+              savePrecedence(
+                lib,
+                precedence[lib.id].filter((s) => s.on).map((s) => s.id),
+              )}>Save order</button
+          >
+          <button class="btn small" onclick={() => savePrecedence(lib, precedenceDefault)}
+            >Back to the default</button
+          >
+        </div>
       </section>
     {/each}
   </div>
@@ -293,6 +412,26 @@
   }
   .ok {
     color: var(--ok);
+  }
+  .sources {
+    margin: 0.5rem 0;
+    padding-left: 1.4rem;
+    display: grid;
+    gap: 0.25rem;
+  }
+  .sources li {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .sources li.off {
+    color: var(--text-dim);
+  }
+  .moves {
+    display: flex;
+    gap: 0.25rem;
   }
   .bad {
     color: var(--danger);

@@ -1,0 +1,14 @@
+{
+  "kind": "books#volume",
+  "id": "gBk0001-_x",
+  "volumeInfo": {
+    "title": "The Lantern Keeper",
+    "authors": ["Ada Fictional"],
+    "publishedDate": "2011",
+    "imageLinks": {
+      "thumbnail": "http://books.google.com/books/content?id=gBk0001-_x&img=1&zoom=1",
+      "large": "http://books.google.com/books/content?id=gBk0001-_x&img=1&zoom=4",
+      "extraLarge": "http://books.google.com/books/content?id=gBk0001-_x&img=1&zoom=6"
+    }
+  }
+}

@@ -821,7 +821,11 @@ async fn import_export_page_flow() {
     assert_eq!(shows["nfos_written"], 1);
     assert_eq!(shows["artwork_written"], 2);
     let books = source.sidecars(&admin, "Books").await;
-    assert_eq!(books["supported"], false);
+    assert_eq!(
+        books["supported"], true,
+        "audiobooks get sidecars since AB6"
+    );
+    assert_eq!(books["write_sidecars"], false);
     // XFER5's switch, seen from this page.
     for (lib, on) in [(seeded.shows, true), (seeded.films, true)] {
         let (status, _) = source

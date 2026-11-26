@@ -50,8 +50,8 @@ pub struct LibrarySidecars {
     pub id: Uuid,
     pub name: String,
     pub kind: String,
-    /// Whether this kind of library gets sidecars at all (movies and
-    /// shows; audiobooks wait for AB6, D30).
+    /// Whether this kind of library gets sidecars at all (movies,
+    /// shows and, since AB6, audiobooks).
     pub supported: bool,
     /// The opt-in (XFER5). Off by default.
     pub write_sidecars: bool,
@@ -59,10 +59,11 @@ pub struct LibrarySidecars {
     pub folders: Vec<FolderAccess>,
     /// Whether the "can't write beside the media" notice is up.
     pub unwritable_notice: bool,
-    /// Available movies, series and episodes.
+    /// Available movies, series, episodes and books.
     pub items: i64,
-    /// Items with a sidecar on record (read by the scanner or written
-    /// by the metadata job): `item_sidecars`.
+    /// Items with a sidecar on record: `item_sidecars` (read by the
+    /// scanner or written by the metadata job) plus, for books,
+    /// `book_sidecars` (the server's copy a match left, AB6).
     pub sidecars: i64,
     /// Of those, overridden by an admin's fix-match until the file
     /// changes.
@@ -84,8 +85,11 @@ async fn list(
         "SELECT l.id, l.name, l.kind, l.write_sidecars,
                 (SELECT count(*) FROM media_items i
                   WHERE i.library_id = l.id AND i.available
-                    AND i.kind IN ('movie', 'series', 'episode')) AS items,
+                    AND i.kind IN ('movie', 'series', 'episode', 'audiobook')) AS items,
                 (SELECT count(*) FROM item_sidecars s
+                   JOIN media_items i ON i.id = s.item_id
+                  WHERE i.library_id = l.id)
+                + (SELECT count(*) FROM book_sidecars s
                    JOIN media_items i ON i.id = s.item_id
                   WHERE i.library_id = l.id) AS sidecars,
                 (SELECT count(*) FROM item_sidecars s

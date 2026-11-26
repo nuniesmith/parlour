@@ -33,7 +33,10 @@ them beside the sidecars, is XFER6 (§13.13–§13.14).
   ids. Password and PIN hashes may sit in the plain, unencrypted zip,
   but D14's confirm and warning still stand.
 - **One open proposal:** the audio tables (§9). They are not
-  decided, so format v1 doesn't carry them yet.
+  decided, so format v1 doesn't carry them yet. *2026-11-26: a
+  second open question, D40: whether a book's match and a library's
+  metadata precedence (AB6) travel (§13.15). Format v1 doesn't carry
+  them either.*
 - **Readings this spec made inside D14/D25:** listed in §10 for the
   owner to veto.
 
@@ -364,7 +367,8 @@ must be accounted for, and the mirrored CHECK sets must match. A
 migration that adds a table, a column or a value fails that test
 until the format and this doc say where it goes.
 
-At 2026-11-26 the schema has 28 tables, 13 of them carried:
+At 2026-11-26 the schema has 30 tables (AB6 added `book_metadata`
+and `book_sidecars`), 13 of them carried:
 
 | table | lands in |
 |---|---|
@@ -379,6 +383,9 @@ Columns of those tables that stay behind:
 - every row's own `id`;
 - `media_items.available` (file state);
 - `libraries.write_sidecars` (the host's sidecar opt-in, §13.8);
+- `libraries.metadata_precedence` (an audiobooks library's merge
+  order, AB6): **open, D40** (§13.15). Until then an imported
+  library starts with D30's default order;
 - `images.path` (a path in the old host's cache; `file` replaces it
   when artwork is included);
 - `images.width` / `images.height` (nothing writes them).
@@ -402,7 +409,9 @@ the Activity feed. The rest of the schema stays on the old host:
 | `item_nfos`, `sidecar_nfos` | what this host's scanner last read from `.nfo` files, and which ones it wrote (§13.13) |
 | `backup_settings` | this host's nightly backup folder, count and hash choice (D39, §16.4): a server setting, and the new host's folders are its own |
 | `_sqlx_migrations` | the new host keeps its own ledger |
+| `book_metadata` | a book's merged book-only fields and its sources fingerprint (AB6); the new host's scan rebuilds them from the book's files and its match |
 | `book_chapters`, `book_progress` | **open — §9** |
+| `book_sidecars` | a book's match, the server's copy of its `book.parlour.json` (AB6): **open — D40, §13.15** |
 
 ## 9. Proposed — needs the owner's yes: the audio tables
 
@@ -826,6 +835,7 @@ only in the bundle. A sidecar never holds anything about a user.
 | movie | `<video stem>.parlour.json` | beside each of the movie's video files: `Arrival (2016).mkv` → `Arrival (2016).parlour.json` |
 | episode | `<video stem>.parlour.json` | beside each of the episode's video files |
 | series | `series.parlour.json` | in the **series folder**: the nearest folder above an episode that isn't a season folder (`Season 01`, `S01`, `Specials`) |
+| audiobook (AB6) | `book.parlour.json` | in the **book folder**; a book that is one file in a library root reads `<stem>.parlour.json` beside it but never gets one written (§13.15) |
 
 - Seasons have no sidecar. Nothing the matcher sets lives on a season.
 - An episode directly in the library root has no series folder, so
@@ -836,7 +846,7 @@ only in the bundle. A sidecar never holds anything about a user.
   sidecar. They are one item anyway.
 - Sidecars belong to video libraries for now. Audiobooks libraries
   have their own scanner and no provider lookup yet. AB6 brings
-  books in (D30).
+  books in (D30). *Built 2026-11-26: §13.15.*
 - Only **available** files' sidecars are read or written.
 - Kodi/Emby-style `.nfo` files beside the media are read as an input
   and, where a library writes, written beside the sidecar (XFER6,
@@ -855,7 +865,7 @@ All of them are fictional.
 |---|---|---|---|
 | `format` | string | all | always `"parlour-sidecar"` |
 | `format_version` | integer | all | always `1` |
-| `kind` | string | all | `movie`, `series` or `episode`. It must match the item the file belongs to |
+| `kind` | string | all | `movie`, `series`, `episode` or (AB6) `audiobook`. It must match the item the file belongs to |
 | `title` | string | all | the item's title (`sort_title` is derived from it) |
 | `year` | integer | all | release or first-air year |
 | `season_number`, `episode_number` | integer | episode | **checks, not values**: when present they must equal the numbers parsed from the file name, or the sidecar is refused (it belongs to another episode). They are never applied, because they are part of the item's `stable_key` |
@@ -867,7 +877,9 @@ All of them are fictional.
 | `runtime_minutes` | integer | all | |
 | `tmdb_id`, `tvdb_id` | integer | all | provider ids |
 | `imdb_id` | string | all | |
-| `people` | array | all | credits: `{name, role, character_name, sort_order, tmdb_id}`. `name` and `role` are required, the rest optional. `sort_order` defaults to the entry's position in the list |
+| `subtitle`, `publisher`, `isbn`, `asin`, `language` | string | audiobook | AB6, §13.15 |
+| `google_books_id`, `open_library_id` | string | audiobook | the ids a match recorded (AB6): a Google Books volume id, an Open Library work id (`OL…W`) |
+| `people` | array | all | credits: `{name, role, character_name, sort_order, tmdb_id}`. `name` and `role` are required, the rest optional. `sort_order` defaults to the entry's position in the list. An audiobook's people are `author` / `narrator` with a name and a `sort_order` only |
 | `segments` | object | movie, episode | `{size_bytes, entries}`. `size_bytes` is the size of the video the times were measured on. `entries` is a list of `{kind, start_ms, end_ms}`: `kind` is `intro`, `credits` or `recap`; times are milliseconds into that video, or both absent for a D21 "no segment of this kind here" marker |
 
 **Present means authoritative; absent means not carried.** Every
@@ -1095,6 +1107,7 @@ TODO where they don't spell the detail out.
     scanner and no provider lookup yet. D30 already puts the
     `.parlour.json` sidecar last in AB6's audiobook precedence list,
     so AB6 extends this format to books. XFER4 doesn't build that.
+    *AB6 built it on 2026-11-26 (§13.15).*
 12. **The audio proposal (§9, D36) is still open.** It doesn't touch
     sidecars either way: audiobook progress is per-user state, so it
     lives only in the bundle, never in a sidecar.
@@ -1293,7 +1306,8 @@ TODO where they don't spell the detail out.
    off.
 8. **Only `movies` and `shows` libraries can turn it on.** These are
    the ones the writer covers (§13.9 reading 11). AB6 widens this for
-   audiobooks.
+   audiobooks. *Done 2026-11-26: `audiobooks` libraries take the
+   same flag (§13.15).*
 9. **Changes are audited** in the Activity feed under a new
    "Library settings" category, because the flag lets Parlour write
    on the media disks.
@@ -1333,6 +1347,8 @@ step).
   video's own.
 - As with sidecars: only **available** files' NFOs, and video
   libraries only. Audiobooks get their own NFO handling in AB6 (D30).
+  *AB6 reads an ABS-style `Key: value` `.nfo` in a book folder as one
+  of its local sources and writes no NFO beside a book (§13.15).*
 - `.nfo` is neither a video nor a subtitle extension, so the scanner
   never catalogues one as either.
 
@@ -1552,6 +1568,55 @@ where they don't spell the detail out.
     touch it. An NFO holds no per-user state, and nothing about
     `book_progress` / `book_chapters`.
 
+### 13.15 Audiobooks: `book.parlour.json` (AB6)
+
+Built 2026-11-26 with AB6 (D30). The full rules for a book's metadata
+(the per-library precedence list, matching, covers) are in
+`docs/AUDIOBOOKS-PODCASTS.md`, "Metadata sources, matching and covers
+(AB6)". What the sidecar side adds:
+
+- **The same v1 document**, `kind` `audiobook`, with book-only fields
+  (`subtitle`, `publisher`, `isbn`, `asin`, `language`,
+  `google_books_id`, `open_library_id`; §13.2). `format_version`
+  stays 1: the reader was strict, so an older server refuses a book's
+  sidecar for its kind, never misreads it. Video-only fields
+  (`air_date`, `content_rating`, `vote_average`, `runtime_minutes`,
+  `tmdb_id`, `tvdb_id`, `imdb_id`, `segments`) are refused on a book,
+  and the book-only fields are refused on video. An audiobook's
+  `people` are `author` / `narrator` entries with a name and a
+  `sort_order` only.
+- **Where:** `book.parlour.json` in the book's folder. A book that is
+  one audio file in a library root reads `<stem>.parlour.json` beside
+  it. Parlour never writes there, because a library root is shared.
+- **Read** as the `sidecar` source, the last word in the default
+  precedence. Every field it carries is authoritative (a present `[]`
+  means "none"), as for video.
+- **The match's server copy** (`book_sidecars`) is the same document
+  kept in Parlour's database. A match always leaves one (D30's
+  default: the server's own metadata area). It fills the `sidecar`
+  slot unless the book's own file changed after the match. That is
+  the §13.6 rule: an admin's match beats the file until the file
+  changes.
+- **Written** only where the library has `write_sidecars` on (XFER5's
+  flag, now accepted for `audiobooks` libraries; no second flag), at
+  match time, atomically, only into a folder that belongs to that
+  book alone (not a library root, no other book's available audio
+  under it). A matched cover goes beside it as `cover.jpg`: only a
+  JPEG, never over a file Parlour didn't write, never when the folder
+  already has its own cover image.
+- **No NFO is written beside a book.** ABS's book `.nfo` is a
+  `Key: value` text format, not XFER6's XML, and is read only.
+- **The bundle:** `book_metadata` stays behind (rebuilt by the new
+  host's scan). Whether `book_sidecars` and
+  `libraries.metadata_precedence` should travel is **open, D40**
+  (`docs/DECISIONS.md`). Until the owner answers, format v1 is
+  unchanged. A match reaches a new host only as a `book.parlour.json`
+  written beside the book, and an imported audiobooks library starts
+  with D30's default order.
+- **The audio proposal (§9, D36) is still open.** AB6 doesn't touch
+  `book_progress` / `book_chapters`, and no sidecar ever holds
+  progress, which is per-user state.
+
 ## 14. In the code
 
 - **`crates/server/src/bundle/`:**
@@ -1612,9 +1677,18 @@ where they don't spell the detail out.
   `catalog.rs` + `crates/jobs` — the jobs `kind` filter. Migration
   `20261128000000_backup_settings.sql`. Unit tests in `backup.rs`,
   `import/tests.rs` and `crates/jobs` (run in CI).
+- **AB6:** the book sidecar's kind and fields in
+  `crates/catalog/src/sidecar/mod.rs`; reading, merging and the
+  document Parlour writes in `crates/catalog/src/book_meta.rs`; the
+  server copy, the slot and the writes beside a book in
+  `crates/catalog/src/book_sync.rs`; `book_metadata` /
+  `book_sidecars` in `bundle/coverage.rs`. Migration
+  `20261129000000_book_metadata.sql`. Flow:
+  `crates/server/tests/book_match_flow.rs`.
 - **Fixtures:** `crates/server/tests/fixtures/bundle-v1/`;
   `crates/catalog/tests/fixtures/sidecar-v1/`;
-  `crates/catalog/tests/fixtures/nfo/`.
+  `crates/catalog/tests/fixtures/nfo/`;
+  `crates/catalog/tests/fixtures/books/` (AB6).
 - **Unit tests** in `bundle/tests.rs` (run in CI):
   - each fixture round-trips and is byte for byte what the writer
     writes;
@@ -2042,12 +2116,12 @@ exists — no second accounting and no walk of the disk:
 
 | field | from |
 |---|---|
-| `supported` | whether the kind gets sidecars (`movies`, `shows`; audiobooks wait for AB6) |
+| `supported` | whether the kind gets sidecars (`movies`, `shows` and, since AB6, `audiobooks`) |
 | `write_sidecars` | XFER5's opt-in |
 | `folders[]` | each root and whether it can be written now (XFER5's `access(2)` check) |
 | `unwritable_notice` | whether XFER5's "can't write" notice is up |
-| `items` | available movies, series and episodes (what a sidecar can belong to) |
-| `sidecars`, `sidecars_overridden` | rows in `item_sidecars` (read by a scan or written by a match), and those a fix-match overrode |
+| `items` | available movies, series, episodes and (AB6) books: what a sidecar can belong to |
+| `sidecars`, `sidecars_overridden` | rows in `item_sidecars` (read by a scan or written by a match) plus, for books, `book_sidecars` (a match's server copy, AB6); and those a fix-match overrode |
 | `nfos_read`, `nfos_written` | rows in `item_nfos`, `sidecar_nfos` |
 | `artwork_written` | rows in `sidecar_artwork` |
 

@@ -39,6 +39,15 @@ pub struct Config {
     /// Provider base-URL overrides (tests point these at a stub).
     pub tmdb_base: Option<String>,
     pub tvdb_base: Option<String>,
+    /// AB6: Google Books API key, optional (`PARLOUR_GOOGLE_BOOKS_API_KEY`).
+    /// Book matching works without one, on Google's anonymous quota.
+    pub google_books_api_key: Option<String>,
+    /// AB6: book-provider base-URL overrides (tests point these at a
+    /// stub): `PARLOUR_GOOGLE_BOOKS_BASE`, `PARLOUR_OPEN_LIBRARY_BASE`,
+    /// `PARLOUR_OPEN_LIBRARY_COVERS_BASE`.
+    pub google_books_base: Option<String>,
+    pub open_library_base: Option<String>,
+    pub open_library_covers_base: Option<String>,
     /// Local artwork cache directory (`PARLOUR_ARTWORK_DIR`).
     pub artwork_dir: PathBuf,
     pub emby_url: Option<String>,
@@ -156,6 +165,11 @@ impl Config {
             .get("PARLOUR_TVDB_BASE")
             .filter(|s| !s.trim().is_empty())
             .cloned();
+        let nonblank = |name: &str| vars.get(name).filter(|s| !s.trim().is_empty()).cloned();
+        let google_books_api_key = nonblank("PARLOUR_GOOGLE_BOOKS_API_KEY");
+        let google_books_base = nonblank("PARLOUR_GOOGLE_BOOKS_BASE");
+        let open_library_base = nonblank("PARLOUR_OPEN_LIBRARY_BASE");
+        let open_library_covers_base = nonblank("PARLOUR_OPEN_LIBRARY_COVERS_BASE");
         let emby_url = vars
             .get("PARLOUR_EMBY_URL")
             .filter(|s| !s.trim().is_empty())
@@ -211,6 +225,10 @@ impl Config {
             tvdb_api_key,
             tmdb_base,
             tvdb_base,
+            google_books_api_key,
+            google_books_base,
+            open_library_base,
+            open_library_covers_base,
             artwork_dir,
             emby_url,
             emby_api_key,

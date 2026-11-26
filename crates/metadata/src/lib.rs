@@ -4,14 +4,16 @@
 //! library type means adding a provider, not touching the
 //! catalog. TMDB (`tmdb`) is primary; TheTVDB (`tvdb`) is the
 //! second provider behind the same trait (MD5), used where TMDB
-//! episode data is thin. Later, with their library types:
-//! MusicBrainz (music), Audnexus (audiobooks), OpenLibrary
-//! (ebooks).
+//! episode data is thin. Audiobooks (AB6, D30) have their own
+//! providers in `books`: Google Books and Open Library, matched
+//! manually by an admin. Later, with its library type: MusicBrainz
+//! (music).
 //!
 //! This crate is pure I/O against provider APIs plus pure matching
 //! math (`score_candidate`, `extract_provider_ids`) — applying
 //! results to the database lives in `parlour-catalog`.
 
+pub mod books;
 pub mod tmdb;
 pub mod tvdb;
 

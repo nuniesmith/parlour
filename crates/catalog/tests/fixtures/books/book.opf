@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="uid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
+    <dc:title>The Lantern Keeper</dc:title>
+    <dc:subtitle>A Harbour Tale</dc:subtitle>
+    <dc:creator opf:role="aut">Ada Fictional</dc:creator>
+    <dc:creator>Bo Imaginary</dc:creator>
+    <dc:creator opf:role="nrt">Nell Reader</dc:creator>
+    <dc:creator opf:role="ill">Ivy Drawer</dc:creator>
+    <dc:date>2011-04-02T00:00:00+00:00</dc:date>
+    <dc:publisher>Example Press</dc:publisher>
+    <dc:identifier opf:scheme="ISBN">9780000000002</dc:identifier>
+    <dc:identifier opf:scheme="ASIN">B000000000</dc:identifier>
+    <dc:identifier opf:scheme="calibre">0a0a0a0a</dc:identifier>
+    <dc:description>&lt;p&gt;A keeper of lights.&lt;br/&gt;She waits &amp;amp; watches.&lt;/p&gt;</dc:description>
+    <dc:subject>Fiction</dc:subject>
+    <dc:subject>Sea Stories</dc:subject>
+    <dc:language>en</dc:language>
+    <meta name="calibre:series" content="Harbour Lights"/>
+  </metadata>
+</package>

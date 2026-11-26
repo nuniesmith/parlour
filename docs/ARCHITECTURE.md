@@ -378,8 +378,15 @@ The owner uses subtitles on most playback.
   start of track 0), and authors / narrators are `people` with
   roles `author` / `narrator`. Every folder holding audio is a
   book; `CD 1` / `Disc 2` / `Part 3` folders fold into their
-  parent; a loose root file is a book. Metadata comes from file
-  tags only (providers wait on D30). A book with any new, changed
+  parent; a loose root file is a book. Metadata is merged from the
+  book's local sources in a per-library precedence order (folder,
+  first track's tags, `.nfo`, `desc.txt`/`reader.txt`, `.opf`,
+  ABS's `metadata.json`, `book.parlour.json`; AB6, D30,
+  `parlour_catalog::book_meta` / `book_sync`), plus an admin's
+  manual match against Google Books or Open Library
+  (`parlour_metadata::books`), kept server-side in `book_sidecars`;
+  embedded cover art is extracted into the artwork cache when the
+  folder has no image. A book with any new, changed
   or missing file is re-probed and rebuilt whole; unchanged books
   are skipped. Listening progress is `book_progress`, per profile
   + book: one book-global position (clamped to the book), an

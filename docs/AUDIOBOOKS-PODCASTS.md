@@ -102,6 +102,14 @@ scan without renaming:
 ffprobe reads every track's format tags and the chapters. The first
 track that has a tag wins:
 
+*AB6 (2026-11-26) changed two things in this table:*
+- tags now come from the **first track** only, as ABS reads them;
+- tags are one source in a per-library precedence list, and the
+  folder name is its own source.
+
+Embedded cover art is now extracted too. See "Metadata sources,
+matching and covers (AB6)" below.
+
 | Field | Source, first that's present |
 |---|---|
 | title | `album`; for a single-file book, `title`; else the folder or file name |
@@ -110,7 +118,7 @@ track that has a tag wins:
 | year | first four digits of `date` / `year` |
 | overview | `description`, else `comment` |
 | genres | `genre`, split on `;` / `,` / `/` |
-| cover | `cover.jpg` / `folder.jpg` (or `.png`) in the book folder, served from the media path; embedded cover art waits for AB6 |
+| cover | `cover.jpg` / `folder.jpg` (or `.png`) in the book folder, served from the media path; since AB6, embedded cover art when there is no such image |
 
 Several authors or narrators in one tag (`A, B`, `A & B`, `A; B`)
 are split. They are stored as `people` linked through `item_people`
@@ -175,6 +183,248 @@ when the page closes, but only once the page has actually played. It marks the b
 Items of kind `audiobook` anywhere else (Home rails, search) link to
 `/book/[id]`.
 
+### Metadata sources, matching and covers (AB6, built 2026-11-26)
+
+Built to **D30** (mirror Audiobookshelf's metadata handling). ABS
+behaviour was read from its docs and server source (behaviour only,
+nothing copied). Code: `crates/catalog/src/book_meta.rs` (the pure
+readers and the merge), `crates/catalog/src/book_sync.rs` (the
+database half: the sidecar slot, applying a match, writing beside a
+book, covers), `crates/metadata/src/books.rs` (the two providers),
+`crates/server/src/book_match.rs` (the admin API),
+`web/src/lib/BookMatch.svelte`. Migration
+`20261129000000_book_metadata.sql`.
+
+**Local sources, merged in a per-library order.** Each audiobooks
+library has an ordered precedence list
+(`libraries.metadata_precedence`). A book's sources are read and
+laid over each other in that order, and a later source overwrites
+what an earlier one gave, field by field. The default is ABS's order,
+with Parlour's own sidecar as the last word:
+
+| id | source | what it gives |
+|---|---|---|
+| `folder` | the book folder's name, and the top-level folder above it | title (a root file's name without its extension); authors, split ABS's way (below) |
+| `tags` | the audio tags of the **first track** in disc/track order | title (`album`; for a single-file book also `title`), `subtitle`, authors (`album_artist`, else `artist`), narrators (`composer`), year (`date`, else `year`), `publisher`, `isbn`, `asin`, `language`, overview (`description`, else `comment`), genres (`genre`) |
+| `nfo` | an `.nfo` in the book folder, ABS's `Key: value` style | `Title` (`Title: Subtitle` splits), `Author`, `Narrator` / `Read by`, `Genre`, `Publisher`, `ASIN`, `ISBN`, `Language`, the year from the date and copyright lines, and `Book Description` to the end of the file. An XML (Kodi-style) `.nfo` says nothing here |
+| `txt` | `desc.txt` and `reader.txt` | the whole of `desc.txt` as the overview; the first line of `reader.txt` as the narrators |
+| `opf` | an `.opf` package document (Calibre and others) | the Dublin Core title, creators (authors, and narrators by role), date, publisher, description, subjects, language, ISBN / ASIN identifiers |
+| `abs_json` | ABS's own `metadata.json`, read as an input | `title`, `subtitle`, `authors`, `narrators`, `genres`, `publishedYear` (else `publishedDate`), `publisher`, `description`, `isbn`, `asin`, `language`; anything else in the file is not read |
+| `sidecar` | Parlour's `book.parlour.json` (D14), or the server's copy of it that a match left (below) | every field it carries, authoritatively |
+
+- **How a field merges.** A source that has a field replaces it; a
+  source that doesn't says nothing. Lists (authors, narrators,
+  genres) are replaced whole, never merged. An empty list replaces
+  only from the sidecar, where a present `[]` means "none" (§13.2 of
+  `IMPORT-EXPORT.md`); from any other source it says nothing.
+- **The title is never empty.** When no source gave one, the
+  folder's (or file's) name is used.
+- **A source left out of the list isn't read.** The admin edits the
+  list per library (Server → Library → "Audiobook metadata sources":
+  reorder, turn sources off). `GET | PUT
+  /api/v1/admin/libraries/{id}/metadata-precedence` with
+  `{"sources": [...]}`; the list needs at least one source, each a
+  known id, none twice. An audiobooks library only.
+- **Which files are a book's.** A folder book reads the files in its
+  own folder (not its disc folders): the first `.nfo` and the first
+  `.opf` by name, `desc.txt`, `reader.txt`, `metadata.json`,
+  `book.parlour.json`, matched without regard to case. A book that is
+  one file in a library root reads only `<stem>.parlour.json` beside
+  it, because everything else in a root is shared.
+- **Fields the shared item row has no column for** (`subtitle`,
+  `publisher`, `isbn`, `asin`, `language`, the provider ids a match
+  recorded) live in `book_metadata`, and `GET /api/v1/audiobooks/{id}`
+  returns them, plus `match` (`provider`, `provider_id`, `mode`,
+  `matched_at`; `null` when unmatched).
+- **A re-scan stays idempotent.** `book_metadata` keeps a fingerprint
+  of the book's metadata files (path, size, mtime), the precedence
+  and the merge rules' version. An unchanged book with an unchanged
+  fingerprint is skipped unprobed, as in AB2; a changed source file
+  or a changed precedence list re-merges it. A book with no metadata
+  files and no match merges to what AB2 gave it, apart from the
+  first-track and author-splitting alignments listed below.
+
+**Author splitting.** Folder names split ABS's way (follow-up item
+5): on `;`, `&` and the word `and`, then on commas, where comma parts
+that all lack a space are read as `Last, First` pairs (`Sanderson,
+Brandon` → Brandon Sanderson) and a single-word surname before given
+names is turned round (`Tolkien, J. R. R.`). Tags, NFO and
+`reader.txt` keep AB2's tag splitting (`;`, `&`, ` / `, commas only
+when every part has a space).
+
+**Covers.** A book has one poster, in this order:
+
+1. a cover an admin's match applied (in the artwork cache, variant
+   `match`), while its file is there;
+2. the folder's `cover.*` / `folder.*` image (variant `file`, served
+   from the media path, as AB2 built);
+3. **embedded cover art** from the first track in play order that
+   carries a picture, extracted into the artwork cache as
+   `poster-embedded.jpg` (`.png` for a PNG), variant `embedded`. Only
+   when the book is probed; an earlier extraction is kept until then.
+
+Cover bytes are sniffed (JPEG, PNG or WebP only), never trusted by
+their name, and written atomically.
+
+**Manual match (admins).** ABS matches by hand, and so does Parlour:
+
+- `GET /api/v1/admin/audiobooks/{id}/match/search?provider=&title=&author=`
+  searches one provider (`google`, the default, or `openlibrary`);
+  title and author default to the book's own. Results keep the
+  provider's order, each with a title `confidence` (0–1) for display.
+- `POST /api/v1/admin/audiobooks/{id}/match` with `{"provider",
+  "provider_id", "mode", "cover"}` applies one result. **The admin
+  chooses `mode`** (D30): `overwrite` (every value the provider has
+  replaces the book's) or `fill_gaps` (it fills only what the book
+  lacks). The API has no default for it. `cover` (default true) takes
+  the provider's cover: always with `overwrite`, and with `fill_gaps`
+  only when the book has none.
+- `DELETE /api/v1/admin/audiobooks/{id}/match` forgets the match.
+  The server's copy and the matched cover go, and the next scan merges
+  the book from its local sources again. Files written beside the
+  book stay, because Parlour never deletes beside the media.
+- In the web UI: a **Match** panel on `/book/[id]` for admins
+  (provider, title, author, results with covers; "fill gaps" is
+  preselected, "overwrite" one click away; "use the cover").
+
+**Library-wide quick match.** `POST /api/v1/admin/libraries/{id}/metadata`
+on an audiobooks library (the "Quick match" button on its card)
+queues a job. For every available book it searches **Google Books** by
+title and first author, takes the first result whose title is at
+least 0.5 similar to the book's (also against "title subtitle"),
+and **fills gaps only**, covers included (only where a book has
+none). One book's failure goes on the job and the rest carry on. The
+job waits 1 s between books, to stay inside the anonymous quota.
+*ABS's default, checked 2026-11-26 in its server source:* its quick
+match, both per book and library-wide, fills only empty fields and
+sets a cover only where there is none, unless a server-wide "prefer
+matched metadata" setting is on, and that setting is **off by
+default**. The library-wide match passes no override, so it follows
+that setting. D30's open question is answered by that, so quick match
+is fill-gaps.
+
+**Providers.**
+
+- **Google Books** (D30: ABS's default for books): the public volumes
+  API. **A key is optional.** Matching works without one on Google's
+  anonymous quota. With `PARLOUR_GOOGLE_BOOKS_API_KEY` set in the
+  server's environment (passed through by `docker-compose.yml`), it is
+  sent in Google's `X-Goog-Api-Key` header, never in a URL, and
+  provider errors are stripped of their URL, so the key can't reach a
+  job error, an API error or a log. No key appears in the repo, its
+  fixtures or its tests: the flow test makes one up at run time.
+- **Open Library:** `search.json` and its covers service. No key.
+  Requests carry Parlour's User-Agent
+  (`Parlour/<version> (+https://github.com/nuniesmith/parlour)`, no
+  contact address), as Open Library asks of applications.
+- **Audnexus: left out.** It was checked on 2026-11-26, as asked
+  on 2026-11-23. Its code is GPL-3.0, but neither its README nor its
+  API reference publishes any terms of use for the public instance.
+  Its data is assembled from Audible's API and product pages, and the
+  project states no permission to redistribute it. That doesn't
+  clearly permit a third-party server to depend on it, so Parlour
+  doesn't. The search API answers 400 for `provider=audnexus`.
+  Audible itself, and covers-only sources, are not built either:
+  D30 names Google Books and Open Library first.
+
+**Where a match is kept.** D30: in the server's own metadata area by
+default, beside the book only under the per-library opt-in.
+
+- **The server's copy.** A match leaves `book_sidecars`: a
+  `parlour-sidecar` document (kind `audiobook`) holding everything the
+  book then holds, with the provider, id and mode. It fills the
+  merge's `sidecar` slot, so a re-scan keeps the match, as ABS keeps
+  a match in the `metadata.json` it saves in its own metadata folder.
+- **Which wins in the slot.** The book's own `book.parlour.json`
+  wins when there is no server copy, or when the file has changed
+  since the match. Otherwise the server copy wins: an admin's match
+  beats the file until the file changes, as §13.6 of
+  `IMPORT-EXPORT.md` has it for video.
+- **Beside the book** only where the library has `write_sidecars` on
+  (XFER5's flag, reused, now accepted for audiobooks libraries; no
+  second flag). A match then writes `book.parlour.json` into the
+  book's folder, and a matched cover as `cover.jpg` beside it. D14's
+  sidecar rules hold:
+  - the writes are atomic;
+  - only into a folder that belongs to this book alone: never a
+    library root (so a single-file root book never gets one), never
+    a folder with another book's available audio under it;
+  - `cover.jpg` is written only for a JPEG, never over a file
+    Parlour didn't write, and never when the folder already has its
+    own cover image under another name.
+
+  Parlour writes **no `.nfo`** beside a book, because ABS's book NFO
+  is a different format and is read only. The file formats are in
+  §13.15 of `IMPORT-EXPORT.md`.
+
+**Tests.** Unit: the precedence lists, the field-by-field merge,
+folder author splitting, first-track tags, each local reader against
+fixtures (`crates/catalog/tests/fixtures/books/`), overwrite vs fill
+gaps, the sidecar slot, cover sniffing, quick match's pick, and both
+providers' JSON against recorded responses
+(`crates/metadata/tests/fixtures/books/`). Flow:
+`crates/server/tests/book_match_flow.rs` scans a library of
+ffmpeg-made books against a stub Google Books and Open Library (no
+network, no key). It covers:
+
+- the merged sources and embedded covers;
+- search, fill-gaps and overwrite;
+- the precedence API;
+- writing beside books under the opt-in;
+- quick match, and forgetting a match;
+- a re-scan after each step, which must change nothing;
+- a configured key travelling only in the header, never in a URL
+  or an error.
+
+#### Readings made in AB6 — for the owner's veto
+
+Each is a reading inside D30, not a new decision.
+
+1. **Quick match always fills gaps**, as ABS's does by default. There
+   is no equivalent of ABS's server-wide "prefer matched metadata"
+   switch. To overwrite, an admin matches the book by hand.
+2. **Quick match uses Google Books only** (ABS's default provider
+   for a book library). Open Library is offered per book.
+3. **Quick match visits every available book.** ABS has per-library
+   options to skip books that already have an ASIN or ISBN; their
+   defaults weren't confirmed, and they aren't built.
+4. **Quick match's bar is a title similarity of 0.5**; below it a
+   book is counted as "no match" and left alone.
+5. **The per-book API has no default mode.** The admin must send
+   `overwrite` or `fill_gaps`. The web panel preselects fill gaps,
+   the non-destructive choice.
+6. **A matched cover beats the folder's image** when the admin chose
+   overwrite with the cover; with fill gaps it applies only to a book
+   with no poster. This follows ABS, where an override cover replaces
+   the book's.
+7. **Embedded cover: the first track in play order that has a
+   picture**, not strictly the first track. Tags come strictly from
+   the first track (D30).
+8. **The `folder` source keeps AB2's author folder (the top level)**
+   and reads the title folder's name raw. Nearest-folder authors and
+   title-folder parsing (ASIN, narrator, sequence, year, subtitle)
+   are AB11 (follow-up items 3–4), and the series folder is AB7.
+9. **Tag author splitting stays as AB2 has it** (follow-up item 5
+   asked for this to be reviewed here); only folder names split ABS's
+   way. The precedence work didn't need a change.
+10. **A source left out of the precedence list is not read at all**,
+    and the admin may leave out or move `sidecar` too. An imported
+    library starts with the default order (see D40 below).
+11. **Matches and precedence changes are not in the Activity feed.**
+    A video fix-match isn't either; XFER5's audit covers only the
+    write-beside-media flag, which these reuse.
+12. **Forgetting a match leaves files written beside the book**,
+    because Parlour never deletes beside the media; delete them by
+    hand to drop them.
+
+**Open: D40 (DECISION NEEDED, `docs/DECISIONS.md`).** Should a book's
+match (`book_sidecars`) and a library's precedence list travel in the
+export bundle? Today neither does (format v1 is unchanged). On a new
+host a match survives only as a `book.parlour.json` written beside
+the book under the opt-in. **D36 (the audio tables) is also still
+open:** AB6 doesn't touch `book_progress` / `book_chapters`, and the
+bundle doesn't gain them.
+
 ### Later in Phase 10 (blocked on decisions)
 
 AB6 metadata providers and embedded covers (D30), AB7 series and
@@ -185,7 +435,8 @@ for codecs a client can't play (CL5).
 
 *2026-11-24:* all unblocked except AB9, which is **cancelled**
 (D27: no ABS import). AB6 follows D30, AB7 follows D28, AB8 follows
-D29 + D35; the details are in the list below.
+D29 + D35; the details are in the list below. *2026-11-26: AB6 is
+built (above).*
 
 ### Follow-up from D28–D35 (where AB1–AB5 differ from ABS)
 
@@ -219,11 +470,12 @@ not yet scheduled in a PR:
    `,` `;` `&` and `and`, and accepts `Last, First`. AB2's
    `split_people` splits on `;` `&` ` / ` and on commas only when
    every part has a space. Match ABS for folder names; keep tag
-   splitting under review in AB6.
+   splitting under review in AB6. *Folder names: done in AB6. Tag
+   splitting kept as AB2 has it (AB6 reading 9).*
 6. **Which track's tags (AB2/AB6).** ABS reads tags from the first
    track in disc/track order. AB2 takes each field from the first
    track that *has* it. Small difference; align in AB6 together
-   with the precedence list (D30).
+   with the precedence list (D30). *Done in AB6.*
 7. **Narrators (AB1).** ABS stores narrators as a plain list of
    names on the book; AB1 stores them as `people` with role
    `narrator`. The browsing behaviour (list and filter by narrator)
@@ -252,7 +504,8 @@ not yet scheduled in a PR:
     `metadata.json` read as an input; manual match; embedded covers
     when the folder has no image. Before building library-wide
     quick match, confirm ABS's default for "overwrite vs fill gaps"
-    (not confirmed on 2026-11-24).
+    (not confirmed on 2026-11-24). *Done in AB6. ABS's default was
+    confirmed as fill gaps on 2026-11-26.*
 13. **No play count (AB8).** ABS keeps no play count; listens are
     sessions. AB8 must not bump `play_count` for books.
 
