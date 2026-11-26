@@ -54,6 +54,13 @@ pub struct Config {
     pub url_lan: Option<String>,
     pub url_tailnet: Option<String>,
     pub url_public: Option<String>,
+    /// XFER7: the folder nightly backup bundles are written to
+    /// (`PARLOUR_BACKUP_DIR`, an absolute path). Unset or blank means
+    /// no nightly backups.
+    pub backup_dir: Option<PathBuf>,
+    /// XFER7: how many nightly bundles to keep (`PARLOUR_BACKUP_KEEP`,
+    /// 1–365, default 7).
+    pub backup_keep: u32,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -190,6 +197,7 @@ impl Config {
         let url_lan = access_url(vars, "PARLOUR_URL_LAN")?;
         let url_tailnet = access_url(vars, "PARLOUR_URL_TAILNET")?;
         let url_public = access_url(vars, "PARLOUR_URL_PUBLIC")?;
+        let (backup_dir, backup_keep) = backup_settings(vars)?;
 
         Ok(Self {
             bind_addr,
@@ -212,8 +220,49 @@ impl Config {
             url_lan,
             url_tailnet,
             url_public,
+            backup_dir,
+            backup_keep,
         })
     }
+}
+
+/// XFER7: `PARLOUR_BACKUP_DIR` (unset or blank = off; otherwise an
+/// absolute path, so where the bundles land never depends on the
+/// working directory) and `PARLOUR_BACKUP_KEEP` (1–365, default 7).
+fn backup_settings(vars: &HashMap<String, String>) -> Result<(Option<PathBuf>, u32), ConfigError> {
+    let dir = match vars
+        .get("PARLOUR_BACKUP_DIR")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        None => None,
+        Some(raw) if PathBuf::from(raw).is_absolute() => Some(PathBuf::from(raw)),
+        Some(raw) => {
+            return Err(ConfigError::InvalidVar {
+                name: "PARLOUR_BACKUP_DIR",
+                value: raw.to_string(),
+                reason: "expected an absolute path (inside the container, e.g. /backups)",
+            })
+        }
+    };
+    let keep = match vars
+        .get("PARLOUR_BACKUP_KEEP")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        None => crate::backup::DEFAULT_KEEP,
+        Some(raw) => match raw.parse::<u32>() {
+            Ok(n) if (1..=crate::backup::MAX_KEEP).contains(&n) => n,
+            _ => {
+                return Err(ConfigError::InvalidVar {
+                    name: "PARLOUR_BACKUP_KEEP",
+                    value: raw.to_string(),
+                    reason: "expected a whole number of nightly bundles from 1 to 365",
+                })
+            }
+        },
+    };
+    Ok((dir, keep))
 }
 
 /// An optional access URL for the Dashboard. Unset or blank is
@@ -268,6 +317,33 @@ mod tests {
         assert_eq!(cfg.url_lan, None);
         assert_eq!(cfg.url_tailnet, None);
         assert_eq!(cfg.url_public, None);
+        assert_eq!(cfg.backup_dir, None, "no backups unless a folder is set");
+        assert_eq!(cfg.backup_keep, 7);
+    }
+
+    #[test]
+    fn backup_folder_and_keep_are_read_and_checked() {
+        let db = ("PARLOUR_DATABASE_URL", "postgres://u:p@localhost/parlour");
+        let cfg = Config::from_vars(&vars(&[
+            db,
+            ("PARLOUR_BACKUP_DIR", " /backups "),
+            ("PARLOUR_BACKUP_KEEP", "14"),
+        ]))
+        .unwrap();
+        assert_eq!(cfg.backup_dir, Some(PathBuf::from("/backups")));
+        assert_eq!(cfg.backup_keep, 14);
+        let blank = Config::from_vars(&vars(&[db, ("PARLOUR_BACKUP_DIR", "  ")])).unwrap();
+        assert_eq!(blank.backup_dir, None);
+        for (name, value) in [
+            ("PARLOUR_BACKUP_DIR", "backups"),
+            ("PARLOUR_BACKUP_KEEP", "0"),
+            ("PARLOUR_BACKUP_KEEP", "366"),
+            ("PARLOUR_BACKUP_KEEP", "seven"),
+            ("PARLOUR_BACKUP_KEEP", "-1"),
+        ] {
+            let err = Config::from_vars(&vars(&[db, (name, value)])).unwrap_err();
+            assert!(err.to_string().contains(name), "{name}={value}: {err}");
+        }
     }
 
     #[test]

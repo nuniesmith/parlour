@@ -259,6 +259,7 @@ async fn activity_flow() {
         pool.clone(),
         parlour_server::metadata::MetadataSettings::default(),
         parlour_catalog::EmbySettings::default(),
+        None,
     );
     let mut finished = None;
     for _ in 0..60 {

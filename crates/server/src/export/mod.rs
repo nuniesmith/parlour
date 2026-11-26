@@ -843,12 +843,24 @@ struct ExportSummary {
     duplicate_images_left_out: usize,
 }
 
+/// Where an export's zip goes.
+#[derive(Debug, Clone, Copy)]
+enum Destination<'a> {
+    /// A manual export: `<export dir>/<job id>.zip`, downloaded from
+    /// the Jobs page (the export dir is created when missing).
+    Cache(&'a Path),
+    /// A nightly backup (XFER7): `<backup dir>/parlour-backup-<UTC
+    /// time>.zip`. The folder is never created here; the caller has
+    /// checked it.
+    Backup(&'a Path),
+}
+
 /// One whole export: snapshot, artwork checks, documents, zip.
 async fn export(
     pool: &parlour_db::PgPool,
     job_id: Uuid,
     options: ExportOptions,
-    export_dir: &Path,
+    destination: Destination<'_>,
 ) -> Result<ExportSummary, String> {
     let mut snapshot = read_snapshot(pool)
         .await
@@ -919,12 +931,23 @@ async fn export(
     let named = bundle.artwork_files();
     files.retain(|name, _| named.contains(name.as_str()));
 
-    tokio::fs::create_dir_all(export_dir)
-        .await
-        .map_err(|e| format!("{}: {e}", export_dir.display()))?;
-    let dest = bundle_path(export_dir, job_id);
+    let (dest, file_name) = match destination {
+        Destination::Cache(export_dir) => {
+            tokio::fs::create_dir_all(export_dir)
+                .await
+                .map_err(|e| format!("{}: {e}", export_dir.display()))?;
+            (
+                bundle_path(export_dir, job_id),
+                download_name(bundle.manifest.exported_at),
+            )
+        }
+        Destination::Backup(dir) => {
+            let name = crate::backup::file_name(bundle.manifest.exported_at);
+            (dir.join(&name), name)
+        }
+    };
     let summary = ExportSummary {
-        file_name: download_name(bundle.manifest.exported_at),
+        file_name,
         bytes: 0,
         hashes_included: bundle.manifest.hashes_included,
         artwork_included: bundle.manifest.artwork_included,
@@ -949,20 +972,29 @@ async fn export(
         artwork_left_out: left_out,
         duplicate_images_left_out: duplicates.len(),
     };
+    let shown = dest.display().to_string();
     let bytes = tokio::task::spawn_blocking(move || write_bundle(&dest, &bundle, &files))
         .await
-        .map_err(|e| e.to_string())??;
+        .map_err(|e| e.to_string())?
+        .map_err(|e| format!("writing {shown}: {e}"))?;
     Ok(ExportSummary { bytes, ..summary })
 }
 
 /// Run one claimed `export_bundle` job: write the bundle, record the
 /// summary, and note in the Activity feed who exported what (the
-/// feed says whether hashes went into the file).
+/// feed says whether hashes went into the file). A job whose payload
+/// says `"trigger": "nightly"` is a backup (XFER7): see
+/// [`run_backup_job`].
 pub async fn run_export_job_claimed(
     pool: parlour_db::PgPool,
     job: parlour_jobs::Job,
     export_dir: &Path,
+    backup: Option<&crate::backup::BackupSettings>,
 ) {
+    if job.payload["trigger"].as_str() == Some(crate::backup::NIGHTLY) {
+        run_backup_job(&pool, job, backup).await;
+        return;
+    }
     let options = ExportOptions::from_payload(&job.payload);
     let requested_by = job.payload["requested_by"]["user_id"]
         .as_str()
@@ -975,7 +1007,7 @@ pub async fn run_export_job_claimed(
         Some(user_id) => crate::activity::Entry::by_user(kind, user_id, &requester, summary),
         None => crate::activity::Entry::system(kind, summary),
     };
-    match export(&pool, job.id, options, export_dir).await {
+    match export(&pool, job.id, options, Destination::Cache(export_dir)).await {
         Ok(summary) => {
             tracing::info!(job_id = %job.id, bytes = summary.bytes,
                 hashes = summary.hashes_included, artwork = summary.artwork_included,
@@ -1013,18 +1045,155 @@ pub async fn run_export_job_claimed(
     }
 }
 
+/// What a nightly backup adds to the export's summary on its job.
+#[derive(Debug, Clone, Serialize)]
+struct BackupSummary {
+    #[serde(flatten)]
+    export: ExportSummary,
+    trigger: &'static str,
+    /// The backup folder, as configured.
+    folder: String,
+    /// `PARLOUR_BACKUP_KEEP` when it ran.
+    keep: u32,
+    /// Older nightly bundles (and stale `.part` files) retention
+    /// deleted after this one was written.
+    removed_by_retention: Vec<String>,
+}
+
+/// Run a claimed nightly backup (XFER7, spec §15): the same export as
+/// a manual one, with hashes and artwork off whatever the payload
+/// says, written into the backup folder as
+/// `parlour-backup-<UTC time>.zip`; then retention. A missing or
+/// unwritable folder fails the job with its path; the next night
+/// queues a new one. Nothing is deleted unless tonight's bundle is in
+/// place.
+async fn run_backup_job(
+    pool: &parlour_db::PgPool,
+    job: parlour_jobs::Job,
+    backup: Option<&crate::backup::BackupSettings>,
+) {
+    let job_id = job.id;
+    let failed = |message: String| async move {
+        tracing::warn!(%job_id, error = %message, "nightly backup failed");
+        let _ = parlour_jobs::fail(pool, job_id, &message).await;
+        crate::activity::record(
+            pool,
+            crate::activity::Entry::system("export.failed", "Nightly backup failed").detail(
+                serde_json::json!({ "job_id": job_id, "trigger": crate::backup::NIGHTLY,
+                                    "error": message }),
+            ),
+        )
+        .await;
+    };
+    let Some(settings) = backup else {
+        failed("nightly backups are off: PARLOUR_BACKUP_DIR is not set".to_string()).await;
+        return;
+    };
+    let dir = settings.dir.clone();
+    let checked = {
+        let dir = dir.clone();
+        tokio::task::spawn_blocking(move || crate::backup::check_folder(&dir))
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|r| r)
+    };
+    if let Err(message) = checked {
+        failed(message).await;
+        return;
+    }
+    // D14: hashes leave the server only behind an admin's explicit
+    // confirm for that one export; a standing nightly job has none.
+    // Artwork stays off: it can make every bundle many times larger.
+    let options = ExportOptions::default();
+    let summary = match export(pool, job.id, options, Destination::Backup(&dir)).await {
+        Ok(summary) => summary,
+        Err(message) => {
+            failed(message).await;
+            return;
+        }
+    };
+    let retention = {
+        let dir = dir.clone();
+        let keep = settings.keep;
+        tokio::task::spawn_blocking(move || crate::backup::apply_retention(&dir, keep))
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|r| r)
+    };
+    let removed = match retention {
+        Ok(done) => {
+            for (name, reason) in &done.errors {
+                let _ = parlour_jobs::add_error(
+                    pool,
+                    job.id,
+                    Some(&dir.join(name).display().to_string()),
+                    &format!("retention couldn't delete this old backup: {reason}"),
+                )
+                .await;
+            }
+            done.removed
+        }
+        Err(message) => {
+            let _ = parlour_jobs::add_error(
+                pool,
+                job.id,
+                Some(&dir.display().to_string()),
+                &format!("retention didn't run: {message}"),
+            )
+            .await;
+            Vec::new()
+        }
+    };
+    crate::backup::mark_removed(pool, &removed).await;
+    tracing::info!(job_id = %job.id, bytes = summary.bytes, file = %summary.file_name,
+        removed = removed.len(), "nightly backup written");
+    let detail = serde_json::json!({
+        "job_id": job.id,
+        "trigger": crate::backup::NIGHTLY,
+        "file_name": summary.file_name,
+        "bytes": summary.bytes,
+        "removed_by_retention": removed,
+    });
+    let result = BackupSummary {
+        export: summary,
+        trigger: crate::backup::NIGHTLY,
+        folder: dir.display().to_string(),
+        keep: settings.keep,
+        removed_by_retention: removed,
+    };
+    let _ = parlour_jobs::set_result(
+        pool,
+        job.id,
+        serde_json::to_value(&result).unwrap_or(serde_json::Value::Null),
+    )
+    .await;
+    let _ = parlour_jobs::complete(pool, job.id).await;
+    crate::activity::record(
+        pool,
+        crate::activity::Entry::system("export.completed", "Nightly backup written").detail(detail),
+    )
+    .await;
+}
+
 /// Where export bundles are kept: `<cache dir>/exports`.
 pub fn export_dir(cache_dir: &Path) -> PathBuf {
     cache_dir.join("exports")
 }
 
 /// The worker for export jobs left queued (the request that queued
-/// one normally runs it at once). Called once from `main`.
-pub fn spawn_worker(pool: parlour_db::PgPool, export_dir: PathBuf) {
+/// one normally runs it at once), and for the nightly backups the
+/// nightly tick queues (XFER7). Called once from `main`.
+pub fn spawn_worker(
+    pool: parlour_db::PgPool,
+    export_dir: PathBuf,
+    backup: Option<crate::backup::BackupSettings>,
+) {
     tokio::spawn(async move {
         loop {
             match parlour_jobs::claim_next(&pool, parlour_jobs::JobKind::ExportBundle).await {
-                Ok(Some(job)) => run_export_job_claimed(pool.clone(), job, &export_dir).await,
+                Ok(Some(job)) => {
+                    run_export_job_claimed(pool.clone(), job, &export_dir, backup.as_ref()).await
+                }
                 Ok(None) => tokio::time::sleep(std::time::Duration::from_secs(3)).await,
                 Err(e) => {
                     tracing::warn!(error = %e, "export job claim failed");
@@ -1125,13 +1294,14 @@ async fn start_export(
     // process dies before this task claims it.
     let pool = app.pool.clone();
     let export_dir = app.export_dir.clone();
+    let backup = app.backup.clone();
     tokio::spawn(async move {
         if parlour_jobs::claim_by_id(&pool, job_id)
             .await
             .unwrap_or(false)
         {
             if let Ok(Some(job)) = parlour_jobs::get(&pool, job_id).await {
-                run_export_job_claimed(pool, job, &export_dir).await;
+                run_export_job_claimed(pool, job, &export_dir, backup.as_ref()).await;
             }
         }
     });
@@ -1160,6 +1330,21 @@ async fn finished_export(app: &AppState, id: &str) -> Result<parlour_jobs::Job, 
     }
 }
 
+/// A nightly backup job's file name (XFER7); `None` for a manual
+/// export, whose bundle lives in the export dir under the job's id.
+fn nightly_file_name(job: &parlour_jobs::Job) -> Option<String> {
+    if job.payload["trigger"].as_str() != Some(crate::backup::NIGHTLY) {
+        return None;
+    }
+    Some(
+        job.result
+            .as_ref()
+            .and_then(|r| r["file_name"].as_str())
+            .unwrap_or_default()
+            .to_string(),
+    )
+}
+
 async fn download(
     State(app): State<AppState>,
     _admin: AdminUser,
@@ -1167,9 +1352,18 @@ async fn download(
 ) -> Result<Response, AppError> {
     let job = finished_export(&app, &id).await?;
     let gone = || AppError::NotFound("that bundle has been deleted from the server".into());
-    let file = tokio::fs::File::open(bundle_path(&app.export_dir, job.id))
-        .await
-        .map_err(|_| gone())?;
+    let path = match nightly_file_name(&job) {
+        // XFER7: a nightly bundle is read from the backup folder as
+        // configured now, by a name that must look like a backup's.
+        Some(name) => app
+            .backup
+            .as_ref()
+            .filter(|_| crate::backup::is_backup_name(&name))
+            .map(|b| b.dir.join(&name))
+            .ok_or_else(gone)?,
+        None => bundle_path(&app.export_dir, job.id),
+    };
+    let file = tokio::fs::File::open(path).await.map_err(|_| gone())?;
     let size = file
         .metadata()
         .await
@@ -1205,6 +1399,11 @@ async fn delete_bundle(
     AxumPath(id): AxumPath<String>,
 ) -> Result<StatusCode, AppError> {
     let job = finished_export(&app, &id).await?;
+    if nightly_file_name(&job).is_some() {
+        return Err(AppError::Conflict(
+            "nightly backups are removed by retention (PARLOUR_BACKUP_KEEP), not from here".into(),
+        ));
+    }
     match tokio::fs::remove_file(bundle_path(&app.export_dir, job.id)).await {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {

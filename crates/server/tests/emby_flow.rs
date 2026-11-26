@@ -212,6 +212,7 @@ async fn emby_flow() {
         pool.clone(),
         parlour_server::metadata::MetadataSettings::default(),
         emby,
+        None,
     );
 
     let client = reqwest::Client::new();

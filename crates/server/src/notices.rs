@@ -77,10 +77,19 @@ pub struct NoticeSettings {
 impl NoticeSettings {
     pub fn from_config(config: &crate::config::Config) -> Self {
         Self {
-            write_dirs: vec![
+            write_dirs: [
                 ("cache".to_string(), config.cache_dir.clone()),
                 ("artwork".to_string(), config.artwork_dir.clone()),
-            ],
+            ]
+            .into_iter()
+            // XFER7: the nightly backup folder, when one is set.
+            .chain(
+                config
+                    .backup_dir
+                    .clone()
+                    .map(|dir| ("backups".to_string(), dir)),
+            )
+            .collect(),
         }
     }
 }
@@ -139,9 +148,15 @@ fn human_size(bytes: u64) -> String {
     }
 }
 
-/// How a failed job reads in a sentence.
-fn failed_job_summary(kind: &str, library: Option<&str>) -> String {
+/// How a failed job reads in a sentence. `trigger` is the payload's
+/// (`nightly` marks a nightly backup, XFER7).
+fn failed_job_summary(kind: &str, library: Option<&str>, trigger: Option<&str>) -> String {
     match (kind, library) {
+        ("export_bundle", _) if trigger == Some(crate::backup::NIGHTLY) => {
+            "Nightly backup failed".to_string()
+        }
+        ("export_bundle", _) => "Server export failed".to_string(),
+        ("import_bundle", _) => "Server import failed".to_string(),
         ("scan_library", Some(name)) => format!("Scan of {name} failed"),
         ("scan_library", None) => "A library scan failed".to_string(),
         ("fetch_metadata", Some(name)) => format!("Metadata fetch for {name} failed"),
@@ -249,8 +264,10 @@ pub async fn reconcile_with(
     disks: &[DiskReading],
 ) -> Result<(), sqlx::Error> {
     // 1. Failed jobs that have no notice yet.
-    let failed: Vec<(Uuid, String, Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT j.id, j.kind, l.name, j.errors -> -1 ->> 'message'
+    // (id, kind, library, last error, payload trigger)
+    type FailedJob = (Uuid, String, Option<String>, Option<String>, Option<String>);
+    let failed: Vec<FailedJob> = sqlx::query_as(
+        "SELECT j.id, j.kind, l.name, j.errors -> -1 ->> 'message', j.payload ->> 'trigger'
          FROM jobs j
          LEFT JOIN libraries l ON l.id = j.library_id
          WHERE j.status = 'failed'
@@ -261,13 +278,13 @@ pub async fn reconcile_with(
     .bind(JOB_FAILURE_WINDOW_DAYS)
     .fetch_all(pool)
     .await?;
-    for (job_id, kind, library, message) in failed {
+    for (job_id, kind, library, message, trigger) in failed {
         raise(
             pool,
             &format!("job_failed:{job_id}"),
             "job_failed",
             Severity::Error,
-            &failed_job_summary(&kind, library.as_deref()),
+            &failed_job_summary(&kind, library.as_deref(), trigger.as_deref()),
             serde_json::json!({ "job_id": job_id, "job_kind": kind, "error": message }),
         )
         .await?;
@@ -494,20 +511,32 @@ mod tests {
     #[test]
     fn failed_jobs_read_as_sentences() {
         assert_eq!(
-            failed_job_summary("scan_library", Some("Movies")),
+            failed_job_summary("scan_library", Some("Movies"), None),
             "Scan of Movies failed"
         );
         assert_eq!(
-            failed_job_summary("import_emby", None),
+            failed_job_summary("import_emby", None, None),
             "Emby import failed"
         );
         assert_eq!(
-            failed_job_summary("detect_segments", Some("Shows")),
+            failed_job_summary("detect_segments", Some("Shows"), None),
             "Segment detection for Shows failed"
         );
         assert_eq!(
-            failed_job_summary("reconcile_requests", None),
+            failed_job_summary("reconcile_requests", None, None),
             "A reconcile requests job failed"
+        );
+        assert_eq!(
+            failed_job_summary("export_bundle", None, Some("nightly")),
+            "Nightly backup failed"
+        );
+        assert_eq!(
+            failed_job_summary("export_bundle", None, Some("manual")),
+            "Server export failed"
+        );
+        assert_eq!(
+            failed_job_summary("import_bundle", None, None),
+            "Server import failed"
         );
     }
 

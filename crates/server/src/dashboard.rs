@@ -29,6 +29,10 @@ pub struct ServerSettings {
     pub url_lan: Option<String>,
     pub url_tailnet: Option<String>,
     pub url_public: Option<String>,
+    /// XFER7: the nightly backup folder (`PARLOUR_BACKUP_DIR`; `None`
+    /// = no backups) and how many bundles are kept.
+    pub backup_dir: Option<String>,
+    pub backup_keep: u32,
 }
 
 impl Default for ServerSettings {
@@ -39,6 +43,8 @@ impl Default for ServerSettings {
             url_lan: None,
             url_tailnet: None,
             url_public: None,
+            backup_dir: None,
+            backup_keep: crate::backup::DEFAULT_KEEP,
         }
     }
 }
@@ -51,6 +57,8 @@ impl ServerSettings {
             url_lan: config.url_lan.clone(),
             url_tailnet: config.url_tailnet.clone(),
             url_public: config.url_public.clone(),
+            backup_dir: config.backup_dir.as_ref().map(|d| d.display().to_string()),
+            backup_keep: config.backup_keep,
         }
     }
 }
@@ -60,6 +68,15 @@ struct AccessUrls {
     lan: Option<String>,
     tailnet: Option<String>,
     public: Option<String>,
+}
+
+/// XFER7: nightly backups as configured (read-only, like the rest
+/// of the General page).
+#[derive(Debug, Serialize)]
+struct Backups {
+    /// `null` when nightly backups are off.
+    folder: Option<String>,
+    keep: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -86,6 +103,7 @@ struct ServerInfo {
     /// "ok" or "unreachable" — the same real query `/healthz` runs.
     db: &'static str,
     urls: AccessUrls,
+    backups: Backups,
     /// `null` when the database did not answer.
     jobs: Option<JobSnapshot>,
     actions: Actions,
@@ -137,6 +155,10 @@ async fn server_info(
             lan: s.url_lan.clone(),
             tailnet: s.url_tailnet.clone(),
             public: s.url_public.clone(),
+        },
+        backups: Backups {
+            folder: s.backup_dir.clone(),
+            keep: s.backup_keep,
         },
         jobs,
         actions: Actions {

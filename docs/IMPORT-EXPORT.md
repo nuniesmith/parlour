@@ -10,8 +10,10 @@ documents and their fields, and the rules a valid bundle follows.
 with fixtures and tests. Export exists too (XFER2, §11): an admin
 endpoint and background job write a bundle, and the Jobs page
 downloads it. Import exists as an API and a job (XFER3, §12):
-upload, dry-run report, apply. The admin page that drives both is
-XFER8, and nightly backups are XFER7. The per-item sidecars stored
+upload, dry-run report, apply. Nightly backups (XFER7, §15) write the
+same bundle to a folder the admin sets, with retention; restoring one
+is §12's import. The admin page that drives export and import is
+XFER8. The per-item sidecars stored
 with the media files are a separate format, `parlour-sidecar` v1,
 specified in §13 (XFER4). The per-library write opt-in, the mount
 step and the poster / backdrop copy are XFER5 (§13.10–§13.12). NFO
@@ -582,8 +584,8 @@ notes where they don't say:
    episode still as `pending:still:original`, next to the already
    downloaded one. That is a catalog bug, left for its own task.
 2. **Bundles stay on the server until deleted.** Nothing removes
-   them automatically; XFER7's retention will cover the nightly
-   ones. A bundle holding hashes is as sensitive as the logins, so
+   them automatically. XFER7's retention (§15) covers only the
+   nightly bundles in the backup folder, never these. A bundle holding hashes is as sensitive as the logins, so
    its job row says so, and Delete is one click.
 3. **The Jobs page offers no hash option.** The API flag is the
    confirm. The warning in §6 belongs to XFER8's page.
@@ -1584,6 +1586,18 @@ where they don't spell the detail out.
   `sidecar/sync.rs`'s `mark_overridden`. Migration
   `20261127000000_nfo.sql` (`item_nfos`, `sidecar_nfos`). Unit tests
   are in `sidecar/tests.rs` (run in CI).
+- **XFER7:** `crates/server/src/backup.rs` — the settings, the file
+  name, retention, the folder check and the nightly check
+  (`enqueue_nightly`, called from `catalog.rs`'s `nightly_tick`);
+  `crates/server/src/export/mod.rs` — `run_backup_job` (the same
+  `export` as a manual one, written to the backup folder), the
+  download from the backup folder and the refused delete;
+  `config.rs` — `PARLOUR_BACKUP_DIR` / `PARLOUR_BACKUP_KEEP`;
+  `notices.rs` — "Nightly backup failed" and the folder's free-space
+  check; `dashboard.rs` + `web/src/routes/admin/general/` — the
+  setting shown on Server → General; `web/src/routes/admin/jobs/` —
+  the "Nightly backup" row. Unit tests in `backup.rs` and `config.rs`
+  (run in CI).
 - **Fixtures:** `crates/server/tests/fixtures/bundle-v1/`;
   `crates/catalog/tests/fixtures/sidecar-v1/`;
   `crates/catalog/tests/fixtures/nfo/`.
@@ -1642,3 +1656,188 @@ where they don't spell the detail out.
     the next scan doesn't re-read Parlour's own NFOs, and that another
     program's NFO, or one edited by hand, is left alone and listed.
     With the opt-in off, nothing is written.
+  - `tests/backup_flow.rs` (XFER7): with no folder set, nothing is
+    queued or written. A night writes `parlour-backup-<time>.zip`
+    (format v1, no hashes, no artwork), keeps the newest `keep`,
+    deletes the older ones and a stale `.part`, and leaves every
+    other file alone; the old job stops offering its download, the
+    new one downloads from the folder and refuses Delete. A missing
+    folder and an unwritable one each fail the job with the path,
+    create and delete nothing, raise a notice, and are retried the
+    next night (not the same day). The bundle the nightly job wrote
+    imports through §12 into a fresh database with the same users,
+    profiles and watch history.
+
+## 15. Nightly backups (XFER7)
+
+Built 2026-11-25 to D14 and D25, with format v1 as it stands (the
+§9 audio proposal, D36, is still open, so audiobook progress is not
+in these bundles either). Code: `crates/server/src/backup.rs`, and
+`run_backup_job` in `crates/server/src/export/mod.rs`. **Restore is
+§12's import:** upload the nightly bundle, read the dry run, apply.
+
+**What runs.** There is no second export. The nightly tick that
+already queues the C7 scans and the Activity purge (after 07:30 UTC,
+checked every 15 minutes) also queues one `export_bundle` job a day,
+its payload `{"trigger": "nightly", "include_hashes": false,
+"include_artwork": false}`. The export worker (§11) runs it through
+the same `export` a manual export uses: one `REPEATABLE READ`
+snapshot, the same documents, the same order, the same checks. The
+only differences are where the zip goes, what it is called, and the
+retention step after it.
+
+**The setting.** Like every other setting, it is environment-only
+(there is no settings table, §6), so it is set in the server's
+`.env` and takes effect at the next start:
+
+| variable | meaning | when unset |
+|---|---|---|
+| `PARLOUR_BACKUP_DIR` | the folder nightly bundles are written to, an **absolute** path as the server sees it (in the container, e.g. `/backups`) | **no nightly backups.** Nothing is queued and nothing is written anywhere. Parlour never picks a folder on its own |
+| `PARLOUR_BACKUP_KEEP` | how many nightly bundles to keep, 1–365 | 7 |
+
+A relative path, or a keep outside 1–365, stops the server at
+startup with a message naming the variable, as a bad access URL
+does. Server → General shows both values read-only ("Off — no
+nightly backups" when the folder is unset). In the compose stack the
+folder is a bind mount, writable by the container's user, for
+example:
+
+```yaml
+    environment:
+      PARLOUR_BACKUP_DIR: /backups
+      PARLOUR_BACKUP_KEEP: "14"
+    volumes:
+      - /srv/backups/parlour:/backups
+```
+
+`docker-compose.yml` passes both variables through, empty by
+default, so the stack behaves as before until `.env` sets them.
+
+**The file.** `parlour-backup-YYYYMMDD-HHMMSS.zip`, the bundle's own
+`exported_at` in UTC (the same instant as its manifest), for example
+`parlour-backup-20261126-073012.zip`. The fixed-width stamp sorts in
+time order, and `parlour-backup-` tells a nightly bundle apart from a
+manual download (`parlour-export-…`). The zip is written as
+`<name>.part` in the same folder and renamed into place once complete
+and synced, so the folder never holds half a bundle under a real
+name.
+
+**Retention: by count.** After tonight's bundle is in place, the job
+keeps the newest `PARLOUR_BACKUP_KEEP` nightly bundles (tonight's
+included), by the stamp in the name, and deletes the rest. It also
+deletes a leftover `parlour-backup-….zip.part` from a run that died
+mid-write (only one export job runs at a time, so no other run's
+part can be live). It only ever touches plain files whose names match
+`parlour-backup-` + 8 digits + `-` + 6 digits + `.zip` (or that plus
+`.part`) exactly; manual downloads, the admin's own files and folders
+are never touched. Count, not age, because an age rule would delete
+every bundle after a long outage, while a count always leaves the
+last good ones. Retention runs **only after a successful write**, so a
+failed night never costs a good bundle. A bundle that can't be
+deleted is listed on the job's errors; the job still succeeds,
+because tonight's backup is good. The job result lists what
+retention removed (`removed_by_retention`), and the jobs that wrote
+those bundles are marked `deleted`, so the Jobs page stops offering
+their download.
+
+**A bad folder.** Before any export work, the job checks the folder:
+
+- **missing** — it fails with "the backup folder `<path>` doesn't
+  exist (Parlour doesn't create it: is its disk mounted?)". Parlour
+  never creates the folder: a missing folder usually means a backup
+  disk that isn't mounted, and creating it would fill the disk
+  underneath the mount point;
+- **not a folder**, or **not writable** by the server (permissions,
+  a read-only mount; asked with `access(2)` as XFER5's folders are) —
+  it fails with the path and the reason;
+- **a write that fails part-way** (a full disk, say) — it fails with
+  the path; the `.part` is removed and nothing older is deleted.
+
+**Retry.** The nightly check queues a job only if no nightly job was
+queued since the start of the UTC day, failed or not. So a failed
+night is not retried every 15 minutes or at a restart that day; the
+next night queues a new job, which succeeds once the folder is back.
+No run is lost silently.
+
+**Where an admin sees it.**
+
+- **Jobs page:** the row is "Nightly backup". A finished one offers
+  **Download** (served from the backup folder as configured now) and
+  says where it was saved; there is no **Delete** (the API refuses
+  it with 409), because retention owns these files. A removed one
+  says "Removed by retention". A failed one shows its error with the
+  path.
+- **Dashboard notices (UI5):** a failed nightly backup raises an
+  error notice, "Nightly backup failed", with the message, as any
+  failed job does. The backup folder also joins
+  the D16 free-space check (warning under 5 GB, error under 1 GB),
+  labelled `backups`.
+- **Activity feed:** `export.completed` "Nightly backup written" or
+  `export.failed` "Nightly backup failed", recorded as the system's
+  (no user), under the existing "Exports" filter. The detail has the
+  file name, size and what retention removed, or the error.
+
+**No hashes, no artwork.** The nightly job always exports with both
+off, whatever its payload says:
+
+- **Hashes:** D14 lets password and PIN hashes leave the server only
+  behind an admin's explicit confirm with a warning, and §6 reads
+  that confirm as per export ("for that one export"). A standing
+  nightly job has no confirm to give, so its bundles carry none; the
+  same is true of a bundle sitting unattended in a folder every
+  night. **The consequence on restore:** every user arrives locked
+  (D37) and needs an admin's **Set password**, PIN'd profiles get a
+  locked PIN, and the new install's bootstrap admin, adopted under
+  D38, keeps its bootstrap password. A nightly backup with hashes
+  would need a new decision from the owner; it isn't built.
+- **Artwork:** off, as it is by default for manual exports (§11): it
+  can make every bundle many times larger. Images travel as provider
+  references and are downloaded again after a restore.
+
+**Is the bundle a whole backup? No — say so plainly.** A nightly
+bundle restores users, profiles and their preferences and recent
+searches, libraries and grants, the catalog's metadata and segments,
+watch history and the Activity feed (§7). It does **not** restore,
+on its own:
+
+- **logins:** no password or PIN hashes (above), so everyone needs a
+  new password from an admin;
+- **audiobook progress** (`book_progress`): format v1 doesn't carry
+  it until the owner answers §9 (D36);
+- what §8 leaves behind on purpose: sessions, invites, job history,
+  notices, file rows (a scan rebuilds them), fingerprints, each
+  library's `write_sidecars` opt-in and the sidecar ledgers;
+- the server's `.env` (secrets, settings) and the artwork cache.
+
+A database dump covers the first two. The TODO's cross-cutting item
+puts a Postgres dump into sullivan's existing backup run on the day
+Parlour holds real watch state, with the host's backup script
+updated in the same change. That is production work and is **not**
+part of XFER7; nothing here touches a host backup script. Until it
+exists, the nightly bundle is the portable, format-checked copy of
+everyone's state, and it restores everything above except logins
+and audiobook progress.
+
+**Readings made in XFER7 — for the owner's veto.** None is a new
+decision. Each is how this build read D14, D25, the TODO or these
+notes where they don't spell it out:
+
+1. **The setting is environment-only**, like every other setting
+   (§6: there is no settings table), and **unset means off**: no
+   folder is ever picked on the admin's behalf.
+2. **The folder must be absolute** and is **never created**: missing
+   means "not mounted", and the job fails rather than writing under
+   the mount point.
+3. **Retention is by count, default 7**, counted over nightly
+   bundles only, applied only after a successful write.
+4. **Nightly bundles carry no hashes** (D14's confirm is per export)
+   and **no artwork** (§11's default). Restoring one locks every user
+   until an admin sets a password (D37).
+5. **One try per UTC day.** A failed night is retried the next night,
+   not within the same day; the failure is on the Jobs page, the
+   Dashboard notices and the Activity feed.
+6. **The schedule is the existing nightly tick** (after 07:30 UTC),
+   not a setting of its own.
+7. **Nightly bundles can be downloaded from the Jobs page but not
+   deleted there**; retention owns them. Manual exports keep their
+   Download / Delete.

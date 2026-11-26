@@ -451,6 +451,7 @@ pub fn spawn_background(
     pool: parlour_db::PgPool,
     metadata: crate::metadata::MetadataSettings,
     emby: parlour_catalog::EmbySettings,
+    backup: Option<crate::backup::BackupSettings>,
 ) {
     // Worker: claim queued jobs (covers restarts + watcher and
     // nightly enqueues) every few seconds.
@@ -523,12 +524,13 @@ pub fn spawn_background(
     }
 
     // Nightly safety net (C7): after 07:30 UTC (02:30/03:30 in
-    // Toronto), queue one full scan per library per day.
+    // Toronto), queue one full scan per library per day — and, when
+    // a backup folder is set, one nightly backup (XFER7).
     {
         let pool = pool.clone();
         tokio::spawn(async move {
             loop {
-                nightly_tick(&pool).await;
+                nightly_tick(&pool, backup.as_ref()).await;
                 tokio::time::sleep(Duration::from_secs(900)).await;
             }
         });
@@ -698,7 +700,7 @@ fn is_change(kind: &notify::EventKind) -> bool {
     }
 }
 
-async fn nightly_tick(pool: &parlour_db::PgPool) {
+async fn nightly_tick(pool: &parlour_db::PgPool, backup: Option<&crate::backup::BackupSettings>) {
     let now = Utc::now();
     if now.hour() < 7 || (now.hour() == 7 && now.minute() < 30) {
         return;
@@ -746,6 +748,11 @@ async fn nightly_tick(pool: &parlour_db::PgPool) {
             .await;
         }
         Err(e) => tracing::warn!(error = %e, "nightly activity purge check failed"),
+    }
+    // XFER7: one backup bundle per day into PARLOUR_BACKUP_DIR (none
+    // when it is unset). The export worker runs it.
+    if let Err(e) = crate::backup::enqueue_nightly(pool, backup, now).await {
+        tracing::warn!(error = %e, "nightly backup check failed");
     }
 }
 

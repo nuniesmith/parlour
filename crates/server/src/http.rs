@@ -48,6 +48,9 @@ pub struct AppState {
     /// XFER3: where uploaded bundles wait for their dry run and apply
     /// (`<PARLOUR_CACHE_DIR>/imports`; `main` sets it from `Config`).
     pub import_dir: PathBuf,
+    /// XFER7: the nightly backup folder and retention, `None` when
+    /// `PARLOUR_BACKUP_DIR` is unset (`main` sets it from `Config`).
+    pub backup: Option<crate::backup::BackupSettings>,
 }
 
 impl AppState {
@@ -63,6 +66,7 @@ impl AppState {
             server: crate::dashboard::ServerSettings::default(),
             export_dir: crate::export::export_dir(std::path::Path::new("cache")),
             import_dir: crate::import::import_dir(std::path::Path::new("cache")),
+            backup: None,
         }
     }
 }

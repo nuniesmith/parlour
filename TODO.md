@@ -826,9 +826,33 @@ does NOT depend on Phase 2 transcoding.
   `nfos_left_alone`). Parlour's own NFO isn't re-read as new input.
   Both tables are LeftOut of the bundle (format v1 unchanged).
   Eleven readings for veto are in §13.14.
-- [ ] XFER7 (M) **Automatic backups**: nightly export job to
+- [x] XFER7 (M) **Automatic backups**: nightly export job to
   a configurable folder with retention (ties into the
   Cross-cutting backups item); restore = XFER3.
+  *Done 2026-11-25, per D14/D25, format v1 as it stands (no audio
+  tables — the §9 proposal / D36 is still open):* spec
+  `docs/IMPORT-EXPORT.md` §15; code `crates/server/src/backup.rs`
+  and `run_backup_job` in `export/mod.rs`. The existing nightly tick
+  (after 07:30 UTC) queues one `export_bundle` job a day with
+  `trigger: nightly`; the export worker runs the same export as a
+  manual one into `PARLOUR_BACKUP_DIR` (absolute; **unset = no
+  backups**) as `parlour-backup-YYYYMMDD-HHMMSS.zip` (UTC), written
+  as `.part` and renamed. Then retention keeps the newest
+  `PARLOUR_BACKUP_KEEP` (1–365, default 7) by name, deleting only
+  files named exactly like a nightly bundle (and stale `.part`s),
+  only after a successful write. A missing folder (never created:
+  an unmounted disk), a non-folder or an unwritable one fails the
+  job with the path; the next night retries (one try per UTC day).
+  Surfaced on the Jobs page ("Nightly backup": Download, no Delete,
+  "Removed by retention"), as a "Nightly backup failed" Dashboard
+  notice, in the Activity feed, and the folder joins the D16
+  free-space check. Server → General shows the setting. **No hashes
+  and no artwork** (D14's confirm is per export): a restored user is
+  locked until an admin sets a password (D37). **Not a complete
+  host-move story on its own:** no logins, no audiobook progress
+  (D36) — the Postgres dump in the Cross-cutting backups item covers
+  those and stays production work. Seven readings for veto are in
+  §15.
 - [ ] XFER8 (M) **Admin UI**: Server → Import/Export page —
   export (options + download), import (upload, dry-run
   report render, apply), per-library sidecar status.
