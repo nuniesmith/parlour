@@ -6,7 +6,12 @@
 //!   progress inline (`library_id`, `q`, `sort` = title | added |
 //!   recent)
 //! - `GET /api/v1/audiobooks/{id}` — one book with its tracks
-//!   (book-global `start_ms`, tokenised `stream_url`) and chapters
+//!   (book-global `start_ms`, tokenised `stream_url`) and chapters.
+//!   AB10: with `?client=<profile>` each track is decided against that
+//!   client's audio profile (`parlour_playback::decide_audio`): a track
+//!   it can't play gets the AAC fallback
+//!   (`/api/v1/stream/{file}/aac.m4a`) as its `stream_url`, and a
+//!   `plan` saying what and why
 //! - `GET /api/v1/audiobooks/{id}/tracks/{index}/stream` — a track's
 //!   audio with HTTP Range, authorised like `/api/v1/stream/{file}`
 //!   (stream token or session + library access)
@@ -398,9 +403,30 @@ struct TrackDto {
     duration_ms: Option<i64>,
     container: Option<String>,
     codec: Option<String>,
+    /// The type of what `stream_url` serves: the file's own, or
+    /// `audio/mp4` for the AAC fallback (AB10).
     content_type: &'static str,
     size_bytes: i64,
     stream_url: String,
+    /// AB10: the decision for the profile the request named
+    /// (`?client=`); `null` when it named none, and `stream_url` is
+    /// then the original file, as before AB10.
+    plan: Option<TrackPlanDto>,
+}
+
+/// AB10: one track's stream decision, in playback-info's words.
+#[derive(Debug, Serialize)]
+struct TrackPlanDto {
+    /// `DirectPlay` | `Remux` (AAC copied into MP4) | `Transcode` (to AAC)
+    action: String,
+    /// `Direct` | `ContainerUnsupported` | `CodecUnsupported`
+    reason: String,
+    /// `direct_play` | `copy` | `transcode`
+    mode: &'static str,
+    /// `file` (the original) or `aac` (the fallback copy)
+    delivery: &'static str,
+    /// The profile the decision was made for.
+    client: &'static str,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -566,6 +592,7 @@ struct TrackRow {
     container: Option<String>,
     path: String,
     codec: Option<String>,
+    channels: Option<i32>,
 }
 
 async fn load_tracks(app: &AppState, book_id: Uuid) -> Result<Vec<TrackRow>, AppError> {
@@ -574,7 +601,10 @@ async fn load_tracks(app: &AppState, book_id: Uuid) -> Result<Vec<TrackRow>, App
                 f.container, f.path,
                 (SELECT s.codec FROM media_streams s
                  WHERE s.file_id = f.id AND s.kind = 'audio'
-                 ORDER BY s.is_default DESC, s.stream_index LIMIT 1) AS codec
+                 ORDER BY s.is_default DESC, s.stream_index LIMIT 1) AS codec,
+                (SELECT s.channels FROM media_streams s
+                 WHERE s.file_id = f.id AND s.kind = 'audio'
+                 ORDER BY s.is_default DESC, s.stream_index LIMIT 1) AS channels
          FROM media_files f
          WHERE f.item_id = $1 AND f.available AND f.track_index IS NOT NULL
          ORDER BY f.track_index",
@@ -593,36 +623,128 @@ fn track_title(rel_path: &str) -> String {
         .to_string()
 }
 
+#[derive(Deserialize)]
+struct BookQuery {
+    /// AB10: the client's capability profile (`web`, `android`,
+    /// `androidtv` / `firetv`, `ios`, `tvos`). Without one, every
+    /// track's `stream_url` is the original file (AB3).
+    client: Option<String>,
+    /// As for video's playback-info; recorded with the plan only.
+    network: Option<String>,
+}
+
+/// How far each action goes, for the book's overall plan: the
+/// furthest any track needs.
+fn action_rank(action: parlour_core::PlaybackAction) -> u8 {
+    match action {
+        parlour_core::PlaybackAction::DirectPlay => 0,
+        parlour_core::PlaybackAction::Remux => 1,
+        parlour_core::PlaybackAction::Transcode => 2,
+    }
+}
+
 async fn get_book(
     State(app): State<AppState>,
     user: AuthUser,
     Path(id): Path<String>,
+    Query(q): Query<BookQuery>,
 ) -> Result<Json<BookDetailDto>, AppError> {
     let profile_id = active_profile(&user)?;
     let book_id = parse_id(&id)?;
+    // An unknown profile name is refused rather than guessed at: the
+    // profile decides what plays, so a typo must not quietly pick one.
+    let client = match q.client.as_deref() {
+        None => None,
+        Some(name) => Some(crate::playback::parse_client(Some(name)).ok_or_else(|| {
+            AppError::BadRequest(format!(
+                "unknown client profile {name:?} (web, android, androidtv, firetv, ios, tvos)"
+            ))
+        })?),
+    };
     let book = load_book(&app, profile_id, book_id).await?;
     let rows = load_tracks(&app, book_id).await?;
     let offsets = track_offsets(&rows.iter().map(|r| r.duration_ms).collect::<Vec<_>>());
-    let tracks = rows
-        .into_iter()
-        .zip(offsets)
-        .map(|(r, start_ms)| TrackDto {
+    let resume_ms = if book.progress.finished {
+        0
+    } else {
+        book.progress.position_ms
+    };
+    // The track the player will start in: the last one starting at or
+    // before the resume point.
+    let resume_track = offsets.iter().rposition(|start| *start <= resume_ms);
+
+    let mut tracks = Vec::with_capacity(rows.len());
+    let mut book_plan: Option<crate::playback::StreamPlan> = None;
+    let mut book_rank = 0;
+    for (i, (r, start_ms)) in rows.into_iter().zip(offsets).enumerate() {
+        let decision = client.map(|c| {
+            (
+                c,
+                parlour_playback::decide_audio(r.container.as_deref(), r.codec.as_deref(), c),
+            )
+        });
+        let fallback =
+            decision.is_some_and(|(_, d)| d.action != parlour_core::PlaybackAction::DirectPlay);
+        let token = make_token(&app.playback, r.id, profile_id);
+        let (stream_url, content_type, delivery) = if fallback {
+            (
+                format!("/api/v1/stream/{}/aac.m4a?token={token}", r.id),
+                "audio/mp4",
+                "aac",
+            )
+        } else {
+            (
+                format!("/api/v1/stream/{}?token={token}", r.id),
+                content_type_for(r.container.as_deref(), &r.path),
+                "file",
+            )
+        };
+        if fallback && Some(i) == resume_track {
+            crate::playback::prepare_audio_fallback(&app, r.id).await;
+        }
+        if let Some((c, d)) = decision {
+            let rank = action_rank(d.action);
+            if book_plan.is_none() || rank > book_rank {
+                book_rank = rank;
+                let bitrate_kbps = match r.duration_ms {
+                    Some(ms) if ms > 0 => Some(r.size_bytes * 8 / ms),
+                    _ => None,
+                };
+                book_plan = Some(crate::playback::StreamPlan::for_book(
+                    d,
+                    delivery,
+                    c,
+                    crate::playback::parse_network(q.network.as_deref()),
+                    r.container.clone(),
+                    bitrate_kbps,
+                    r.codec.clone(),
+                    r.channels,
+                ));
+            }
+        }
+        tracks.push(TrackDto {
             index: r.track_index,
             file_id: r.id,
             title: track_title(&r.relative_path),
             start_ms,
             duration_ms: r.duration_ms,
-            content_type: content_type_for(r.container.as_deref(), &r.path),
+            content_type,
             container: r.container,
             codec: r.codec,
             size_bytes: r.size_bytes,
-            stream_url: format!(
-                "/api/v1/stream/{}?token={}",
-                r.id,
-                make_token(&app.playback, r.id, profile_id)
-            ),
-        })
-        .collect();
+            stream_url,
+            plan: decision.map(|(c, d)| TrackPlanDto {
+                action: format!("{:?}", d.action),
+                reason: format!("{:?}", d.reason),
+                mode: crate::playback::stream_mode(d.action),
+                delivery,
+                client: crate::playback::client_name(c),
+            }),
+        });
+    }
+    if let Some(plan) = book_plan {
+        crate::playback::remember_book_plan(&app.playback, profile_id, book_id, plan);
+    }
     let chapters = sqlx::query_as::<_, ChapterDto>(
         "SELECT chapter_index, title, start_ms, end_ms FROM book_chapters
          WHERE item_id = $1 ORDER BY chapter_index",

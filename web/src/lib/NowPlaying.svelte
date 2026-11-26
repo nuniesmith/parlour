@@ -106,6 +106,19 @@
     SubtitleBurnIn: 'The chosen subtitle has to be drawn into the picture for this client.',
   };
 
+  /** AB10: a book's fallback copy really is converted (or repackaged),
+   *  so its reason reads differently from video's Phase 1 remux. */
+  function reasonText(p: StreamPlan): string {
+    if (p.delivery === 'aac') {
+      if (p.action === 'Remux')
+        return 'The client cannot open this container, so the AAC audio is repackaged as MP4 without re-encoding.';
+      if (p.reason === 'ContainerUnsupported')
+        return 'The client does not play this codec in this container, so the audio is converted to AAC.';
+      return "This codec is outside the client's audio profile, so the audio is converted to AAC.";
+    }
+    return REASON[p.reason] ?? p.reason;
+  }
+
   function streamRow(p: StreamPlan): { from: string; to: string } {
     const size = rate(p.bitrate_kbps);
     const from = `${containerLabel(p.container)}${size ? ` (${size})` : ''}`;
@@ -114,7 +127,11 @@
         ? p.action === 'Transcode'
           ? 'HLS (transcode)'
           : 'HLS (remux)'
-        : 'Original file';
+        : p.delivery === 'aac'
+          ? p.action === 'Transcode'
+            ? 'AAC file (transcode)'
+            : 'AAC file (repackaged)'
+          : 'Original file';
     return { from, to };
   }
 
@@ -236,7 +253,7 @@
               </div>
             {/if}
           </dl>
-          <p class="why dim">{REASON[s.plan.reason] ?? s.plan.reason}</p>
+          <p class="why dim">{reasonText(s.plan)}</p>
         {:else if s.item_kind === 'audiobook'}
           <p class="why dim">The book's audio files are sent as they are, track by track.</p>
         {:else}

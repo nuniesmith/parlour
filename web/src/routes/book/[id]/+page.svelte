@@ -18,6 +18,11 @@
   // and carries the time actually spent listening since the last one;
   // the book ending, or the page going away, closes it. A book that is
   // hidden from Continue listening can be shown there again from here.
+  // AB10: the page names its profile (`?client=web`). A track the
+  // browser profile can't play comes as the server's AAC copy; until the
+  // copy is made its URL answers 503, so the player waits for it (moves
+  // made meanwhile are kept), asks for the next such track's copy as each
+  // track starts, and says what it is doing and why.
   import { onMount, tick } from 'svelte';
   import { page } from '$app/state';
   import { api } from '$lib/api';
@@ -29,13 +34,17 @@
     formatDurationMs,
     locateInBook,
     posterUrl,
+    usesFallback,
     type BookDetail,
     type BookProgress,
+    type BookTrack,
   } from '$lib/types';
 
   const SAVE_EVERY_MS = 15_000;
   const REPORT_EVERY_MS = 15_000;
   const SKIP_MS = 30_000;
+  /** The profile this page plays under (AB10, CL5's profiles). */
+  const PROFILE = 'web';
 
   let book = $state<BookDetail | null>(null);
   let error = $state<string | null>(null);
@@ -61,6 +70,18 @@
   let playingSince: number | null = null;
   let stoppedByAdmin = $state(false);
 
+  // AB10: waiting for a track's AAC copy.
+  let preparing = $state(false);
+  let preparedSeconds = $state(0);
+  let prepareError = $state<string | null>(null);
+  /** Play once the copy is ready (asked for while waiting). */
+  let wantPlay = false;
+  /** Bumped on every new source, so an older wait gives up. */
+  let loadSeq = 0;
+  let destroyed = false;
+  /** Fallback tracks whose copy this page has already asked for. */
+  const requested = new Set<string>();
+
   const total = $derived(book?.duration_ms ?? 0);
   const chapterIndex = $derived(book ? chapterAt(book.chapters, position) : -1);
   const resumable = $derived(
@@ -68,7 +89,9 @@
   );
 
   async function load(id: string) {
-    const { data, error: err } = await api<BookDetail>(`/api/v1/audiobooks/${id}`);
+    const { data, error: err } = await api<BookDetail>(
+      `/api/v1/audiobooks/${id}?client=${PROFILE}`,
+    );
     if (!data) {
       error = err ?? 'Could not load that book.';
       return;
@@ -85,15 +108,92 @@
     if (!book || !audio || book.tracks.length === 0) return;
     const loc = locateInBook(book.tracks, Math.max(0, Math.min(globalMs, total)));
     position = book.tracks[loc.track].start_ms + loc.offsetMs;
-    if (loc.track !== track || !audio.src) {
+    if (loc.track !== track || (!audio.src && !preparing)) {
       track = loc.track;
       pendingOffsetMs = loc.offsetMs;
-      audio.src = book.tracks[loc.track].stream_url;
-      audio.load();
-    } else {
-      audio.currentTime = loc.offsetMs / 1000;
+      void setSource(book.tracks[loc.track], play);
+      return;
     }
+    if (preparing) {
+      // Still waiting for this track's copy: start from here instead.
+      pendingOffsetMs = loc.offsetMs;
+      wantPlay = wantPlay || play;
+      return;
+    }
+    audio.currentTime = loc.offsetMs / 1000;
     if (play) void audio.play().catch(() => {});
+  }
+
+  /** Point the <audio> at a track: at once for the original file, after
+   *  the server has made the copy for a fallback track. */
+  async function setSource(t: BookTrack, play: boolean) {
+    const seq = ++loadSeq;
+    // A Play pressed while an earlier track was being prepared still counts.
+    play = play || (preparing && wantPlay);
+    preparing = false;
+    wantPlay = false;
+    prepareError = null;
+    if (usesFallback(t)) {
+      wantPlay = play;
+      if (audio && !audio.paused) audio.pause();
+      preparing = true;
+      preparedSeconds = 0;
+      const ready = await waitForCopy(t.stream_url, seq);
+      if (seq !== loadSeq || destroyed) return;
+      preparing = false;
+      if (!ready) {
+        prepareError = 'This part of the book could not be converted for this browser.';
+        // Not the previous track's audio under this track's position.
+        audio?.removeAttribute('src');
+        audio?.load();
+        return;
+      }
+      play = wantPlay;
+      wantPlay = false;
+    }
+    if (!audio) return;
+    audio.src = t.stream_url;
+    audio.load();
+    if (play) void audio.play().catch(() => {});
+    requestNextCopy();
+  }
+
+  /** Poll the copy until it is there (200), honouring Retry-After;
+   *  false when the server says it can't be made, or the source moved on. */
+  async function waitForCopy(url: string, seq: number): Promise<boolean> {
+    const started = Date.now();
+    while (seq === loadSeq && !destroyed) {
+      const res = await fetch(url, { method: 'HEAD', credentials: 'same-origin' }).catch(
+        () => null,
+      );
+      if (res?.ok) return true;
+      if (res && res.status !== 503) return false;
+      const wait = Number(res?.headers.get('retry-after')) || 2;
+      await new Promise((r) => setTimeout(r, wait * 1000));
+      preparedSeconds = Math.round((Date.now() - started) / 1000);
+    }
+    return false;
+  }
+
+  /** Ask for the next track's copy now, so it is ready when this one ends. */
+  function requestNextCopy() {
+    const next = book?.tracks[track + 1];
+    if (!next || !usesFallback(next) || requested.has(next.file_id)) return;
+    requested.add(next.file_id);
+    void fetch(next.stream_url, { method: 'HEAD', credentials: 'same-origin' }).catch(() => {});
+  }
+
+  /** Why the current track is a copy, in the profile's words. */
+  function fallbackNote(t: BookTrack): string {
+    const codec = (t.codec ?? 'this format').toUpperCase();
+    if (t.plan?.action === 'Remux') {
+      return `Playing this ${codec} audio repackaged as MP4 (not re-encoded): the web player's profile doesn't open ${(t.container ?? 'this').toUpperCase()} files directly.`;
+    }
+    const what =
+      t.plan?.reason === 'ContainerUnsupported'
+        ? `${codec} in a ${(t.container ?? 'this').toUpperCase()} file`
+        : codec;
+    return `Playing an AAC copy: ${what} isn't in the web player's profile.`;
   }
 
   function onLoadedMetadata() {
@@ -263,6 +363,10 @@
 
   function toggle() {
     if (!audio) return;
+    if (preparing) {
+      wantPlay = !wantPlay;
+      return;
+    }
     if (audio.paused) void audio.play().catch(() => {});
     else audio.pause();
   }
@@ -280,7 +384,7 @@
   /** After a match: the book's metadata and cover, not the player. */
   async function reloadMetadata() {
     if (!book) return;
-    const { data } = await api<BookDetail>(`/api/v1/audiobooks/${book.id}`);
+    const { data } = await api<BookDetail>(`/api/v1/audiobooks/${book.id}?client=${PROFILE}`);
     if (data && book) {
       book = { ...data, progress: book.progress };
       coverKey = Date.now();
@@ -322,6 +426,7 @@
     void load(page.params.id ?? '');
     window.addEventListener('pagehide', onLeave);
     return () => {
+      destroyed = true;
       window.removeEventListener('pagehide', onLeave);
       onLeave();
     };
@@ -415,6 +520,18 @@
       <p class="now">
         {chapterIndex >= 0 ? book.chapters[chapterIndex].title : book.tracks[track].title}
       </p>
+      {#if usesFallback(book.tracks[track])}
+        <p class="dim conversion" role="status">
+          {#if preparing}
+            Converting this part of the book to AAC for this browser… {preparedSeconds > 0
+              ? `${preparedSeconds} s`
+              : ''} It is kept once made.
+          {:else}
+            {fallbackNote(book.tracks[track])}
+          {/if}
+        </p>
+      {/if}
+      {#if prepareError}<p class="error" role="alert">{prepareError}</p>{/if}
       <input
         class="scrub"
         type="range"
@@ -431,7 +548,9 @@
       </div>
       <div class="controls">
         <button class="btn" onclick={() => skip(-SKIP_MS)} aria-label="Back 30 seconds">−30 s</button>
-        <button class="btn primary" onclick={toggle}>{playing ? 'Pause' : resumable && !started ? 'Resume' : 'Play'}</button>
+        <button class="btn primary" onclick={toggle} aria-busy={preparing}
+          >{preparing ? 'Preparing…' : playing ? 'Pause' : resumable && !started ? 'Resume' : 'Play'}</button
+        >
         <button class="btn" onclick={() => skip(SKIP_MS)} aria-label="Forward 30 seconds">+30 s</button>
       </div>
       <div class="controls secondary">
@@ -554,6 +673,10 @@
   .now {
     font-weight: 600;
     margin: 0 0 0.6rem;
+  }
+  .conversion {
+    font-size: 0.85rem;
+    margin: -0.3rem 0 0.6rem;
   }
   .scrub {
     width: 100%;
