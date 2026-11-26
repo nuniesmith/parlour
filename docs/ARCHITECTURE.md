@@ -129,6 +129,12 @@ The owner uses subtitles on most playback.
   `media_items` (deterministic content ID, so rescans are idempotent)
   + `media_files` (one item : many files) +
   `media_streams` (ffprobe output, incl. subtitle streams).
+  *Podcasts are the exception (POD1, 2026-11-26):* a show and its
+  episodes come from a feed, not a scan, so they live in their own
+  `podcasts` / `podcast_episodes` tables inside a `podcasts` library,
+  reached through the same per-library grants. Episode progress
+  shares `book_progress` with books (D29). See
+  `AUDIOBOOKS-PODCASTS.md`, "Schema (POD1)".
 - Segments (Phase 9, D15): `media_segments` holds intro / credits /
   recap spans per item — one row per (item, kind, source), sources
   `chapters`, `fingerprint`, `manual`, `heuristic`, each with a 0–1

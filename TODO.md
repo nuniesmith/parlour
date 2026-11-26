@@ -1223,14 +1223,51 @@ hourly check / keep N (0 = all) / 3 new per check. Details:
 `docs/AUDIOBOOKS-PODCASTS.md` → Phase 11. The lines below keep
 their original wording; read them through that.
 
-Plan only so far; no podcast code exists. Spec:
+POD1 (the schema) is built; POD2–POD8 are plan only. Spec:
 `docs/AUDIOBOOKS-PODCASTS.md`.
 
-- [ ] POD1 (M) **Schema**: `podcasts` (feed URL, metadata,
+- [x] POD1 (M) **Schema**: `podcasts` (feed URL, metadata,
   ETag/Last-Modified, refresh state), `podcast_episodes`
   (guid, enclosure, published, duration, local file),
   subscriptions shaped by **D31**, episode progress in the
   same shape as `book_progress`.
+  *Done 2026-11-26:* migration `20261203000000_pod1_podcasts.sql`.
+  `podcasts` is one row per feed in a podcasts library. It holds:
+  - the feed URL, unique per library;
+  - the show as the feed describes it, plus a cached artwork path;
+  - `folder_path`, the show's folder inside the library's writable
+    store (D32; no store created, no mount changed);
+  - the ETag / Last-Modified validators;
+  - the refresh state (last checked, last error, failures in a row);
+  - D32's per-show settings as columns, with ABS's defaults:
+    auto-download off, `0 * * * *`, keep 0 = all, 3 new per check.
+
+  As in ABS, the schedule runs only while auto-download is on, and
+  that flag is what the 24-failure rule turns off.
+  `podcast_episodes` is one row per feed item with an enclosure. It
+  holds:
+  - the guid, unique per show, with the enclosure URL standing in when
+    there is none;
+  - the enclosure (URL, type, length), published time and the feed's
+    duration;
+  - season, episode and type, and the Podcasting 2.0 chapter and
+    transcript links;
+  - the local copy's path, size, probed length, container and codec,
+    all NULL until POD3 downloads it.
+
+  D31: there is no subscriptions table. A profile reaches shows only
+  through its `library_access` grant on the podcasts library. D29:
+  episode progress shares `book_progress`:
+  - a nullable `episode_id` beside `item_id`, exactly one set;
+  - each unique per profile (the primary key became `UNIQUE
+    (profile_id, item_id)`, so book queries are unchanged);
+  - AB11's write rules apply as they are.
+
+  There is no API and no UI (POD5/POD6). Both new tables are left out
+  of the bundle, which stays at format v1. Episode progress follows
+  `book_progress`'s open proposal (D36). Flow:
+  `podcast_schema_flow.rs`. Spec: AUDIOBOOKS-PODCASTS.md "Schema
+  (POD1)" (12 readings for veto).
 - [ ] POD2 (M) **Feed fetch + parse**: RSS 2.0 + iTunes
   namespace (+ Podcasting 2.0 chapter/transcript links), a pure
   fixture-tested parser, conditional GET, a `refresh_podcasts`
