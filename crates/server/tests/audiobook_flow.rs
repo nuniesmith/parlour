@@ -201,7 +201,8 @@ async fn audiobook_flow() {
     let pool = parlour_db::connect(&db_url).await.expect("connect");
     parlour_db::migrate(&pool).await.expect("migrate");
 
-    // Library layout:
+    // Library layout (AB11 kept it: `CD n` folders still fold; `Part`
+    // folders are AB11's own flow, abs_alignment_flow):
     //   Jane Author/Book One/01 - Opening.mp3, 02 - Middle.mp3, cover.jpg
     //   Jane Author/Big Book/CD 1/Zed.mp3, CD 2/Alpha.mp3  (one book)
     //   Single.m4b                                          (root file)
@@ -368,7 +369,7 @@ async fn audiobook_flow() {
     assert_eq!(
         big["authors"],
         json!(["Jane Author"]),
-        "top-level folder as author"
+        "the author folder (the nearest; AB11)"
     );
     assert_eq!(big["track_count"], 2);
     assert_eq!(big["has_cover"], false);
@@ -510,6 +511,20 @@ async fn audiobook_flow() {
     assert!(!bytes.is_empty());
 
     // --------------------------------------------------- progress
+    // AB11: these books are ~5 s long, shorter than Audiobookshelf's
+    // 10 s auto-finish default, so the library finishes a book with
+    // less than 1 s left instead.
+    let (status, settings) = app
+        .req(
+            Method::PUT,
+            &format!("/api/v1/admin/libraries/{library_id}/audiobook-settings"),
+            Some(
+                json!({"parse_subtitles": false, "finish_remaining_seconds": 1,
+                        "finish_percent": null}),
+            ),
+        )
+        .await;
+    assert_eq!(status, 200, "{settings}");
     let progress = format!("/api/v1/audiobooks/{one_id}/progress");
     let (status, p) = app.get(&progress).await;
     assert_eq!(status, 200);
@@ -526,7 +541,8 @@ async fn audiobook_flow() {
     assert_eq!(p["finished"], false);
     assert!(p["last_listened_at"].is_string());
 
-    // Past the end clamps onto the book; nothing finishes by itself.
+    // Past the end clamps onto the book, and (AB11) less than the
+    // library's 1 s left finishes it.
     let (_, p) = app
         .req(
             Method::PUT,
@@ -535,7 +551,7 @@ async fn audiobook_flow() {
         )
         .await;
     assert_eq!(p["position_ms"], one_len);
-    assert_eq!(p["finished"], false, "finished is explicit only");
+    assert_eq!(p["finished"], true, "auto-finished at the end");
 
     let (status, _) = app.req(Method::PUT, &progress, Some(json!({}))).await;
     assert_eq!(status, 400);
@@ -544,6 +560,9 @@ async fn audiobook_flow() {
         .await;
     assert_eq!(status, 400);
 
+    let finished_at = p["finished_at"].clone();
+    assert!(finished_at.is_string());
+    let listened_at = p["last_listened_at"].clone();
     let (_, p) = app
         .req(Method::PUT, &progress, Some(json!({"finished": true})))
         .await;
@@ -552,12 +571,6 @@ async fn audiobook_flow() {
         p["position_ms"], one_len,
         "finishing leaves the position alone"
     );
-    let finished_at = p["finished_at"].clone();
-    assert!(finished_at.is_string());
-    let listened_at = p["last_listened_at"].clone();
-    let (_, p) = app
-        .req(Method::PUT, &progress, Some(json!({"finished": true})))
-        .await;
     assert_eq!(
         p["finished_at"], finished_at,
         "finishing twice keeps the first time"
@@ -566,16 +579,30 @@ async fn audiobook_flow() {
         p["last_listened_at"], listened_at,
         "marking is not listening"
     );
+    // AB11, as Audiobookshelf: a finished book moved back before the
+    // finishing point is unfinished again.
     let (_, p) = app
         .req(Method::PUT, &progress, Some(json!({"position_ms": 100})))
         .await;
-    assert_eq!(p["finished"], true, "a new position does not un-finish");
+    assert_eq!(p["finished"], false, "moved back, unfinished");
+    assert_eq!(p["finished_at"], Value::Null);
+    assert_eq!(p["position_ms"], 100);
+    // Finishing by hand keeps the position; un-finishing by hand puts
+    // it back to 0.
+    let (_, p) = app
+        .req(Method::PUT, &progress, Some(json!({"finished": true})))
+        .await;
+    assert_eq!(p["finished"], true);
     assert_eq!(p["position_ms"], 100);
     let (_, p) = app
         .req(Method::PUT, &progress, Some(json!({"finished": false})))
         .await;
     assert_eq!(p["finished"], false);
     assert_eq!(p["finished_at"], Value::Null);
+    assert_eq!(p["position_ms"], 0, "un-finishing by hand starts over");
+    let (_, p) = app
+        .req(Method::PUT, &progress, Some(json!({"position_ms": 100})))
+        .await;
     assert_eq!(p["position_ms"], 100);
 
     // Inline in the list, and `recent` puts it first.

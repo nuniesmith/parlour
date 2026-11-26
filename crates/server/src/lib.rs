@@ -7,6 +7,7 @@ pub mod audiobooks;
 pub mod auth;
 pub mod backup;
 pub mod book_match;
+pub mod book_settings;
 pub mod bundle;
 pub mod catalog;
 pub mod config;

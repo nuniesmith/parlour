@@ -86,7 +86,9 @@ scan without renaming:
 - **Disc folders fold into their parent.** A folder named like
   `CD 1`, `Disc 2`, `Disk3` or `Part 01` (nothing else in the name)
   belongs to the book in the folder above, and its files come after
-  the earlier discs' files.
+  the earlier discs' files. *AB11: only `CD` / `Disc` / `Disk`,
+  optional whitespace and 1–3 digits, as ABS reads them; `Part 01` is
+  a folder of its own ("Aligning with Audiobookshelf (AB11)").*
 - An audio file sitting directly in the library root is a book on
   its own (typical for single-file `.m4b` books).
 - Track order: tag disc number, then the disc folder's number, then
@@ -113,7 +115,7 @@ matching and covers (AB6)" below.
 | Field | Source, first that's present |
 |---|---|
 | title | `album`; for a single-file book, `title`; else the folder or file name |
-| authors | `album_artist`, else `artist`; else the top-level folder when the book sits in one (`Author/Title`, `Author/Series/Title`) |
+| authors | `album_artist`, else `artist`; else the top-level folder when the book sits in one (`Author/Title`, `Author/Series/Title`). *AB11: the nearest author folder instead* |
 | narrators | `composer` (the usual audiobook convention; plenty of files leave it empty) |
 | year | first four digits of `date` / `year` |
 | overview | `description`, else `comment` |
@@ -151,8 +153,13 @@ so the author page (AB7, built) is a query, not a migration.
 - **Finished is explicit:** a client sets `finished: true` (the web
   player does it when the last track ends). There is deliberately
   no percentage rule: when to auto-finish is part of D29.
+  *AB11: ABS's rule — the library's auto-finish threshold (10 s, or a
+  percentage), un-finishing by hand resets the position to 0, plus
+  the hide flag ("Aligning with Audiobookshelf (AB11)").*
 - Writes are **last-write-wins** in arrival order, as video
   reporting is today. The rule for offline clients is part of D33.
+  *AB11: the client's own timestamp is stored too
+  (`client_updated_at`); last arrival still wins.*
 
 ### Native API (AB3/AB4, built)
 
@@ -165,7 +172,7 @@ profile's** library access (no access reads as 404, like items).
 | `GET /audiobooks/{id}` | One book: the above plus `tracks` (index, file id, title, `start_ms`, `duration_ms`, codec, size, a tokenised `stream_url`) and `chapters` |
 | `GET /audiobooks/{id}/tracks/{index}/stream` | Track audio with HTTP Range (single range, 206/416), authorised by stream token or session, the same rules as `/stream/{file_id}` |
 | `GET /audiobooks/{id}/progress` | This profile's progress (zeros when never started) |
-| `PUT /audiobooks/{id}/progress` | `{position_ms?, finished?}`; position is clamped to the book's length; returns the stored row |
+| `PUT /audiobooks/{id}/progress` | `{position_ms?, finished?, hidden?, client_updated_at?}` (the last two AB11); position is clamped to the book's length; returns the stored row |
 | `DELETE /audiobooks/{id}/progress` | Back to "not started" |
 | `GET /audiobooks/progress?since=<rfc3339>` | Every progress row for this profile changed after `since`: the bulk pull a client does on launch |
 
@@ -204,7 +211,7 @@ with Parlour's own sidecar as the last word:
 
 | id | source | what it gives |
 |---|---|---|
-| `folder` | the book folder's name, and the top-level folder above it | title (a root file's name without its extension); authors, split ABS's way (below) |
+| `folder` | the book folder's name, and the top-level folder above it (*AB11: the nearest author folder, and the title folder's name parsed*) | title (a root file's name without its extension); authors, split ABS's way (below); *AB11: subtitle, narrators, year, ASIN and the series sequence from the title folder* |
 | `tags` | the audio tags of the **first track** in disc/track order | title (`album`; for a single-file book also `title`), `subtitle`, authors (`album_artist`, else `artist`), narrators (`composer`), year (`date`, else `year`), `publisher`, `isbn`, `asin`, `language`, overview (`description`, else `comment`), genres (`genre`) |
 | `nfo` | an `.nfo` in the book folder, ABS's `Key: value` style | `Title` (`Title: Subtitle` splits), `Author`, `Narrator` / `Read by`, `Genre`, `Publisher`, `ASIN`, `ISBN`, `Language`, the year from the date and copyright lines, and `Book Description` to the end of the file. An XML (Kodi-style) `.nfo` says nothing here |
 | `txt` | `desc.txt` and `reader.txt` | the whole of `desc.txt` as the overview; the first line of `reader.txt` as the narrators |
@@ -405,7 +412,8 @@ Each is a reading inside D30, not a new decision.
    title-folder parsing (ASIN, narrator, sequence, year, subtitle)
    are AB11 (follow-up items 3–4), and the series folder is AB7
    (*built: it is part of the `folder` source, "Series and authors
-   (AB7)"*).
+   (AB7)"*). *AB11 built both: "Aligning with Audiobookshelf
+   (AB11)".*
 9. **Tag author splitting stays as AB2 has it** (follow-up item 5
    asked for this to be reviewed here); only folder names split ABS's
    way. The precedence work didn't need a change.
@@ -462,7 +470,7 @@ precedence list, and nothing AB6 already merged changed.
 
 | source | series it gives |
 |---|---|
-| `folder` | the **series folder**: the folder right above the title folder, only when two or more folders sit above the title (`Author/Series/Title`), as D28 has it. `Author/Title` and a file in the library root have none. Only the three folders nearest the book count, so `Genre/Author/Series/Title` gives `Series`. No sequence (reading 2) |
+| `folder` | the **series folder**: the folder right above the title folder, only when two or more folders sit above the title (`Author/Series/Title`), as D28 has it. `Author/Title` and a file in the library root have none. Only the three folders nearest the book count, so `Genre/Author/Series/Title` gives `Series`. No sequence (reading 2); *AB11: the sequence the title folder's name gives* |
 | `tags` | from the **first track** (D30), ABS's tag names: the name from `series`, else `show`, else `mvnm` (MP4's movement name); the sequence from `series-part`, else `episode_id`, else `mvin`, else `part`. When the name and the sequence both hold the same number (more than one) of `;`-separated parts, they pair up into several series; otherwise it is one series with both values taken whole. Only when there is no name tag: `grouping` (else `grp1`), split on `;`, each part `Name #sequence` (the sequence is the one word after the last ` #`) or just `Name` |
 
 - **Merge.** A list, like authors: a later source that names any
@@ -538,7 +546,8 @@ Each is a reading inside D28 (and D30's merge), not a new decision.
    there is a series folder. That is title-folder parsing, AB11's
    follow-up item 3. Until then, a book whose series is known only
    from its folder has no sequence, so it comes after the sequenced
-   books, by title.
+   books, by title. *AB11 built it: a folder series takes the sequence
+   the title folder's name gives.*
 3. **Only the folder and the tags give series.** ABS also reads them
    from an OPF (`calibre:series`) and from its `metadata.json`.
    Parlour reads neither yet (a follow-up, if wanted). Parlour's
@@ -587,6 +596,218 @@ Each is a reading inside D28 (and D30's merge), not a new decision.
     (merge rules `ab7.1`), as AB6's did. On a large library that scan
     is slow once, then unchanged books are skipped again.
 
+### Aligning with Audiobookshelf (AB11, built 2026-11-26)
+
+Built to **D28** (the catalog model and the on-disk rules), **D29**
+(finishing, the hide flag) and **D33** (the client's timestamp): the
+"Follow-up from D28–D35" items that were still open after AB6 and AB7,
+items 1, 3, 4, 8, 9 and 10. ABS behaviour was read from its server
+source on 2026-11-26 (`scandir.js`, `MediaProgress`, `Library`,
+`User`, `PlaybackSessionManager`, `MeController`; behaviour only,
+nothing copied). Code: `crates/catalog/src/audiobooks.rs`
+(`disc_folder_number`), `crates/catalog/src/book_meta.rs`
+(`parse_title_folder`, `folder_fields`), `crates/server/src/audiobooks.rs`
+(`apply_write`, `reaches_finish`), `crates/server/src/book_settings.rs`
+(the library settings), `web/src/routes/admin/library`,
+`web/src/routes/book/[id]`. Migration
+`20261201000000_ab11_align_abs.sql` (the timestamp only orders it after
+AB7's; written 2026-11-26).
+
+**Disc folders (item 1).** A folder folds into the book above it only
+when its whole name is `CD`, `Disc` or `Disk` (any case), optional
+whitespace, and 1–3 digits: `CD 1`, `cd1`, `Disc 02`, `DISK 123`.
+`Part 1` is a folder of its own, as ABS reads it, and so are `Disc-1`,
+`Disc_1` and `CD 1234`, which AB2 also folded. Such a folder holding
+audio is now a book of its own (`Author/Book/Part 1` is the book
+`Part 1`, in the series `Book`, by `Author`). A book's identity is its
+folder (`stable_key`), so **a book AB2 built from `Part` (or
+`Disc-1` / `Disc_1`) folders becomes one new book per folder** at the
+next scan. The old book is marked missing, not deleted, and keeps its
+progress, which the new books don't inherit.
+
+**The title folder's name (item 3).** The `folder` source parses it in
+ABS's order:
+
+1. an **ASIN** in square brackets, exactly ten capital letters or
+   digits, standing at the start, at the end or between spaces:
+   `Title [B0015T963C]`;
+2. a **narrator** in braces at the very end, after a space:
+   `Title {Jim Dale}` (several split as folder authors are);
+3. a **series sequence**, only when the book has a series folder: the
+   name is split on ` - `, and the first part that reads as a sequence
+   is taken out. A part reads as one when it is an optional `Vol `,
+   `Vol. `, `Volume ` or `Book ` (any case), up to three digits with an
+   optional decimal of one or two digits, an optional trailing dot, and
+   then either nothing or a space and more text. More text counts only
+   after a label or a trailing dot: `Book 2 - Title`, `1. Title`,
+   `1 - Title`, `0.5 - Title`, `Vol. 3 Title` are sequences;
+   `101 Dalmatians` and `1984` are titles;
+4. a **publish year** at the very start: four digits, optionally in
+   parentheses, then a hyphen: `1994 - Title`, `(1994) - Title`,
+   `1994-Title`. `Title (2001)` and `2001 A Space Odyssey` keep their
+   numbers;
+5. a **subtitle** after the first ` - `, only when the library's
+   **"parse subtitles"** setting is on (off by default):
+   `Title - Subtitle`.
+
+So `Vol 2 - 1999 - The Middle - A Subtitle {Ann Reader} [B000000002]`
+in a series folder, with subtitles on, is the title `The Middle`,
+subtitle `A Subtitle`, book 2 of the series, 1999, read by Ann Reader,
+ASIN `B000000002`. When nothing is left for a title, the name is the
+title untouched. The values join the `folder` source, so the later
+sources in the precedence list (tags, NFO, …) replace them as they
+replace any folder value. **A folder series now has its sequence**
+(AB7 reading 2): it is the one the title folder gave.
+
+**Which folders count (item 4).** Only the three folders nearest the
+book: the title, then — with two or more folders above it — the series
+right above and the author above that; with one folder above, that one
+is the author. Folders higher up are ignored. AB2 took the *top-level*
+folder as the author, so `Genre/Author/Series/Title` credited `Genre`;
+it now credits `Author`. As in ABS, `Genre/Author/Title` still reads
+`Genre` as the author and `Author` as the series: with three folders
+the middle one is the series position (AB7 already read it so).
+
+**Library settings.** An audiobooks library has three settings of its
+own, ABS's, beside the metadata precedence (AB6): `GET | PUT
+/api/v1/admin/libraries/{id}/audiobook-settings` with
+`{"parse_subtitles", "finish_remaining_seconds", "finish_percent"}`
+(all three on a PUT; an audiobooks library only; admins only), edited
+on Server → Library → "Audiobook settings".
+
+| setting | default | what |
+|---|---|---|
+| `parse_subtitles` | off | a title folder's ` - Subtitle` is its subtitle. Part of every book's sources fingerprint, so a change merges the library's books again at the next scan |
+| `finish_remaining_seconds` | 10 | finished once less than this much of the book is left; 0 is off; at most a day |
+| `finish_percent` | off (null) | finished once the position is past this share of the book (1–100); when set it **replaces** the time rule |
+
+**Finishing (item 8).** On every progress write (`PUT
+/audiobooks/{id}/progress`):
+
+- a write **with a position**, on a book whose length is known, is
+  checked against the library's rule: less than
+  `finish_remaining_seconds` left (strictly less, so exactly 10 s left
+  is not finished), or with `finish_percent` set, a position strictly
+  past that share. Reaching it finishes an unfinished book
+  (`finished_at` is set). A finished book moved back **before** the
+  point is unfinished again, as ABS does; one whose position didn't
+  move stays finished. A write without a position leaves `finished`
+  alone, and a book of unknown length never finishes by itself;
+- **finishing by hand** (`finished: true`) finishes the book and leaves
+  the position where it is (or where the same write puts it);
+- **un-finishing by hand** (`finished: false` on a finished book) puts
+  the position back to **0**, as ABS does, and ignores a position sent
+  with it. The web player follows: "Mark as not finished" starts the
+  book over;
+- a `finished` the client sends always wins over the rule, both ways.
+
+**Hide from Continue Listening (item 9).** `book_progress.hidden`, per
+profile and book. `PUT …/progress` with `{"hidden": true}` hides the
+book, `{"hidden": false}` shows it again, and neither moves anything
+else. The next write that **moves the position** clears it (unless
+that write sends `hidden: true` itself); finishing alone doesn't, and
+un-finishing by hand does, because it moves the position to 0. Every
+progress shape (`progress` in the book list and detail, the single
+GET/PUT, the bulk sync rows) carries `hidden`. AB8's Continue
+Listening shelf reads it; there is no web control before that shelf.
+
+**The client's timestamp (item 10).** A write may send
+`client_updated_at` (RFC 3339): when the client made the update, by its
+own clock. It is stored as sent, in `book_progress.client_updated_at`,
+and returned everywhere progress is; a write without one stores the
+server's time there. The **last write to arrive still wins**: nothing
+compares times or positions (D33). `updated_at` stays the server's
+time, so the bulk sync's `?since=` cursor can't miss a write from a
+client whose clock is behind. A time that doesn't parse is refused
+(4xx) and nothing is stored. The web player sends its time with every
+write.
+
+**The bundle.** Format v1 is unchanged. The three library settings
+stay behind (`coverage.rs`: an imported library starts with ABS's
+defaults), and `hidden` / `client_updated_at` are part of
+`book_progress`, which stays the open proposal of §9 of
+`IMPORT-EXPORT.md` (D36): not carried.
+
+**A re-scan.** The merge rules' version is now `ab11.1`, so the first
+scan after this change merges (and probes) every book once, then
+unchanged books are skipped again.
+
+**Tests.** Unit (`audiobooks`, `book_meta`): disc folders and
+grouping, ABS's worked title-folder examples (ASIN, narrator,
+sequences with and without a series folder, years, subtitles on and
+off, `101 Dalmatians`, `1984`), the nearest folders in deep layouts,
+the fingerprint with the subtitle setting. Unit (`server`): the
+finishing point (strict comparisons, the percentage replacing the
+time, unknown length), every progress rule above, and the hide flag.
+Flow: `crates/server/tests/abs_alignment_flow.rs` scans ffmpeg-made
+books with no tags: `Part` folders as books and `Disc` folders folded,
+a parsed title folder in `Genre/Author/Series/Title`, a folder series
+in sequence order, the settings API and its checks, subtitles turned
+on (one re-merge, then nothing), auto-finish at exactly the threshold
+and with a percentage, both hand rules, the hide flag through moves and
+marks, the client's time stored and the sync cursor unaffected.
+`audiobook_flow.rs` was updated where AB4's explicit-only rules
+changed.
+
+#### Readings made in AB11 — for the owner's veto
+
+Each is a reading inside D28, D29 or D33, not a new decision.
+
+1. **Disc folders are exactly ABS's**, not just "without `Part`":
+   only whitespace may sit between the word and the digits, and only
+   1–3 digits, so `Disc-1`, `Disc_1` and `CD 0001` stop folding too
+   (D28 says "only"). Each such book moves identity, as a `Part`
+   book does.
+2. **A file in a library root keeps its name unparsed**, as AB2 had
+   it. Only the title *folder* is parsed; whether ABS parses a root
+   file's name the same way wasn't checked.
+3. **"Parse subtitles" is a per-library setting.** ABS keeps it as one
+   server-wide scanner setting; Parlour follows its own per-library
+   settings pattern (the precedence list is per library too), with the
+   same default, off. On a server with one audiobooks library the two
+   read the same. (ABS's off default comes from D28; its settings file
+   wasn't readable on 2026-11-26 to check it again.)
+4. **What the title folder gives is part of the `folder` source**, so
+   tags and the later sources replace it field by field, with the
+   default order. An admin who wants the folder's ASIN or narrator to
+   win moves `folder` later in the precedence list.
+5. **When parsing leaves no title**, the name stays the title
+   (`Book 3` in a series folder is the title `Book 3`, sequence 3). ABS
+   on that edge wasn't checked.
+6. **The rule runs on every progress write with a position.** ABS
+   applies its library settings only when a playback session syncs (a
+   plain progress update falls back to 10 s or to values the client
+   sends), and doesn't check a brand-new progress record at all.
+   Parlour has no listening sessions yet (CL3), so its one write path
+   uses the library's settings, and a first write can finish a book.
+7. **A `finished` the client sends wins over the rule.** In ABS, a
+   hand finish sent together with a position before the point is
+   undone by the same write; here it stands.
+8. **A finished book moved back before the point is unfinished** (as
+   ABS does), reversing AB4's "a new position does not un-finish". So
+   re-listening a finished book un-finishes it on its first saved
+   position. `finish_percent` 100 is accepted and, with ABS's strict
+   comparison, never finishes a book.
+9. **Hiding goes through `PUT …/progress`** (`hidden`), with no
+   separate endpoint, and showing again is `hidden: false`. ABS hides
+   by its progress record's id, so a book with no progress can't be
+   hidden there; here hiding a never-started book stores a progress
+   row at 0 with the flag.
+10. **The client's time has its own column.** ABS overwrites its
+    record's update time with the client's; Parlour keeps `updated_at`
+    as the server's time (the sync cursor) and stores the client's in
+    `client_updated_at`, on new rows too (ABS ignores it on a new
+    record). Nothing checks it against the server's clock, as in ABS;
+    an unparseable one is refused here, where ABS logs it and uses its
+    own time. `last_listened_at` and `sort=recent` stay on the server's
+    time.
+11. **The new settings and columns stay out of the bundle** (format v1
+    unchanged): library settings start at ABS's defaults on an imported
+    library, and the `book_progress` columns follow the table's open
+    proposal (D36).
+12. **The first scan after this change probes every book once**
+    (merge rules `ab11.1`), as AB6's and AB7's did.
+
 ### Later in Phase 10 (blocked on decisions)
 
 AB6 metadata providers and embedded covers (D30), AB7 series and
@@ -598,7 +819,8 @@ for codecs a client can't play (CL5).
 *2026-11-24:* all unblocked except AB9, which is **cancelled**
 (D27: no ABS import). AB6 follows D30, AB7 follows D28, AB8 follows
 D29 + D35; the details are in the list below. *2026-11-26: AB6 is
-built (above). AB7 is built (above, "Series and authors (AB7)").*
+built (above). AB7 is built (above, "Series and authors (AB7)").
+AB11 is built (above, "Aligning with Audiobookshelf (AB11)").*
 
 ### Follow-up from D28–D35 (where AB1–AB5 differ from ABS)
 
@@ -612,7 +834,10 @@ not yet scheduled in a PR:
    `Part N`. Drop `Part` from `disc_folder_number`, so a `Part 1`
    folder is its own folder, as ABS reads it. Check the owner's
    real library for `Part` folders first: the change moves any
-   such book's identity (`stable_key`).
+   such book's identity (`stable_key`). *Done in AB11, with ABS's
+   exact rule (whitespace only, 1–3 digits; AB11 reading 1). The
+   library on oryx holds no audiobooks, so the owner's real library
+   still needs the check before the change reaches it.*
 2. **Series from the folder (AB2/AB7).** ABS reads
    `Author/Series/Title`'s middle folder as the series. AB2 ignores
    it. AB7 adds `series` records and a book ↔ series join with a
@@ -624,18 +849,24 @@ not yet scheduled in a PR:
    an ASIN `[…]`, a narrator `{…}`, a series sequence (`Vol 1 -`,
    `Book 2 -`, `1.`, decimals), a publish year (`1994 -`,
    `(1994) -`), and a subtitle after ` - ` (subtitle only behind a
-   setting, off by default). AB2 uses the folder name raw.
+   setting, off by default). AB2 uses the folder name raw. *Done in
+   AB11; the subtitle setting is per library (AB11 reading 3).*
 4. **Which folders count (AB2).** ABS looks only at the three
    folders nearest the book: title, series, author. AB2 takes the
    *top-level* folder as the author fallback, so a deeper layout
    (`Genre/Author/Title`) would credit "Genre". Use the nearest
-   author position instead.
+   author position instead. *Done in AB11. As in ABS,
+   `Genre/Author/Title` still reads `Genre` as the author (three
+   folders: the middle one is the series); `Genre/Author/Series/Title`
+   now credits `Author`.*
 5. **Author splitting (AB2).** ABS splits folder-name authors on
    `,` `;` `&` and `and`, and accepts `Last, First`. AB2's
    `split_people` splits on `;` `&` ` / ` and on commas only when
    every part has a space. Match ABS for folder names; keep tag
    splitting under review in AB6. *Folder names: done in AB6. Tag
-   splitting kept as AB2 has it (AB6 reading 9).*
+   splitting kept as AB2 has it (AB6 reading 9). AB11 changed nothing
+   here; a narrator from the title folder splits as folder authors
+   do.*
 6. **Which track's tags (AB2/AB6).** ABS reads tags from the first
    track in disc/track order. AB2 takes each field from the first
    track that *has* it. Small difference; align in AB6 together
@@ -652,12 +883,15 @@ not yet scheduled in a PR:
    only when a client says so. Add the server-side rule with those
    library settings; keep manual mark finished / not finished, and
    reset the position to 0 on a manual un-finish, as ABS does.
+   *Done in AB11.*
 9. **Hide from Continue Listening (AB4/AB8).** ABS keeps a per-user,
    per-item hide flag that clears when progress next changes. Add
-   it to `book_progress` and the API.
+   it to `book_progress` and the API. *Done in AB11 (API only; AB8's
+   shelf shows it).*
 10. **Client timestamp (AB4/CL4).** ABS keeps last-arrival-wins but
     stores the client's own last-update time. AB4 stamps the
-    server's time. Accept and store the client's.
+    server's time. Accept and store the client's. *Done in AB11
+    (`client_updated_at`; AB11 reading 10).*
 11. **Podcast progress shares the table (POD1).** ABS keeps one
     progress model for books and episodes; POD1 puts episode
     progress in the same table and shape rather than a parallel

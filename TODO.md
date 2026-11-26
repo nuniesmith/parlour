@@ -1046,7 +1046,7 @@ the rest wait on the owner's decisions.
   *Done 2026-11-23:* migration `20261123000000_audiobooks.sql`.
 - [x] AB2 (M) **Scanner for audiobooks libraries**: audio
   allowlist; one book per folder holding audio, disc folders
-  (`CD 1`, `Disc 2`, `Part 3`) folded into their parent, loose
+  (`CD 1`, `Disc 2`, `Part 3`; *AB11: not `Part`*) folded into their parent, loose
   root files one book each; track order disc tag → disc folder → track tag →
   natural file name; ffprobe tags → title / authors /
   narrators / year / overview / genres; chapters from the files
@@ -1126,13 +1126,34 @@ the rest wait on the owner's decisions.
   the bundle (rebuilt by a scan; format v1 unchanged). Spec:
   AUDIOBOOKS-PODCASTS.md "Series and authors (AB7)" (12 readings for
   veto). D36 and D40 are still open.
-- [ ] AB11 (M) **Align AB1/AB2/AB4 with ABS** (D28/D29): the
+- [x] AB11 (M) **Align AB1/AB2/AB4 with ABS** (D28/D29): the
   numbered "Follow-up from D28–D35" list in
   `docs/AUDIOBOOKS-PODCASTS.md` — disc folders without `Part`,
   title-folder parsing, nearest-folder author, author
   splitting (folder names done in AB6), auto-finish under 10 s
   remaining, the
   hide-from-Continue flag, client timestamps.
+  *Done 2026-11-26 (follow-up items 1, 3, 4, 8, 9, 10; item 5 needed
+  nothing more):* disc folders are only `CD` / `Disc` / `Disk` +
+  optional whitespace + 1–3 digits, so `Part 1` (and `Disc-1`) is a
+  book of its own — its identity moves; the library on oryx holds no
+  audiobooks, so the owner's real library wasn't checked. The `folder`
+  source parses the title folder (ASIN `[…]`, narrator `{…}`, the
+  series sequence when there is a series folder, a leading year, and a
+  subtitle behind a per-library "parse subtitles" setting, off) and
+  takes the nearest author folder; a folder series now has its
+  sequence. Merge rules `ab11.1` (one re-merge). Per-library
+  `finish_remaining_seconds` (10) / `finish_percent` (off) on
+  `GET|PUT /api/v1/admin/libraries/{id}/audiobook-settings`, edited on
+  Server → Library. Progress writes follow ABS: auto-finish at the
+  threshold, a finished book moved back is unfinished, un-finishing by
+  hand resets to 0, `hidden` cleared by the next move, the client's
+  `client_updated_at` stored (last arrival still wins; `updated_at`
+  stays the sync cursor). Migration
+  `20261201000000_ab11_align_abs.sql`; the new columns stay out of the
+  bundle (`book_progress` stays D36's open proposal). Spec:
+  AUDIOBOOKS-PODCASTS.md "Aligning with Audiobookshelf (AB11)" (12
+  readings for veto).
 - [ ] AB8 (S) **Listening in Now Playing / Activity, Home
   "Continue listening"** — after **D29** / **D35**. *D29
   (2026-11-24): ABS's shelves (Continue Listening with a

@@ -9,9 +9,11 @@
 //!
 //! What a book is on disk:
 //! - every folder that directly holds audio files is one book;
-//! - a disc folder (`CD 1`, `Disc 2`, `Disk3`, `Part 01` — nothing
-//!   else in the name) belongs to the book in the folder above it,
-//!   its files after the earlier discs' files;
+//! - a disc folder (`CD 1`, `Disc 2`, `Disk3`: `CD`/`Disc`/`Disk`,
+//!   optional whitespace, 1–3 digits, nothing else — Audiobookshelf's
+//!   rule since AB11, so `Part 1` is a folder of its own) belongs to
+//!   the book in the folder above it, its files after the earlier
+//!   discs' files;
 //! - an audio file directly in a library root is a book on its own.
 //!
 //! Track order: tag disc number, then the disc folder's number, then
@@ -211,16 +213,19 @@ pub fn walk_audio(root: &Path) -> AudioWalk {
 
 // ---------------------------------------------------------- grouping
 
-/// The disc number a folder name stands for: `CD 1`, `cd1`,
-/// `Disc 02`, `Disk-3`, `Part_4` → Some(n). Anything else in the
-/// name (`CD 1 - Extras`, `Part One`) → None.
+/// The disc number a folder name stands for, as Audiobookshelf reads
+/// disc folders (D28, AB11): the whole name is `CD`, `Disc` or `Disk`
+/// (any case), optional whitespace, then 1–3 digits — `CD 1`, `cd1`,
+/// `Disc 02`, `DISK 123` → Some(n). Anything else → None: `Part 1`
+/// (AB2 folded it; ABS doesn't), `Disc-1`, `Disc_1`, `CD 1234`,
+/// `CD 1 - Extras`.
 pub fn disc_folder_number(name: &str) -> Option<u32> {
-    let lower = name.trim().to_lowercase();
-    let rest = ["disc", "disk", "part", "cd"]
+    let lower = name.to_lowercase();
+    let rest = ["disc", "disk", "cd"]
         .iter()
         .find_map(|p| lower.strip_prefix(p))?;
-    let digits = rest.trim_start_matches([' ', '-', '_', '.']);
-    if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
+    let digits = rest.trim_start_matches(char::is_whitespace);
+    if !(1..=3).contains(&digits.len()) || !digits.chars().all(|c| c.is_ascii_digit()) {
         return None;
     }
     digits.parse().ok()
@@ -670,6 +675,7 @@ fn plan_sources(
     root_file: bool,
     sources: &HashMap<String, Vec<SourceFile>>,
     precedence: &[MetadataSource],
+    parse_subtitles: bool,
 ) -> BookSourcePlan {
     let (folder, wanted): (&str, Option<String>) = if root_file {
         let stem = key.rsplit_once('.').map(|(s, _)| s).unwrap_or(key);
@@ -700,7 +706,7 @@ fn plan_sources(
         .map(|f| (f.abs_path.clone(), f.size_bytes, f.mtime_us))
         .collect();
     BookSourcePlan {
-        fingerprint: crate::book_meta::sources_fingerprint(precedence, &used),
+        fingerprint: crate::book_meta::sources_fingerprint(precedence, parse_subtitles, &used),
         files,
     }
 }
@@ -730,8 +736,8 @@ pub async fn scan_audiobooks(
             .push("library has no paths configured".to_string());
         return Ok(report);
     }
-    let precedence: Vec<String> =
-        sqlx::query_scalar("SELECT metadata_precedence FROM libraries WHERE id = $1")
+    let (precedence, parse_subtitles): (Vec<String>, bool) =
+        sqlx::query_as("SELECT metadata_precedence, parse_subtitles FROM libraries WHERE id = $1")
             .bind(library_id)
             .fetch_optional(pool)
             .await?
@@ -769,7 +775,7 @@ pub async fn scan_audiobooks(
             if !book_sources.contains_key(&key) {
                 book_sources.insert(
                     key.clone(),
-                    plan_sources(&key, root_file, &walk.sources, &precedence),
+                    plan_sources(&key, root_file, &walk.sources, &precedence, parse_subtitles),
                 );
             }
             books.entry(key).or_default().push((file, disc));
@@ -869,6 +875,7 @@ pub async fn scan_audiobooks(
                 files,
                 sources: plan,
                 precedence: &precedence,
+                parse_subtitles,
             };
             let (id, embedded) = rebuild_book(pool, job_id, &book, &mut report).await?;
             (id, Some(embedded))
@@ -921,6 +928,7 @@ struct BookToBuild<'a> {
     files: &'a [(DiscoveredAudio, Option<u32>)],
     sources: &'a BookSourcePlan,
     precedence: &'a [MetadataSource],
+    parse_subtitles: bool,
 }
 
 /// An embedded cover found while probing: the track and its picture
@@ -1004,7 +1012,7 @@ async fn rebuild_book(
     let files = &book.sources.files;
     let mut source_errors: Vec<(String, String)> = Vec::new();
     let mut sources = BookSources {
-        folder: crate::book_meta::folder_fields(book.key, book.root_file),
+        folder: crate::book_meta::folder_fields(book.key, book.root_file, book.parse_subtitles),
         tags: crate::book_meta::tag_fields(book.root_file, probed.first().map(|p| &p.2)),
         nfo: read_source(
             files.nfo.as_deref(),
@@ -1364,8 +1372,15 @@ mod tests {
         assert_eq!(disc_folder_number("CD 1"), Some(1));
         assert_eq!(disc_folder_number("cd1"), Some(1));
         assert_eq!(disc_folder_number("Disc 02"), Some(2));
-        assert_eq!(disc_folder_number("Disk-3"), Some(3));
-        assert_eq!(disc_folder_number("Part_4"), Some(4));
+        assert_eq!(disc_folder_number("Disk 3"), Some(3));
+        assert_eq!(disc_folder_number("DISK 123"), Some(123));
+        // AB11: as Audiobookshelf reads them, nothing else is a disc.
+        assert_eq!(disc_folder_number("Part 1"), None);
+        assert_eq!(disc_folder_number("Part_4"), None);
+        assert_eq!(disc_folder_number("Disk-3"), None);
+        assert_eq!(disc_folder_number("Disc_1"), None);
+        assert_eq!(disc_folder_number("CD 1234"), None);
+        assert_eq!(disc_folder_number(" CD 1"), None);
         assert_eq!(disc_folder_number("CD 1 - Extras"), None);
         assert_eq!(disc_folder_number("Part One"), None);
         assert_eq!(disc_folder_number("Discworld"), None);
@@ -1386,6 +1401,11 @@ mod tests {
         assert_eq!(book_key_for("Single.m4b"), ("Single.m4b".into(), None));
         // A disc folder straight in the root is the book itself.
         assert_eq!(book_key_for("CD 1/01.mp3"), ("CD 1".into(), None));
+        // AB11: a `Part` folder is a book of its own, as ABS reads it.
+        assert_eq!(
+            book_key_for("Jane Author/Big Book/Part 1/01.mp3"),
+            ("Jane Author/Big Book/Part 1".into(), None)
+        );
     }
 
     #[test]
@@ -1625,6 +1645,7 @@ mod tests {
             true,
             &walk.sources,
             &crate::book_meta::DEFAULT_PRECEDENCE,
+            false,
         );
         assert!(plan.files.sidecar.unwrap().ends_with("Single.parlour.json"));
         let plan = plan_sources(
@@ -1632,6 +1653,7 @@ mod tests {
             false,
             &walk.sources,
             &crate::book_meta::DEFAULT_PRECEDENCE,
+            false,
         );
         assert!(plan.files.nfo.is_some() && plan.files.sidecar.is_none());
         assert_eq!(plan.fingerprint.lines().count(), 5, "rules, order, 3 files");

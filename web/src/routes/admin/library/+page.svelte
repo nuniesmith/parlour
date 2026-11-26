@@ -6,10 +6,18 @@
   // AB6 (D30): an audiobooks library's "Match metadata" is a quick
   // match (Google Books, fills gaps only), and its books' local
   // metadata sources merge in an order set here.
+  // AB11 (D28/D29): an audiobooks library's own settings, as
+  // Audiobookshelf keeps them — parse subtitles from title folders, and
+  // when a book counts as finished.
   import { onMount } from 'svelte';
   import { api } from '$lib/api';
   import { loadSession } from '$lib/session.svelte';
-  import { METADATA_SOURCES, type LibraryDetail, type MetadataPrecedence } from '$lib/types';
+  import {
+    METADATA_SOURCES,
+    type AudiobookSettings,
+    type LibraryDetail,
+    type MetadataPrecedence,
+  } from '$lib/types';
 
   let error = $state<string | null>(null);
   let notice = $state<string | null>(null);
@@ -20,6 +28,11 @@
    *  source in order, and whether it is read. */
   let precedence = $state<Record<string, { id: string; on: boolean }[]>>({});
   let precedenceDefault = $state<string[]>([]);
+  /** AB11: each audiobooks library's settings as edited here; a blank
+   *  percentage (null) is "off". */
+  let bookSettings = $state<
+    Record<string, { parse_subtitles: boolean; seconds: number; percent: number | null }>
+  >({});
 
   async function loadLibraries() {
     const { data, error: err } = await api<LibraryDetail[]>('/api/v1/admin/libraries');
@@ -37,6 +50,10 @@
         `/api/v1/admin/libraries/${lib.id}/metadata-precedence`,
       );
       if (p) setPrecedence(p);
+      const { data: st } = await api<AudiobookSettings>(
+        `/api/v1/admin/libraries/${lib.id}/audiobook-settings`,
+      );
+      if (st) setBookSettings(st);
     }
     loaded = true;
   }
@@ -68,6 +85,41 @@
       setPrecedence(data);
       notice = `${lib.name}: metadata sources saved. The next scan merges every book again in this order.`;
     } else error = err ?? 'Could not save the metadata sources.';
+  }
+
+  function setBookSettings(st: AudiobookSettings) {
+    bookSettings[st.library_id] = {
+      parse_subtitles: st.parse_subtitles,
+      seconds: st.finish_remaining_seconds,
+      percent: st.finish_percent,
+    };
+  }
+
+  async function saveBookSettings(lib: LibraryDetail) {
+    error = null;
+    notice = null;
+    const st = bookSettings[lib.id];
+    // An emptied number input binds null (or ''): both mean "off".
+    const raw: unknown = st.percent;
+    const percent =
+      raw === null || raw === undefined || raw === '' || Number.isNaN(Number(raw))
+        ? null
+        : Number(raw);
+    const { data, error: err } = await api<AudiobookSettings>(
+      `/api/v1/admin/libraries/${lib.id}/audiobook-settings`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({
+          parse_subtitles: st.parse_subtitles,
+          finish_remaining_seconds: Number(st.seconds),
+          finish_percent: percent,
+        }),
+      },
+    );
+    if (data) {
+      setBookSettings(data);
+      notice = `${lib.name}: audiobook settings saved. Subtitles apply at the next scan; finishing applies from the next listen.`;
+    } else error = err ?? 'Could not save the audiobook settings.';
   }
 
   onMount(loadLibraries);
@@ -317,6 +369,52 @@
           <button class="btn small" onclick={() => savePrecedence(lib, precedenceDefault)}
             >Back to the default</button
           >
+        </div>
+      </section>
+    {/each}
+  </div>
+{/if}
+
+{#if libraries.some((l) => l.kind === 'audiobooks')}
+  <h2>Audiobook settings</h2>
+  <p class="dim">
+    As Audiobookshelf has them. A title folder named
+    <span class="mono">Title - Subtitle</span> gives a subtitle only when subtitles are parsed
+    (off by default). A book counts as finished once less than the given time is left, or —
+    when a percentage is set — once listening passes it, which then replaces the time.
+  </p>
+  <div class="sidecar-list">
+    {#each libraries.filter((l) => l.kind === 'audiobooks' && bookSettings[l.id]) as lib (lib.id)}
+      <section class="sidecar-card" aria-label={`Audiobook settings of ${lib.name}`}>
+        <div class="sidecar-head"><h3>{lib.name}</h3></div>
+        <div class="field">
+          <label
+            ><input type="checkbox" bind:checked={bookSettings[lib.id].parse_subtitles} />
+            Parse subtitles from title folders</label
+          >
+        </div>
+        <div class="field">
+          <label for={`finish-s-${lib.id}`}>Finished with less than this left (seconds, 0 = off)</label>
+          <input
+            id={`finish-s-${lib.id}`}
+            type="number"
+            min="0"
+            max="86400"
+            bind:value={bookSettings[lib.id].seconds}
+          />
+        </div>
+        <div class="field">
+          <label for={`finish-p-${lib.id}`}>Or finished past this percentage (blank = off)</label>
+          <input
+            id={`finish-p-${lib.id}`}
+            type="number"
+            min="1"
+            max="100"
+            bind:value={bookSettings[lib.id].percent}
+          />
+        </div>
+        <div class="actions">
+          <button class="btn small primary" onclick={() => saveBookSettings(lib)}>Save</button>
         </div>
       </section>
     {/each}

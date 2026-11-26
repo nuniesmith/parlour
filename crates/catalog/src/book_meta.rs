@@ -9,8 +9,8 @@
 //!
 //! `folder` → `tags` → `nfo` → `txt` → `opf` → `abs_json` → `sidecar`
 //!
-//! - `folder` — the book folder's name (title) and the author folder
-//!   above it;
+//! - `folder` — the title folder's name, parsed (AB11), the author
+//!   folder and the series folder;
 //! - `tags` — the audio tags of the **first track** in disc/track
 //!   order;
 //! - `nfo` — an Audiobookshelf-style `.nfo` (`Key: value` lines);
@@ -350,47 +350,259 @@ fn file_stem(rel_path: &str) -> String {
         .to_string()
 }
 
+/// The folders above a book's title folder that count, nearest first
+/// (D28, Audiobookshelf's rule): only the three folders nearest the
+/// book. With two or more above the title, the one right above is the
+/// **series** and the next the **author**; with one, it is the
+/// author. Anything higher (`Genre/…`) is ignored. A book that is one
+/// file in a library root has neither.
+fn author_and_series_folders(book_key: &str, root_file: bool) -> (Option<&str>, Option<&str>) {
+    if root_file {
+        return (None, None);
+    }
+    let parts: Vec<&str> = book_key.split('/').filter(|p| !p.is_empty()).collect();
+    let n = parts.len();
+    match n {
+        0 | 1 => (None, None),
+        2 => (Some(parts[0]), None),
+        _ => (Some(parts[n - 3]), Some(parts[n - 2])),
+    }
+}
+
 /// The series folder of a book folder (AB7, D28): the folder right
 /// above the title folder, only when two or more folders sit above
 /// the title (`Author/Series/Title`); `Author/Title` has none, and
 /// neither has a book that is one file in a library root. Only the
 /// three folders nearest the book count, so in
-/// `Genre/Author/Series/Title` the series is `Series`. The folder
-/// gives no sequence: reading one from the title folder's name
-/// (`Book 2 - Title`) is AB11's title-folder parsing.
+/// `Genre/Author/Series/Title` the series is `Series`. Its sequence
+/// comes from the title folder's name ([`parse_title_folder`], AB11).
 pub fn folder_series(book_key: &str, root_file: bool) -> Option<String> {
-    if root_file {
-        return None;
-    }
-    let parts: Vec<&str> = book_key.split('/').filter(|p| !p.is_empty()).collect();
-    (parts.len() >= 3)
-        .then(|| parts[parts.len() - 2].trim().to_string())
+    author_and_series_folders(book_key, root_file)
+        .1
+        .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
 }
 
-/// The `folder` source: the book folder's name as the title (a root
-/// file's name without its extension), and — for a book inside a
-/// folder — the top-level folder as its author, as AB2 had it
-/// (`Author/Title`, `Author/Series/Title`), and the series folder
-/// (AB7, [`folder_series`]).
-pub fn folder_fields(book_key: &str, root_file: bool) -> BookFields {
-    let title = if root_file {
-        file_stem(book_key)
+/// What a title folder's name says (AB11, D28: Audiobookshelf's
+/// title-folder parsing). `None`/empty means the name didn't say it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TitleFolder {
+    pub title: String,
+    pub subtitle: Option<String>,
+    pub sequence: Option<String>,
+    pub year: Option<i32>,
+    pub narrators: Vec<String>,
+    pub asin: Option<String>,
+}
+
+/// An ASIN in square brackets: exactly ten capital letters or digits,
+/// standing at the start, at the end, or between spaces. The first
+/// one is taken out of the name.
+fn take_asin(name: &str) -> (String, Option<String>) {
+    let b = name.as_bytes();
+    let mut i = 0;
+    while let Some(off) = name[i..].find('[') {
+        let at = i + off;
+        let end = at + 11;
+        if end < b.len()
+            && b[end] == b']'
+            && b[at + 1..end]
+                .iter()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+            && (at == 0 || b[at - 1] == b' ')
+            && (end + 1 == b.len() || b[end + 1] == b' ')
+        {
+            let asin = name[at + 1..end].to_string();
+            let rest = format!("{} {}", name[..at].trim_end(), name[end + 1..].trim_start());
+            return (rest.trim().to_string(), Some(asin));
+        }
+        i = at + 1;
+    }
+    (name.to_string(), None)
+}
+
+/// A narrator in braces at the very end, after a space:
+/// `Title {Jim Dale}`. The last ` {` opens it.
+fn take_narrator(name: &str) -> (String, Option<String>) {
+    if let Some(body) = name.strip_suffix('}') {
+        if let Some(at) = body.rfind(" {") {
+            let narrator = body[at + 2..].trim();
+            if !narrator.is_empty() {
+                return (body[..at].trim().to_string(), Some(narrator.to_string()));
+            }
+        }
+    }
+    (name.to_string(), None)
+}
+
+/// One ` - `-separated part read as a series sequence: an optional
+/// label (`Vol `, `Vol. `, `Volume `, `Book `, any case), up to three
+/// digits with an optional decimal of one or two digits, an optional
+/// trailing dot, then the end or a space and more text. More text is
+/// accepted only after a label or a trailing dot, so `101 Dalmatians`
+/// is a title and `101. Dalmatians` is book 101. Returns the sequence
+/// and what is left of the part.
+fn sequence_part(part: &str) -> Option<(String, String)> {
+    let lower = part.to_ascii_lowercase();
+    let label = ["vol. ", "vol ", "volume ", "book "]
+        .iter()
+        .find(|l| lower.starts_with(*l))
+        .map(|l| l.len())
+        .unwrap_or(0);
+    let s = &part[label..];
+    let b = s.as_bytes();
+    let mut i = 0;
+    while i < b.len() && i < 3 && b[i].is_ascii_digit() {
+        i += 1;
+    }
+    let int_digits = i;
+    // A decimal: a dot followed by one or two digits.
+    if i < b.len() && b[i] == b'.' {
+        let mut j = i + 1;
+        while j < b.len() && j - (i + 1) < 2 && b[j].is_ascii_digit() {
+            j += 1;
+        }
+        if j > i + 1 {
+            i = j;
+        }
+    }
+    let sequence = &s[..i];
+    if int_digits == 0 && !sequence.starts_with('.') || sequence.is_empty() {
+        return None;
+    }
+    let mut rest = &s[i..];
+    let dot = rest.starts_with('.');
+    if dot {
+        rest = &rest[1..];
+    }
+    let leftover = if rest.is_empty() {
+        ""
     } else {
-        book_key.rsplit('/').next().unwrap_or(book_key).to_string()
+        rest.strip_prefix(' ')?
     };
-    let authors = if root_file {
-        None
-    } else {
-        book_key
-            .split_once('/')
-            .map(|(top, _)| split_folder_authors(top))
-            .filter(|a| !a.is_empty())
+    if !leftover.trim().is_empty() && label == 0 && !dot {
+        return None;
+    }
+    Some((sequence.to_string(), leftover.trim().to_string()))
+}
+
+/// A publish year at the very start: four digits, optionally in
+/// parentheses, then a hyphen (spaces around it optional) and the
+/// rest of the name: `1994 - Title`, `(1994) - Title`, `1994-Title`.
+fn take_year(name: &str) -> (String, Option<i32>) {
+    let t = name.trim_start();
+    let inner = t.strip_prefix('(').unwrap_or(t);
+    let open = inner.len() != t.len();
+    let digits = inner
+        .get(..4)
+        .filter(|d| d.bytes().all(|c| c.is_ascii_digit()));
+    if let Some(d) = digits {
+        let mut rest = &inner[4..];
+        if open {
+            match rest.strip_prefix(')') {
+                Some(r) => rest = r,
+                None => return (name.to_string(), None),
+            }
+        } else if let Some(r) = rest.strip_prefix(')') {
+            rest = r;
+        }
+        if let Some(r) = rest.trim_start().strip_prefix('-') {
+            let title = r.trim();
+            if !title.is_empty() {
+                return (title.to_string(), d.parse().ok());
+            }
+        }
+    }
+    (name.to_string(), None)
+}
+
+/// Parse a title folder's name, Audiobookshelf's way (D28, AB11), in
+/// its order: an ASIN `[…]`, a narrator `{…}` at the end, a series
+/// sequence (only when the book has a series folder: the first
+/// ` - `-separated part that reads as one, see [`sequence_part`]), a
+/// publish year at the start, and — only with the library's
+/// `parse_subtitles` on — a subtitle after the first ` - `. Narrators
+/// are split as folder authors are. When nothing is left for a title,
+/// the name is the title, untouched.
+pub fn parse_title_folder(name: &str, has_series: bool, parse_subtitles: bool) -> TitleFolder {
+    let raw = name.trim();
+    let (rest, asin) = take_asin(raw);
+    let (rest, narrator) = take_narrator(&rest);
+    let mut rest = rest;
+    let mut sequence = None;
+    if has_series {
+        let parts: Vec<&str> = rest.split(" - ").collect();
+        if let Some((i, (seq, left))) = parts
+            .iter()
+            .enumerate()
+            .find_map(|(i, p)| sequence_part(p).map(|r| (i, r)))
+        {
+            sequence = Some(seq);
+            let mut kept: Vec<String> = parts.iter().map(|p| p.to_string()).collect();
+            if left.is_empty() {
+                kept.remove(i);
+            } else {
+                kept[i] = left;
+            }
+            rest = kept.join(" - ");
+        }
+    }
+    let (rest, year) = take_year(&rest);
+    let (title, subtitle) = match rest.split_once(" - ") {
+        Some((t, sub)) if parse_subtitles && !sub.trim().is_empty() => {
+            (t.trim().to_string(), Some(sub.trim().to_string()))
+        }
+        _ => (rest.trim().to_string(), None),
     };
+    TitleFolder {
+        title: if title.is_empty() {
+            raw.to_string()
+        } else {
+            title
+        },
+        subtitle,
+        sequence,
+        year,
+        narrators: narrator
+            .map(|n| split_folder_authors(&n))
+            .unwrap_or_default(),
+        asin,
+    }
+}
+
+/// The `folder` source (AB2; AB6, AB7, AB11 aligned it with
+/// Audiobookshelf, D28):
+///
+/// - the **title folder's name**, parsed ([`parse_title_folder`]):
+///   title, and what the name carries — ASIN, narrators, publish year,
+///   the sequence in the series folder, the subtitle when the library
+///   parses subtitles. A book that is one file in a library root keeps
+///   its file name, without the extension, as the title, unparsed;
+/// - the **author folder**, the nearest of the three folders that
+///   count (`Author/Title`, `Author/Series/Title`; `A/B/Author/Series/
+///   Title` too), split as ABS splits names;
+/// - the **series folder** ([`folder_series`]), with the sequence the
+///   title folder gave.
+pub fn folder_fields(book_key: &str, root_file: bool, parse_subtitles: bool) -> BookFields {
+    if root_file {
+        return BookFields {
+            title: Some(file_stem(book_key)),
+            ..Default::default()
+        }
+        .cleaned();
+    }
+    let (author, series) = author_and_series_folders(book_key, root_file);
+    let series = series.map(str::trim).filter(|s| !s.is_empty());
+    let name = book_key.rsplit('/').next().unwrap_or(book_key);
+    let parsed = parse_title_folder(name, series.is_some(), parse_subtitles);
     BookFields {
-        title: Some(title),
-        authors,
-        series: folder_series(book_key, root_file).map(|name| vec![SeriesEntry::new(&name, None)]),
+        title: Some(parsed.title),
+        subtitle: parsed.subtitle,
+        authors: author.map(split_folder_authors).filter(|a| !a.is_empty()),
+        narrators: Some(parsed.narrators).filter(|n| !n.is_empty()),
+        year: parsed.year,
+        asin: parsed.asin,
+        series: series.map(|name| vec![SeriesEntry::new(name, parsed.sequence.as_deref())]),
         ..Default::default()
     }
     .cleaned()
@@ -1072,12 +1284,18 @@ pub fn is_source_name(name: &str) -> bool {
 }
 
 /// Bumped when the merge rules change, so every book is merged again
-/// at the next scan.
-pub const MERGE_RULES_VERSION: &str = "ab7.1";
+/// at the next scan. `ab11.1`: the title folder's name is parsed and
+/// the author folder is the nearest one (AB11).
+pub const MERGE_RULES_VERSION: &str = "ab11.1";
 
 /// The fingerprint a book's merge depends on: the rules' version, the
-/// precedence, and each source file's path, size and mtime (µs).
-pub fn sources_fingerprint(precedence: &[MetadataSource], files: &[(String, u64, i64)]) -> String {
+/// precedence, the library's parse-subtitles setting (AB11), and each
+/// source file's path, size and mtime (µs).
+pub fn sources_fingerprint(
+    precedence: &[MetadataSource],
+    parse_subtitles: bool,
+    files: &[(String, u64, i64)],
+) -> String {
     let mut lines = vec![
         MERGE_RULES_VERSION.to_string(),
         precedence
@@ -1086,6 +1304,9 @@ pub fn sources_fingerprint(precedence: &[MetadataSource], files: &[(String, u64,
             .collect::<Vec<_>>()
             .join(","),
     ];
+    if parse_subtitles {
+        lines.push("subtitles".to_string());
+    }
     let mut f: Vec<String> = files
         .iter()
         .map(|(p, size, mtime)| format!("{p}\t{size}\t{mtime}"))
@@ -1136,7 +1357,7 @@ mod tests {
     #[test]
     fn later_sources_win_field_by_field_and_lists_whole() {
         let sources = BookSources {
-            folder: folder_fields("Folder Author/Folder Title", false),
+            folder: folder_fields("Folder Author/Folder Title", false, false),
             tags: BookFields {
                 title: s("Tag Title"),
                 authors: list(&["Tag Author"]),
@@ -1223,13 +1444,13 @@ mod tests {
         assert_eq!(split_folder_authors("Rand"), ["Rand"]);
         assert!(split_folder_authors(" , ").is_empty());
 
-        let f = folder_fields("Doe, Jane/A Series/Book Two", false);
+        let f = folder_fields("Doe, Jane/A Series/Book Two", false, false);
         assert_eq!(f.title, s("Book Two"));
         assert_eq!(f.authors, list(&["Jane Doe"]));
-        let f = folder_fields("Loose Book.mp3", true);
+        let f = folder_fields("Loose Book.mp3", true, false);
         assert_eq!(f.title, s("Loose Book"));
         assert_eq!(f.authors, None);
-        assert_eq!(folder_fields("Only Folder", false).authors, None);
+        assert_eq!(folder_fields("Only Folder", false, false).authors, None);
     }
 
     fn probe(tags: &[(&str, &str)]) -> AudioProbe {
@@ -1311,9 +1532,12 @@ mod tests {
         assert_eq!(folder_series("Jane Doe/Book Two", false), None);
         assert_eq!(folder_series("Book Two", false), None);
         assert_eq!(folder_series("A/B/Loose.m4b", true), None);
-        let f = folder_fields("Jane Doe/The Long Road/Book Two", false);
+        let f = folder_fields("Jane Doe/The Long Road/Book Two", false, false);
         assert_eq!(f.series, series(&[("The Long Road", None)]));
-        assert_eq!(folder_fields("Jane Doe/Book Two", false).series, None);
+        assert_eq!(
+            folder_fields("Jane Doe/Book Two", false, false).series,
+            None
+        );
     }
 
     #[test]
@@ -1395,7 +1619,7 @@ mod tests {
 
     #[test]
     fn a_later_source_replaces_the_series_whole() {
-        let folder = folder_fields("Jane Doe/The Long Road/Book Two", false);
+        let folder = folder_fields("Jane Doe/The Long Road/Book Two", false, false);
         let tags = BookFields {
             series: series(&[("Other", Some("1")), ("Third", None)]),
             ..Default::default()
@@ -1686,9 +1910,321 @@ mod tests {
         assert!(is_source_name("X.NFO") && is_source_name("x.parlour.json"));
         assert!(!is_source_name("notes.txt") && !is_source_name("cover.jpg"));
 
-        let a = sources_fingerprint(&DEFAULT_PRECEDENCE, &[("/b/a.nfo".into(), 3, 7)]);
-        let b = sources_fingerprint(&[MetadataSource::Tags], &[("/b/a.nfo".into(), 3, 7)]);
-        let c = sources_fingerprint(&DEFAULT_PRECEDENCE, &[("/b/a.nfo".into(), 4, 7)]);
+        let a = sources_fingerprint(&DEFAULT_PRECEDENCE, false, &[("/b/a.nfo".into(), 3, 7)]);
+        let b = sources_fingerprint(&[MetadataSource::Tags], false, &[("/b/a.nfo".into(), 3, 7)]);
+        let c = sources_fingerprint(&DEFAULT_PRECEDENCE, false, &[("/b/a.nfo".into(), 4, 7)]);
         assert!(a != b && a != c && a.starts_with(MERGE_RULES_VERSION));
+        let d = sources_fingerprint(&DEFAULT_PRECEDENCE, true, &[("/b/a.nfo".into(), 3, 7)]);
+        assert_ne!(a, d, "the parse-subtitles setting re-merges a book");
+    }
+
+    /// (title, subtitle, sequence, year, narrators, asin)
+    type Parsed<'a> = (
+        &'a str,
+        Option<&'a str>,
+        Option<&'a str>,
+        Option<i32>,
+        &'a [&'a str],
+        Option<&'a str>,
+    );
+
+    fn parsed(name: &str, has_series: bool, subtitles: bool) -> TitleFolder {
+        parse_title_folder(name, has_series, subtitles)
+    }
+
+    fn expect(t: &TitleFolder, want: Parsed<'_>, name: &str) {
+        let got: Parsed<'_> = (
+            t.title.as_str(),
+            t.subtitle.as_deref(),
+            t.sequence.as_deref(),
+            t.year,
+            &[],
+            t.asin.as_deref(),
+        );
+        assert_eq!(
+            (got.0, got.1, got.2, got.3, got.5),
+            (want.0, want.1, want.2, want.3, want.5),
+            "{name}"
+        );
+        assert_eq!(t.narrators, want.4, "{name}");
+    }
+
+    #[test]
+    fn title_folders_are_parsed_like_audiobookshelf() {
+        // (folder name, has a series folder, parse subtitles, expected)
+        let cases: &[(&str, bool, bool, Parsed<'_>)] = &[
+            ("Title", true, true, ("Title", None, None, None, &[], None)),
+            (
+                "Title [B0015T963C]",
+                true,
+                true,
+                ("Title", None, None, None, &[], Some("B0015T963C")),
+            ),
+            (
+                "[B0015T963C] Title",
+                true,
+                true,
+                ("Title", None, None, None, &[], Some("B0015T963C")),
+            ),
+            (
+                "Title {Jim Dale}",
+                true,
+                true,
+                ("Title", None, None, None, &["Jim Dale"], None),
+            ),
+            (
+                "Title {Ann Reader} [B0015T963C]",
+                true,
+                true,
+                (
+                    "Title",
+                    None,
+                    None,
+                    None,
+                    &["Ann Reader"],
+                    Some("B0015T963C"),
+                ),
+            ),
+            // Lower case, or not ten characters: not an ASIN.
+            (
+                "Title [b0015t963c]",
+                true,
+                true,
+                ("Title [b0015t963c]", None, None, None, &[], None),
+            ),
+            (
+                "Title [B0015T963]",
+                true,
+                true,
+                ("Title [B0015T963]", None, None, None, &[], None),
+            ),
+            (
+                "Title[B0015T963C]",
+                true,
+                true,
+                ("Title[B0015T963C]", None, None, None, &[], None),
+            ),
+            (
+                "1994 - Title",
+                false,
+                true,
+                ("Title", None, None, Some(1994), &[], None),
+            ),
+            (
+                "(1994) - Title",
+                false,
+                true,
+                ("Title", None, None, Some(1994), &[], None),
+            ),
+            (
+                "1994-Title",
+                false,
+                true,
+                ("Title", None, None, Some(1994), &[], None),
+            ),
+            (
+                "Title (2001)",
+                false,
+                true,
+                ("Title (2001)", None, None, None, &[], None),
+            ),
+            (
+                "2001 A Space Odyssey",
+                false,
+                true,
+                ("2001 A Space Odyssey", None, None, None, &[], None),
+            ),
+            (
+                "Book 2 - Title",
+                true,
+                true,
+                ("Title", None, Some("2"), None, &[], None),
+            ),
+            (
+                "Vol. 3 Title Here - Subtitle",
+                true,
+                true,
+                ("Title Here", Some("Subtitle"), Some("3"), None, &[], None),
+            ),
+            (
+                "Title - Subtitle - Vol 12",
+                true,
+                true,
+                ("Title", Some("Subtitle"), Some("12"), None, &[], None),
+            ),
+            (
+                "Volume 4 - Title",
+                true,
+                false,
+                ("Title", None, Some("4"), None, &[], None),
+            ),
+            (
+                "1. Title",
+                true,
+                true,
+                ("Title", None, Some("1"), None, &[], None),
+            ),
+            (
+                "1 - Title",
+                true,
+                true,
+                ("Title", None, Some("1"), None, &[], None),
+            ),
+            (
+                "0.5 - Book Title",
+                true,
+                true,
+                ("Book Title", None, Some("0.5"), None, &[], None),
+            ),
+            (
+                "2.25. Title",
+                true,
+                true,
+                ("Title", None, Some("2.25"), None, &[], None),
+            ),
+            (
+                "101 Dalmatians",
+                true,
+                true,
+                ("101 Dalmatians", None, None, None, &[], None),
+            ),
+            (
+                "101. Dalmatians",
+                true,
+                true,
+                ("Dalmatians", None, Some("101"), None, &[], None),
+            ),
+            ("1984", true, true, ("1984", None, None, None, &[], None)),
+            ("1984", false, true, ("1984", None, None, None, &[], None)),
+            (
+                "Vol 1 - 1994 - Title",
+                true,
+                true,
+                ("Title", None, Some("1"), Some(1994), &[], None),
+            ),
+            (
+                "1994 - Vol 1 - Title",
+                true,
+                true,
+                ("Title", None, Some("1"), Some(1994), &[], None),
+            ),
+            // No series folder: no sequence, so the rest is a subtitle.
+            (
+                "Vol 1 - 1994 - Title",
+                false,
+                true,
+                ("Vol 1", Some("1994 - Title"), None, None, &[], None),
+            ),
+            (
+                "Book Two - Title",
+                true,
+                true,
+                ("Book Two", Some("Title"), None, None, &[], None),
+            ),
+            // Subtitles off (the default): ` - ` stays in the title.
+            (
+                "Title - Subtitle",
+                true,
+                false,
+                ("Title - Subtitle", None, None, None, &[], None),
+            ),
+            (
+                "Book Two - Title",
+                true,
+                false,
+                ("Book Two - Title", None, None, None, &[], None),
+            ),
+            // Several narrators split as folder authors are.
+            (
+                "Title {Ann Reader & Bob Voice}",
+                false,
+                false,
+                (
+                    "Title",
+                    None,
+                    None,
+                    None,
+                    &["Ann Reader", "Bob Voice"],
+                    None,
+                ),
+            ),
+            // Everything at once.
+            (
+                "Vol 2 - 1999 - The Middle - A Subtitle {Ann Reader} [B000000002]",
+                true,
+                true,
+                (
+                    "The Middle",
+                    Some("A Subtitle"),
+                    Some("2"),
+                    Some(1999),
+                    &["Ann Reader"],
+                    Some("B000000002"),
+                ),
+            ),
+            // Nothing left for a title: the name stays the title.
+            (
+                "Book 3",
+                true,
+                false,
+                ("Book 3", None, Some("3"), None, &[], None),
+            ),
+            (
+                "[B0015T963C]",
+                false,
+                false,
+                ("[B0015T963C]", None, None, None, &[], Some("B0015T963C")),
+            ),
+        ];
+        for (name, has_series, subtitles, want) in cases {
+            expect(&parsed(name, *has_series, *subtitles), *want, name);
+        }
+    }
+
+    #[test]
+    fn the_folder_source_reads_the_nearest_folders_and_the_title_folder() {
+        // Item 4: the nearest author folder, not the top-level one.
+        let f = folder_fields(
+            "Fantasy/Jane Doe/The Long Road/Book 2 - Title",
+            false,
+            false,
+        );
+        assert_eq!(f.authors, list(&["Jane Doe"]));
+        assert_eq!(f.series, series(&[("The Long Road", Some("2"))]));
+        assert_eq!(f.title, s("Title"));
+        let f = folder_fields("A/B/Jane Doe/The Long Road/1. Title", false, false);
+        assert_eq!(f.authors, list(&["Jane Doe"]));
+        assert_eq!(f.series, series(&[("The Long Road", Some("1"))]));
+        // Three folders: ABS reads the middle one as the series, so in
+        // `Genre/Author/Title` the genre is the author, as in ABS.
+        let f = folder_fields("Fantasy/Jane Doe/Title", false, false);
+        assert_eq!(f.authors, list(&["Fantasy"]));
+        assert_eq!(f.series, series(&[("Jane Doe", None)]));
+        // Two: the author; one: nothing above the title.
+        let f = folder_fields(
+            "Jane Doe/1994 - Title {Ann Reader} [B0015T963C]",
+            false,
+            false,
+        );
+        assert_eq!(f.authors, list(&["Jane Doe"]));
+        assert_eq!(f.series, None);
+        assert_eq!(f.title, s("Title"));
+        assert_eq!(f.year, Some(1994));
+        assert_eq!(f.narrators, list(&["Ann Reader"]));
+        assert_eq!(f.asin, s("B0015T963C"));
+        // No series folder: `Book 2 -` is not a sequence.
+        assert_eq!(
+            folder_fields("Jane Doe/Book 2 - Title", false, false).title,
+            s("Book 2 - Title")
+        );
+        // The library's subtitle setting.
+        let f = folder_fields("Jane Doe/Title - The Subtitle", false, true);
+        assert_eq!((f.title, f.subtitle), (s("Title"), s("The Subtitle")));
+        let f = folder_fields("Jane Doe/Title - The Subtitle", false, false);
+        assert_eq!((f.title, f.subtitle), (s("Title - The Subtitle"), None));
+        // A root file's name is not parsed.
+        let f = folder_fields("1994 - Loose [B0015T963C].m4b", true, true);
+        assert_eq!(f.title, s("1994 - Loose [B0015T963C]"));
+        assert_eq!((f.year, f.asin), (None, None));
     }
 }
