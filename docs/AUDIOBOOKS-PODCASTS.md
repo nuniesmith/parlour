@@ -123,7 +123,7 @@ matching and covers (AB6)" below.
 Several authors or narrators in one tag (`A, B`, `A & B`, `A; B`)
 are split. They are stored as `people` linked through `item_people`
 with roles `author` / `narrator`. That is the same table cast uses,
-so a later author page (AB7) is a query, not a migration.
+so the author page (AB7, built) is a query, not a migration.
 
 ### Chapters (AB2, built)
 
@@ -403,7 +403,9 @@ Each is a reading inside D30, not a new decision.
 8. **The `folder` source keeps AB2's author folder (the top level)**
    and reads the title folder's name raw. Nearest-folder authors and
    title-folder parsing (ASIN, narrator, sequence, year, subtitle)
-   are AB11 (follow-up items 3–4), and the series folder is AB7.
+   are AB11 (follow-up items 3–4), and the series folder is AB7
+   (*built: it is part of the `folder` source, "Series and authors
+   (AB7)"*).
 9. **Tag author splitting stays as AB2 has it** (follow-up item 5
    asked for this to be reviewed here); only folder names split ABS's
    way. The precedence work didn't need a change.
@@ -425,6 +427,166 @@ the book under the opt-in. **D36 (the audio tables) is also still
 open:** AB6 doesn't touch `book_progress` / `book_chapters`, and the
 bundle doesn't gain them.
 
+### Series and authors (AB7, built 2026-11-26)
+
+Built to **D28** (mirror Audiobookshelf's catalog model: series are
+their own records joined to books with a sequence on the link, so a
+book can sit in several series; authors are records linked to books).
+ABS behaviour was read from its server source on 2026-11-26
+(behaviour only, nothing copied). Code: `crates/catalog/src/book_meta.rs`
+(`folder_series`, `tag_series`, the `series` field of the merge),
+`crates/catalog/src/book_sync.rs` (`write_series`,
+`remove_empty_series`), `crates/server/src/series.rs` (the API),
+`web/src/lib/BookShelf.svelte` / `BookGrid.svelte`,
+`web/src/routes/series/[id]`, `web/src/routes/author/[id]`. Migration
+`20261130000000_series.sql`.
+
+**What's stored.**
+
+- `series (id, library_id, name, sort_name, created_at)`: one per
+  library and name, the name compared without regard to case;
+  `sort_name` drops a leading article, as items' `sort_title` does.
+- `book_series (item_id, series_id, sequence, sort_order)`: a book's
+  place in a series. `sequence` is text as the source gave it (`1`,
+  `2.5`, `1a`), NULL when there was none; `sort_order` is the series'
+  position in the book's own list. The primary key is
+  `(item_id, series_id)`, so a book sits in a series once.
+- **Authors need no table.** They are the `people` linked through
+  `item_people` with role `author` (AB1, AB6's merge), so an author
+  page is a query.
+
+**Where a book's series come from.** A series is a book-level fact
+like the others AB6 merges: the merge gained a `series` list, and two
+of the existing sources give it. There is **no new source** in the
+precedence list, and nothing AB6 already merged changed.
+
+| source | series it gives |
+|---|---|
+| `folder` | the **series folder**: the folder right above the title folder, only when two or more folders sit above the title (`Author/Series/Title`), as D28 has it. `Author/Title` and a file in the library root have none. Only the three folders nearest the book count, so `Genre/Author/Series/Title` gives `Series`. No sequence (reading 2) |
+| `tags` | from the **first track** (D30), ABS's tag names: the name from `series`, else `show`, else `mvnm` (MP4's movement name); the sequence from `series-part`, else `episode_id`, else `mvin`, else `part`. When the name and the sequence both hold the same number (more than one) of `;`-separated parts, they pair up into several series; otherwise it is one series with both values taken whole. Only when there is no name tag: `grouping` (else `grp1`), split on `;`, each part `Name #sequence` (the sequence is the one word after the last ` #`) or just `Name` |
+
+- **Merge.** A list, like authors: a later source that names any
+  series replaces the book's list whole; one that names none says
+  nothing. With the default order, a book's series tags therefore
+  replace its series folder. A source left out of a library's
+  precedence list isn't read, so its series aren't either.
+- **Clean-up.** Names and sequences are trimmed; a blank name is
+  dropped; a name repeated in one book's list (without regard to
+  case) is kept once, the first time.
+
+**A re-scan stays idempotent.** A book's series links are rebuilt with
+its other merged fields, whenever AB6 re-merges it (new, changed or
+missing tracks, a changed metadata file, a changed precedence list):
+its links are deleted and written again from the merge, each series
+found by library and name or created. A re-scan therefore never
+duplicates a series or a link, and a book that isn't merged again
+keeps its links. The merge rules' version went to `ab7.1`, so the
+first scan after this change merges every book once (and probes it,
+as AB6's own first scan did) to fill in its series. At the end of
+every scan of a library, a series no book links to any more is
+removed. A book whose files went missing keeps its links, as it keeps
+its progress, and is shown unavailable on its series page.
+
+**API.** All under `/api/v1`, cookie session, scoped to the active
+profile's library access. A series or author the profile can't reach
+reads as 404.
+
+| Method + path | What |
+|---|---|
+| `GET /series?library_id=&q=` | Series the profile can reach, by `sort_name`: `id`, `library_id`, `name`, `sort_name`, `book_count`, `finished_count` (this profile's finished books in it), `cover_book_id` (the first book in sequence order that has a cover) |
+| `GET /series/{id}` | The above plus `books`: the book list's shape (AB3) in **sequence order** |
+| `GET /authors?library_id=&q=` | People credited as author on an audiobook the profile can reach, by name: `id` (the person), `name`, `book_count` |
+| `GET /authors/{id}?library_id=` | The above plus `books` (by title) and `series` (the series those books sit in, each with how many of the author's books it holds) |
+
+The book list and detail (`GET /audiobooks`, `GET /audiobooks/{id}`)
+gained `series` (`id`, `name`, `sequence`, in the book's own order)
+and `author_refs` (`id`, `name`, in the order of `authors`), and the
+book list's `q` now matches series names too.
+
+**Sequence order** is ABS's: the sequence read as a number (its
+leading number, so `1a` reads as 1; text with no leading number reads
+as 0, as ABS's cast does), books with no sequence last, then by title.
+
+**Web.** An audiobooks library's page has three views, **Books**,
+**Series** and **Authors** (`?view=series`, `?view=authors`), each with
+a search. A series tile shows a cover, the book count and how many
+this profile has finished; `/series/[id]` lists the series' books in
+sequence order, each marked "Book N", with links to its authors.
+`/author/[id]` lists the author's series and books. On `/book/[id]`
+the authors link to their pages, and each series reads "Book N of
+Series", linked.
+
+**Tests.** Unit (`book_meta`): the series folder, ABS's series tags
+(fallbacks, pairing, `grouping`), `Name #sequence` parsing, a later
+source replacing the list. Flow: `crates/server/tests/series_flow.rs`
+scans a library of ffmpeg-made books. It covers series from the folder
+and from tags, a name differing only in case, one book in two series,
+sequence order, the author pages, search, library access, a missing
+book, a precedence change, empty series removed, and re-scans that
+duplicate nothing.
+
+#### Readings made in AB7 — for the owner's veto
+
+Each is a reading inside D28 (and D30's merge), not a new decision.
+
+1. **Series ride in the existing `folder` and `tags` sources.** They
+   don't get a precedence entry of their own, and a later source's
+   series replace an earlier one's whole, as ABS does and as AB6
+   merges authors.
+2. **A folder series has no sequence yet.** ABS reads the sequence from
+   the title folder's name (`Book 2 - Title`, `Vol 1 -`, `1.`) when
+   there is a series folder. That is title-folder parsing, AB11's
+   follow-up item 3. Until then, a book whose series is known only
+   from its folder has no sequence, so it comes after the sequenced
+   books, by title.
+3. **Only the folder and the tags give series.** ABS also reads them
+   from an OPF (`calibre:series`) and from its `metadata.json`.
+   Parlour reads neither yet (a follow-up, if wanted). Parlour's
+   sidecar format (§13.15 of `IMPORT-EXPORT.md`) has no series, so a
+   sidecar says nothing about them. Neither match provider gives
+   series either, so a match leaves them as they are.
+4. **One series per library and name, without regard to case.** The
+   first spelling seen is kept. ABS's unique index is on the exact
+   name. Case-only variants as two series seemed the worse reading.
+5. **A book's links are rebuilt whole from its sources.** ABS edits
+   them in place and keeps a book's series when its sources go silent,
+   because ABS lets a user edit series by hand. Parlour has no series
+   editing, so the sources are the whole truth, and the links are
+   rebuilt the way AB6 rebuilds a book's other merged fields.
+6. **Empty series go at the end of every scan.** ABS removes series
+   that lost their last book in a scan. A missing book keeps its
+   links, so a series of only missing books stays, its books shown
+   unavailable.
+7. **Sequence order follows ABS's numeric cast**, including text with
+   no leading number reading as 0 (so a `Prequel` sorts first). Books
+   with no sequence come last, then ties go by title.
+8. **Authors are not per library.** ABS's authors are. Parlour's
+   `people` are shared across libraries (and with video cast), so an
+   author page spans every audiobooks library the profile can reach,
+   unless `?library_id=` narrows it (the library's Authors view
+   passes it). Lists sort by name as stored (first name first). ABS's
+   default author sort wasn't confirmed, and there is no last-first
+   sort. There are no author photos or bios: ABS takes those from
+   Audnexus, which AB6 left out.
+9. **Narrators stay `people` rows with role `narrator`** (follow-up
+   item 7, decided here as asked). ABS keeps a plain list of names on
+   the book, and nothing a listener sees differs. Keeping the rows
+   avoids a migration that would move data for no behaviour. Search
+   by narrator already works, a narrator filter would be a query, and
+   the export bundle already carries them through `item_people`. So
+   the decision implies no change. No narrator browse view is built:
+   it isn't in AB7's scope.
+10. **`series` and `book_series` stay out of the export bundle**
+    (`coverage.rs`: left out). They are rebuilt by the new host's scan
+    from the same folders and tags, like `book_metadata`, so format v1
+    is unchanged. If series ever come from a match or a hand edit, it
+    becomes the same question as D40.
+11. **The book list's search matches series names too**, as ABS's
+    search finds series.
+12. **The first scan after this change probes every book once**
+    (merge rules `ab7.1`), as AB6's did. On a large library that scan
+    is slow once, then unchanged books are skipped again.
+
 ### Later in Phase 10 (blocked on decisions)
 
 AB6 metadata providers and embedded covers (D30), AB7 series and
@@ -436,7 +598,7 @@ for codecs a client can't play (CL5).
 *2026-11-24:* all unblocked except AB9, which is **cancelled**
 (D27: no ABS import). AB6 follows D30, AB7 follows D28, AB8 follows
 D29 + D35; the details are in the list below. *2026-11-26: AB6 is
-built (above).*
+built (above). AB7 is built (above, "Series and authors (AB7)").*
 
 ### Follow-up from D28–D35 (where AB1–AB5 differ from ABS)
 
@@ -455,7 +617,9 @@ not yet scheduled in a PR:
    `Author/Series/Title`'s middle folder as the series. AB2 ignores
    it. AB7 adds `series` records and a book ↔ series join with a
    sequence on the link (a book can be in several series), filled
-   from that folder and from tags.
+   from that folder and from tags. *Done in AB7: the series folder
+   and ABS's series tags; the sequence from the title folder's name
+   waits for item 3.*
 3. **Title-folder parsing (AB2).** ABS parses the title folder for
    an ASIN `[…]`, a narrator `{…}`, a series sequence (`Vol 1 -`,
    `Book 2 -`, `1.`, decimals), a publish year (`1994 -`,
@@ -480,7 +644,8 @@ not yet scheduled in a PR:
    names on the book; AB1 stores them as `people` with role
    `narrator`. The browsing behaviour (list and filter by narrator)
    is the same either way. Decide in AB7 whether to keep `people`
-   rows; nothing user-visible depends on it.
+   rows; nothing user-visible depends on it. *Decided in AB7: keep the
+   `people` rows (AB7 reading 9); nothing changes.*
 8. **Auto-finish (AB4).** ABS marks finished when the remaining time
    drops below a per-library threshold (default 10 s), or at a
    per-library percentage when set (off by default). AB4 finishes

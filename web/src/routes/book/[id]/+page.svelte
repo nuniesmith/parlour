@@ -7,6 +7,7 @@
   // page has actually played, so opening a book changes nothing.
   // The last track ending marks the book finished.
   // AB6: admins can match the book by hand (BookMatch).
+  // AB7: its authors and series link to their pages.
   import { onMount, tick } from 'svelte';
   import { page } from '$app/state';
   import { api } from '$lib/api';
@@ -204,7 +205,23 @@
     <div class="info">
       <h1>{book.title}</h1>
       {#if book.subtitle}<p class="subtitle">{book.subtitle}</p>{/if}
-      {#if book.authors.length}<p class="by">by {book.authors.join(', ')}</p>{/if}
+      {#if book.author_refs.length}
+        <p class="by">
+          by
+          {#each book.author_refs as a, i (a.id)}{i > 0 ? ', ' : ''}<a
+              href={`/author/${a.id}?library_id=${book.library_id}`}>{a.name}</a
+            >{/each}
+        </p>
+      {:else if book.authors.length}
+        <p class="by">by {book.authors.join(', ')}</p>
+      {/if}
+      {#if book.series.length}
+        <p class="series">
+          {#each book.series as s, i (s.id)}{i > 0 ? ' · ' : ''}{s.sequence
+              ? `Book ${s.sequence} of `
+              : ''}<a href={`/series/${s.id}`}>{s.name}</a>{/each}
+        </p>
+      {/if}
       {#if book.narrators.length}<p class="dim">Read by {book.narrators.join(', ')}</p>{/if}
       <p class="dim">
         {[book.year, formatDurationMs(book.duration_ms), `${book.chapter_count} chapters`]
@@ -350,6 +367,13 @@
   }
   .by {
     font-size: 1.05rem;
+  }
+  .by a,
+  .series a {
+    color: inherit;
+  }
+  .series {
+    color: var(--text-dim);
   }
   .subtitle {
     font-size: 1.05rem;

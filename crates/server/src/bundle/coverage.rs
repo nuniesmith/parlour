@@ -456,6 +456,16 @@ pub const SCHEMA: &[Table] = &[
                    travels only as the book.parlour.json written beside the book",
     },
     Table::LeftOut {
+        name: "series",
+        why: "audiobook series (AB7); the new host's scan rebuilds them from each book's \
+              series folder and tags",
+    },
+    Table::LeftOut {
+        name: "book_series",
+        why: "a book's place in its series (AB7); the new host's scan rebuilds it from the \
+              book's series folder and tags",
+    },
+    Table::LeftOut {
         name: "_sqlx_migrations",
         why: "the new host keeps its own migration ledger",
     },

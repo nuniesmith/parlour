@@ -143,6 +143,27 @@ pub struct BookFields {
     pub language: Option<String>,
     pub google_books_id: Option<String>,
     pub open_library_id: Option<String>,
+    /// The series the book sits in, each with its sequence (AB7,
+    /// D28). A list like the others: a later source that names any
+    /// series replaces it whole.
+    pub series: Option<Vec<SeriesEntry>>,
+}
+
+/// One series a book sits in, and its place there (AB7, D28). The
+/// sequence is text as the source gave it (`1`, `2.5`, `1a`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SeriesEntry {
+    pub name: String,
+    pub sequence: Option<String>,
+}
+
+impl SeriesEntry {
+    pub fn new(name: &str, sequence: Option<&str>) -> SeriesEntry {
+        SeriesEntry {
+            name: name.to_string(),
+            sequence: sequence.map(str::to_string),
+        }
+    }
 }
 
 fn clean(s: Option<String>) -> Option<String> {
@@ -155,6 +176,21 @@ fn clean_list(v: Option<Vec<String>>) -> Option<Vec<String>> {
         list.into_iter()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty() && seen.insert(s.to_lowercase()))
+            .collect()
+    })
+}
+
+/// Names and sequences trimmed, blank names dropped, a repeated name
+/// (without regard to case) dropped after its first appearance.
+fn clean_series(v: Option<Vec<SeriesEntry>>) -> Option<Vec<SeriesEntry>> {
+    v.map(|list| {
+        let mut seen = HashSet::new();
+        list.into_iter()
+            .map(|e| SeriesEntry {
+                name: e.name.trim().to_string(),
+                sequence: clean(e.sequence),
+            })
+            .filter(|e| !e.name.is_empty() && seen.insert(e.name.to_lowercase()))
             .collect()
     })
 }
@@ -177,6 +213,7 @@ impl BookFields {
             language: clean(self.language),
             google_books_id: clean(self.google_books_id),
             open_library_id: clean(self.open_library_id),
+            series: clean_series(self.series),
         }
     }
 }
@@ -214,6 +251,11 @@ pub fn merge(base: &mut BookFields, src: &BookFields, authoritative: bool) {
     text(&mut base.language, &src.language);
     text(&mut base.google_books_id, &src.google_books_id);
     text(&mut base.open_library_id, &src.open_library_id);
+    if let Some(v) = &src.series {
+        if !v.is_empty() || authoritative {
+            base.series = Some(v.clone());
+        }
+    }
 }
 
 /// What each source said, read from one book's files.
@@ -308,10 +350,29 @@ fn file_stem(rel_path: &str) -> String {
         .to_string()
 }
 
+/// The series folder of a book folder (AB7, D28): the folder right
+/// above the title folder, only when two or more folders sit above
+/// the title (`Author/Series/Title`); `Author/Title` has none, and
+/// neither has a book that is one file in a library root. Only the
+/// three folders nearest the book count, so in
+/// `Genre/Author/Series/Title` the series is `Series`. The folder
+/// gives no sequence: reading one from the title folder's name
+/// (`Book 2 - Title`) is AB11's title-folder parsing.
+pub fn folder_series(book_key: &str, root_file: bool) -> Option<String> {
+    if root_file {
+        return None;
+    }
+    let parts: Vec<&str> = book_key.split('/').filter(|p| !p.is_empty()).collect();
+    (parts.len() >= 3)
+        .then(|| parts[parts.len() - 2].trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
 /// The `folder` source: the book folder's name as the title (a root
 /// file's name without its extension), and — for a book inside a
 /// folder — the top-level folder as its author, as AB2 had it
-/// (`Author/Title`, `Author/Series/Title`).
+/// (`Author/Title`, `Author/Series/Title`), and the series folder
+/// (AB7, [`folder_series`]).
 pub fn folder_fields(book_key: &str, root_file: bool) -> BookFields {
     let title = if root_file {
         file_stem(book_key)
@@ -329,6 +390,7 @@ pub fn folder_fields(book_key: &str, root_file: bool) -> BookFields {
     BookFields {
         title: Some(title),
         authors,
+        series: folder_series(book_key, root_file).map(|name| vec![SeriesEntry::new(&name, None)]),
         ..Default::default()
     }
     .cleaned()
@@ -381,8 +443,58 @@ pub fn tag_fields(root_file: bool, first: Option<&AudioProbe>) -> BookFields {
         language: tag("language").filter(|l| !l.eq_ignore_ascii_case("und")),
         google_books_id: None,
         open_library_id: None,
+        series: tag_series(t),
     }
     .cleaned()
+}
+
+/// One `Name #sequence` piece, Audiobookshelf's way: the sequence is
+/// what follows the last ` #`, when that is one word with no `#` in
+/// it; otherwise the whole piece is the name and there is no
+/// sequence.
+pub fn parse_series_string(piece: &str) -> SeriesEntry {
+    let piece = piece.trim();
+    if let Some(at) = piece.rfind(" #") {
+        let seq = &piece[at + 2..];
+        if !seq.is_empty() && !seq.contains('#') && !seq.chars().any(char::is_whitespace) {
+            return SeriesEntry::new(piece[..at].trim(), Some(seq));
+        }
+    }
+    SeriesEntry::new(piece, None)
+}
+
+/// The series a track's tags name (AB7, D28, as Audiobookshelf reads
+/// them):
+///
+/// - the name from `series`, else `show`, else `mvnm` (MP4's movement
+///   name); the sequence from `series-part`, else `episode_id`, else
+///   `mvin`, else `part`. When both name and sequence hold the same
+///   number (more than one) of `;`-separated parts, they pair up by
+///   position into several series; otherwise it is one series, both
+///   values taken whole;
+/// - only when there is no name tag, `grouping` (else `grp1`): split
+///   on `;`, each part `Name #sequence` or just `Name`.
+pub fn tag_series(t: &AudioProbe) -> Option<Vec<SeriesEntry>> {
+    let first = |keys: &[&str]| keys.iter().find_map(|k| t.tag(k));
+    if let Some(name) = first(&["series", "show", "mvnm"]) {
+        let part = first(&["series-part", "episode_id", "mvin", "part"]);
+        if let Some(part) = part.filter(|p| name.contains(';') && p.contains(';')) {
+            let names: Vec<&str> = name.split(';').collect();
+            let parts: Vec<&str> = part.split(';').collect();
+            if names.len() == parts.len() {
+                return Some(
+                    names
+                        .iter()
+                        .zip(parts)
+                        .map(|(n, p)| SeriesEntry::new(n, Some(p)))
+                        .collect(),
+                );
+            }
+        }
+        return Some(vec![SeriesEntry::new(name, part)]);
+    }
+    let grouping = first(&["grouping", "grp1"])?;
+    Some(grouping.split(';').map(parse_series_string).collect())
 }
 
 // ------------------------------------------------------------------ nfo
@@ -710,6 +822,9 @@ pub fn parse_abs_json(bytes: &[u8]) -> Result<BookFields, String> {
         language: s("language"),
         google_books_id: None,
         open_library_id: None,
+        // Series from the folder and tags only, so far (AB7 reading
+        // 3); metadata.json's `series` is left for later.
+        series: None,
     }
     .cleaned())
 }
@@ -743,6 +858,9 @@ pub fn sidecar_fields(doc: &Sidecar) -> BookFields {
         language: doc.language.clone(),
         google_books_id: doc.google_books_id.clone(),
         open_library_id: doc.open_library_id.clone(),
+        // The sidecar format (§13.15) carries no series: it says
+        // nothing about them, so the folder's and the tags' stand.
+        series: None,
     }
 }
 
@@ -834,6 +952,8 @@ pub fn candidate_fields(c: &parlour_metadata::books::BookCandidate) -> BookField
         language: c.language.clone(),
         google_books_id: (c.provider == "google").then(|| c.provider_id.clone()),
         open_library_id: (c.provider == "openlibrary").then(|| c.provider_id.clone()),
+        // Neither provider gives series; a match leaves them alone.
+        series: None,
     }
     .cleaned()
 }
@@ -953,7 +1073,7 @@ pub fn is_source_name(name: &str) -> bool {
 
 /// Bumped when the merge rules change, so every book is merged again
 /// at the next scan.
-pub const MERGE_RULES_VERSION: &str = "ab6.1";
+pub const MERGE_RULES_VERSION: &str = "ab7.1";
 
 /// The fingerprint a book's merge depends on: the rules' version, the
 /// precedence, and each source file's path, size and mtime (µs).
@@ -1173,6 +1293,151 @@ mod tests {
         assert_eq!(tag_fields(false, None), BookFields::default());
     }
 
+    fn series(v: &[(&str, Option<&str>)]) -> Option<Vec<SeriesEntry>> {
+        Some(v.iter().map(|(n, q)| SeriesEntry::new(n, *q)).collect())
+    }
+
+    #[test]
+    fn the_series_folder_is_the_one_above_the_title() {
+        assert_eq!(
+            folder_series("Jane Doe/The Long Road/Book Two", false),
+            s("The Long Road")
+        );
+        // Only the nearest three folders count.
+        assert_eq!(
+            folder_series("Fantasy/Jane Doe/The Long Road/Book Two", false),
+            s("The Long Road")
+        );
+        assert_eq!(folder_series("Jane Doe/Book Two", false), None);
+        assert_eq!(folder_series("Book Two", false), None);
+        assert_eq!(folder_series("A/B/Loose.m4b", true), None);
+        let f = folder_fields("Jane Doe/The Long Road/Book Two", false);
+        assert_eq!(f.series, series(&[("The Long Road", None)]));
+        assert_eq!(folder_fields("Jane Doe/Book Two", false).series, None);
+    }
+
+    #[test]
+    fn series_tags_are_read_like_audiobookshelf() {
+        let f = |tags: &[(&str, &str)]| tag_fields(false, Some(&probe(tags))).series;
+        assert_eq!(
+            f(&[("series", "The Long Road"), ("series-part", "2")]),
+            series(&[("The Long Road", Some("2"))])
+        );
+        // The fallbacks, in order.
+        assert_eq!(
+            f(&[
+                ("show", "Shown"),
+                ("mvnm", "Movement"),
+                ("mvin", "3"),
+                ("part", "9")
+            ]),
+            series(&[("Shown", Some("3"))])
+        );
+        assert_eq!(f(&[("mvnm", "Movement")]), series(&[("Movement", None)]));
+        // Paired lists of the same length make several series...
+        assert_eq!(
+            f(&[("series", "One; Two"), ("series-part", "1; 4.5")]),
+            series(&[("One", Some("1")), ("Two", Some("4.5"))])
+        );
+        // ...a mismatch keeps both values whole.
+        assert_eq!(
+            f(&[("series", "One; Two"), ("series-part", "1")]),
+            series(&[("One; Two", Some("1"))])
+        );
+        // `Name #1` in the series tag is a name, not parsed.
+        assert_eq!(f(&[("series", "Saga #1")]), series(&[("Saga #1", None)]));
+        // Grouping only without a series tag: `;`-split, `Name #seq`.
+        assert_eq!(
+            f(&[("grouping", "Saga #1; Side Tales #0.5; Plain")]),
+            series(&[
+                ("Saga", Some("1")),
+                ("Side Tales", Some("0.5")),
+                ("Plain", None)
+            ])
+        );
+        assert_eq!(f(&[("grp1", "Saga #2")]), series(&[("Saga", Some("2"))]));
+        assert_eq!(
+            f(&[("series", "Real"), ("grouping", "Ignored #1")]),
+            series(&[("Real", None)])
+        );
+        // Blank and repeated names go; a repeat differing only in
+        // case is a repeat.
+        assert_eq!(
+            f(&[("grouping", "Saga #1; ; saga #2")]),
+            series(&[("Saga", Some("1"))])
+        );
+        assert_eq!(f(&[("album", "No Series")]), None);
+    }
+
+    #[test]
+    fn series_strings_split_on_the_last_hash() {
+        assert_eq!(
+            parse_series_string("Saga #1a"),
+            SeriesEntry::new("Saga", Some("1a"))
+        );
+        assert_eq!(
+            parse_series_string(" Number #9 Dream #3 "),
+            SeriesEntry::new("Number #9 Dream", Some("3"))
+        );
+        assert_eq!(
+            parse_series_string("Saga #"),
+            SeriesEntry::new("Saga #", None)
+        );
+        assert_eq!(
+            parse_series_string("Saga#1"),
+            SeriesEntry::new("Saga#1", None)
+        );
+        assert_eq!(
+            parse_series_string("Saga #1 2"),
+            SeriesEntry::new("Saga #1 2", None)
+        );
+    }
+
+    #[test]
+    fn a_later_source_replaces_the_series_whole() {
+        let folder = folder_fields("Jane Doe/The Long Road/Book Two", false);
+        let tags = BookFields {
+            series: series(&[("Other", Some("1")), ("Third", None)]),
+            ..Default::default()
+        };
+        let sources = BookSources {
+            folder: folder.clone(),
+            tags: tags.clone(),
+            ..Default::default()
+        };
+        let out = merge_sources(&DEFAULT_PRECEDENCE, &sources);
+        assert_eq!(out.series, tags.series);
+        // Tags without series leave the folder's.
+        let sources = BookSources {
+            folder: folder.clone(),
+            tags: BookFields {
+                title: s("Tagged"),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert_eq!(
+            merge_sources(&DEFAULT_PRECEDENCE, &sources).series,
+            folder.series
+        );
+        // A source left out of the list isn't read: no folder, no
+        // folder series.
+        assert_eq!(
+            merge_sources(&[MetadataSource::Tags], &sources).series,
+            None
+        );
+        // Precedence reversed: the folder wins.
+        let sources = BookSources {
+            folder: folder.clone(),
+            tags,
+            ..Default::default()
+        };
+        assert_eq!(
+            merge_sources(&[MetadataSource::Tags, MetadataSource::Folder], &sources).series,
+            folder.series
+        );
+    }
+
     #[test]
     fn audiobookshelf_style_nfo_is_read() {
         let f = parse_book_nfo(&fixture("book.nfo")).unwrap();
@@ -1278,6 +1543,7 @@ mod tests {
             language: s("en"),
             google_books_id: s("gBk0001-_x"),
             open_library_id: None,
+            series: None,
         };
         let doc = book_sidecar_document(&fields);
         assert!(doc.problems().is_empty(), "{:?}", doc.problems());

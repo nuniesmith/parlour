@@ -1104,10 +1104,28 @@ the rest wait on the owner's decisions.
   "Metadata sources, matching and covers (AB6)" (12 readings for
   veto); IMPORT-EXPORT.md §13.15. **D40** (does a match travel in
   the bundle?) and D36 are open.
-- [ ] AB7 (M) **Series + author browsing** — after **D28**.
+- [x] AB7 (M) **Series + author browsing** — after **D28**.
   *D28 (2026-11-24): mirror ABS — `series` records + a book ↔
   series join with a sequence; series from the
   `Author/Series/Title` folder.*
+  *Done 2026-11-26:* `series` (one per library + name, case-blind)
+  and `book_series` (sequence on the link; a book can sit in several
+  series), migration `20261130000000_series.sql`. A book's series
+  are part of AB6's merge: the `folder` source gives the series
+  folder (no sequence until AB11's title-folder parsing), the `tags`
+  source ABS's series tags (`series`/`series-part` and their
+  fallbacks, `grouping` as `Name #n; …`); a later source replaces
+  the list whole; links are rebuilt with the book and empty series
+  removed after each scan, so re-scans duplicate nothing. Authors
+  are the existing `item_people` rows (no migration). API
+  `GET /api/v1/series[/{id}]`, `GET /api/v1/authors[/{id}]`; books
+  gain `series` + `author_refs`. Web: Books / Series / Authors views
+  on an audiobooks library, `/series/[id]` (sequence order),
+  `/author/[id]`, linked from `/book/[id]`. Follow-up item 7
+  decided: narrators stay `people` rows. Both new tables stay out of
+  the bundle (rebuilt by a scan; format v1 unchanged). Spec:
+  AUDIOBOOKS-PODCASTS.md "Series and authors (AB7)" (12 readings for
+  veto). D36 and D40 are still open.
 - [ ] AB11 (M) **Align AB1/AB2/AB4 with ABS** (D28/D29): the
   numbered "Follow-up from D28–D35" list in
   `docs/AUDIOBOOKS-PODCASTS.md` — disc folders without `Part`,

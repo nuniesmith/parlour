@@ -700,6 +700,66 @@ export interface Book {
   google_books_id: string | null;
   open_library_id: string | null;
   match: BookMatch | null;
+  // AB7: authors with their author-page ids (same order as
+  // `authors`), and the series the book sits in, in its own order.
+  author_refs: AuthorRef[];
+  series: BookSeriesRef[];
+}
+
+/** AB7: an author of a book, and the id of their page. */
+export interface AuthorRef {
+  id: string;
+  name: string;
+}
+
+/** AB7 (D28): a series a book sits in, and its place there. */
+export interface BookSeriesRef {
+  id: string;
+  name: string;
+  sequence: string | null;
+}
+
+/** AB7: one series, as the series list gives it. */
+export interface Series {
+  id: string;
+  library_id: string;
+  name: string;
+  sort_name: string;
+  book_count: number;
+  finished_count: number;
+  cover_book_id: string | null;
+}
+
+/** AB7: a series page — its books in sequence order. */
+export interface SeriesDetail extends Series {
+  books: Book[];
+}
+
+/** AB7: one author, as the authors list gives it. */
+export interface Author {
+  id: string;
+  name: string;
+  book_count: number;
+}
+
+/** AB7: a series one author's books sit in. */
+export interface AuthorSeries {
+  id: string;
+  library_id: string;
+  name: string;
+  book_count: number;
+}
+
+/** AB7: an author page — their books by title, and their series. */
+export interface AuthorDetail extends Author {
+  books: Book[];
+  series: AuthorSeries[];
+}
+
+/** AB7: a book's sequence in one series, as a label ("Book 2"). */
+export function sequenceLabel(book: Book, seriesId: string): string | null {
+  const seq = book.series.find((s) => s.id === seriesId)?.sequence;
+  return seq ? `Book ${seq}` : null;
 }
 
 /** AB6: what an admin's match left on a book. */
