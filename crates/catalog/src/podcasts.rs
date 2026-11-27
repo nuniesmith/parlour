@@ -426,6 +426,22 @@ async fn store_feed(
     last_modified: Option<&str>,
 ) -> Result<Option<CheckOutcome>, sqlx::Error> {
     let mut tx = pool.begin().await?;
+    let outcome = store_feed_in(&mut tx, podcast_id, feed, etag, last_modified).await?;
+    if outcome.is_some() {
+        tx.commit().await?;
+    }
+    Ok(outcome)
+}
+
+/// `store_feed` inside the caller's transaction (POD4's add stores the
+/// new row and its first check together). The caller commits.
+async fn store_feed_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    podcast_id: Uuid,
+    feed: &Feed,
+    etag: Option<&str>,
+    last_modified: Option<&str>,
+) -> Result<Option<CheckOutcome>, sqlx::Error> {
     let show = &feed.show;
     // A feed without a title keeps the stored one (the column is
     // required); every other field is as the feed now has it.
@@ -467,7 +483,7 @@ async fn store_feed(
     .bind(show.image_url.as_deref())
     .bind(etag)
     .bind(last_modified)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
     if done.rows_affected() == 0 {
         return Ok(None);
@@ -482,7 +498,7 @@ async fn store_feed(
          FOR UPDATE",
     )
     .bind(podcast_id)
-    .fetch_all(&mut *tx)
+    .fetch_all(&mut **tx)
     .await?;
     let stored: Vec<StoredEpisode> = rows
         .into_iter()
@@ -536,7 +552,7 @@ async fn store_feed(
         .bind(e.chapters_url.as_deref())
         .bind(e.transcript_url.as_deref())
         .bind(e.transcript_type.as_deref())
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
         inserted += done.rows_affected() as usize;
     }
@@ -566,10 +582,9 @@ async fn store_feed(
         .bind(e.chapters_url.as_deref())
         .bind(e.transcript_url.as_deref())
         .bind(e.transcript_type.as_deref())
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
     }
-    tx.commit().await?;
     Ok(Some(CheckOutcome::Updated {
         new_episodes: inserted,
         changed_episodes: plan.updates.len(),
@@ -779,6 +794,238 @@ pub async fn refresh_podcasts(
     Ok(report)
 }
 
+// ---------------------------------------------------------------- POD4
+
+/// The longest feed address accepted when a show is added.
+pub const MAX_FEED_URL_CHARS: usize = 2048;
+/// The largest `max_episodes_to_keep` / `max_new_episodes_per_check`
+/// accepted. ABS has no limit; this only keeps a typo from meaning
+/// "forever".
+pub const MAX_EPISODE_SETTING: i32 = 100_000;
+/// A show whose feed gives no title.
+pub const UNTITLED: &str = "Untitled podcast";
+
+/// A feed address as an admin typed it, checked: trimmed, `http` or
+/// `https`, with a host. It is stored as typed (trimmed). The reason
+/// for a refusal never repeats the address (it may hold a token).
+pub fn check_feed_url(raw: &str) -> Result<String, String> {
+    let url = raw.trim();
+    if url.is_empty() {
+        return Err("Enter the feed's address.".into());
+    }
+    if url.chars().count() > MAX_FEED_URL_CHARS {
+        return Err(format!(
+            "A feed address is at most {MAX_FEED_URL_CHARS} characters."
+        ));
+    }
+    let parsed = reqwest::Url::parse(url).map_err(|_| {
+        "That isn't a web address. A feed's address starts with http:// or https://.".to_string()
+    })?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("A feed's address starts with http:// or https://.".into());
+    }
+    if parsed.host_str().is_none_or(str::is_empty) {
+        return Err("That address has no host name.".into());
+    }
+    Ok(url.to_string())
+}
+
+/// Fetch and read a feed that isn't stored yet: the feed and its
+/// validators, or why it was refused, in words that never repeat the
+/// address.
+pub async fn read_new_feed(
+    http: &reqwest::Client,
+    url: &str,
+) -> Result<(Feed, Option<String>, Option<String>), String> {
+    match fetch_feed(http, url, None, None).await {
+        Err(e) => Err(e.to_string()),
+        // Nothing was sent to make a 304 an answer.
+        Ok(Fetched::NotModified) => Err(FetchError::Status(304).to_string()),
+        Ok(Fetched::Body {
+            bytes,
+            etag,
+            last_modified,
+        }) => {
+            let feed = tokio::task::spawn_blocking(move || parse_feed_bytes(&bytes))
+                .await
+                .unwrap_or_else(|e| {
+                    Err(crate::podcast_feed::FeedError::Xml(format!(
+                        "the reader stopped: {e}"
+                    )))
+                })
+                .map_err(|e| e.to_string())?;
+            Ok((feed, etag, last_modified))
+        }
+    }
+}
+
+/// How adding a feed to a library ended.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum AddOutcome {
+    /// The show was stored with its first check done.
+    Added {
+        id: Uuid,
+        title: String,
+        new_episodes: usize,
+    },
+    /// The library already has this feed address.
+    Duplicate { id: Uuid, title: String },
+    /// The address isn't a feed Parlour can read: why, without the
+    /// address.
+    Refused { error: String },
+}
+
+async fn show_with_url(
+    pool: &parlour_db::PgPool,
+    library_id: Uuid,
+    url: &str,
+) -> Result<Option<(Uuid, String)>, sqlx::Error> {
+    sqlx::query_as("SELECT id, title FROM podcasts WHERE library_id = $1 AND feed_url = $2")
+        .bind(library_id)
+        .bind(url)
+        .fetch_optional(pool)
+        .await
+}
+
+/// Add a feed to a podcasts library (POD4, D31: the caller has checked
+/// that an admin asked and that the library is a podcasts library).
+///
+/// The address is checked, a duplicate in the library is refused, and
+/// the feed is fetched and read: an address that isn't a feed is
+/// refused and nothing is stored. A feed that reads is stored together
+/// with its first check, in one transaction (the show, its validators,
+/// a row per episode, `last_checked_at`), so a new show is never empty
+/// and never a row that fails every check. Nothing is downloaded: the
+/// back catalogue waits for a download by hand, as in POD3.
+/// `fallback_title` names a feed without a title (an OPML outline's
+/// text), else it is "Untitled podcast".
+pub async fn add_podcast(
+    pool: &parlour_db::PgPool,
+    http: &reqwest::Client,
+    library_id: Uuid,
+    feed_url: &str,
+    fallback_title: Option<&str>,
+) -> Result<AddOutcome, sqlx::Error> {
+    let url = match check_feed_url(feed_url) {
+        Ok(url) => url,
+        Err(error) => return Ok(AddOutcome::Refused { error }),
+    };
+    if let Some((id, title)) = show_with_url(pool, library_id, &url).await? {
+        return Ok(AddOutcome::Duplicate { id, title });
+    }
+    let (feed, etag, last_modified) = match read_new_feed(http, &url).await {
+        Ok(read) => read,
+        Err(error) => {
+            return Ok(AddOutcome::Refused {
+                error: clip(&error),
+            })
+        }
+    };
+    let title = feed
+        .show
+        .title
+        .clone()
+        .or_else(|| fallback_title.map(str::to_string))
+        .unwrap_or_else(|| UNTITLED.to_string());
+    let mut tx = pool.begin().await?;
+    let row: Option<(Uuid,)> = sqlx::query_as(
+        "INSERT INTO podcasts (library_id, feed_url, title, sort_title)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (library_id, feed_url) DO NOTHING
+         RETURNING id",
+    )
+    .bind(library_id)
+    .bind(&url)
+    .bind(&title)
+    .bind(crate::parse::sort_title(&title))
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((id,)) = row else {
+        // Added by someone else while this one was fetching.
+        tx.rollback().await?;
+        return Ok(match show_with_url(pool, library_id, &url).await? {
+            Some((id, title)) => AddOutcome::Duplicate { id, title },
+            None => AddOutcome::Refused {
+                error: "the show could not be stored; try again".into(),
+            },
+        });
+    };
+    let outcome = store_feed_in(
+        &mut tx,
+        id,
+        &feed,
+        etag.as_deref(),
+        last_modified.as_deref(),
+    )
+    .await?;
+    tx.commit().await?;
+    let new_episodes = match outcome {
+        Some(CheckOutcome::Updated { new_episodes, .. }) => new_episodes,
+        _ => 0,
+    };
+    Ok(AddOutcome::Added {
+        id,
+        title,
+        new_episodes,
+    })
+}
+
+/// A show's D32 settings, as an admin edits them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub struct ShowSettings {
+    pub auto_download: bool,
+    pub check_schedule: String,
+    pub max_episodes_to_keep: i32,
+    pub max_new_episodes_per_check: i32,
+}
+
+impl Default for ShowSettings {
+    /// POD1's column defaults, which are ABS's.
+    fn default() -> Self {
+        ShowSettings {
+            auto_download: false,
+            check_schedule: DEFAULT_SCHEDULE.to_string(),
+            max_episodes_to_keep: 0,
+            max_new_episodes_per_check: 3,
+        }
+    }
+}
+
+impl ShowSettings {
+    /// What an admin sent, checked: the schedule must be a five-field
+    /// cron expression that fires (POD2 reading 4: one that can't be
+    /// read is refused here, not stored and later run hourly), and the
+    /// two limits 0 or more. The schedule comes back with its white
+    /// space folded.
+    pub fn checked(&self, now: DateTime<Utc>) -> Result<ShowSettings, String> {
+        let schedule = self
+            .check_schedule
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let cron = CronSchedule::parse(&schedule)
+            .map_err(|e| format!("The check schedule can't be read: {e}."))?;
+        if cron.next_after(now).is_none() {
+            return Err("The check schedule never fires.".into());
+        }
+        for (name, value) in [
+            ("Episodes to keep", self.max_episodes_to_keep),
+            ("New episodes per check", self.max_new_episodes_per_check),
+        ] {
+            if !(0..=MAX_EPISODE_SETTING).contains(&value) {
+                return Err(format!(
+                    "{name} must be 0 to {MAX_EPISODE_SETTING} (0 means no limit)."
+                ));
+            }
+        }
+        Ok(ShowSettings {
+            check_schedule: schedule,
+            ..self.clone()
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -879,5 +1126,77 @@ mod tests {
         let long = "x".repeat(2000);
         assert_eq!(clip(&long).chars().count(), MAX_ERROR_CHARS);
         assert_eq!(clip("short"), "short");
+    }
+
+    #[test]
+    fn feed_urls_are_checked_without_echoing_them() {
+        assert_eq!(
+            check_feed_url("  https://feeds.example/show.xml?token=fake-feed-token \n"),
+            Ok("https://feeds.example/show.xml?token=fake-feed-token".into())
+        );
+        assert_eq!(
+            check_feed_url("http://10.0.0.5:8080/f"),
+            Ok("http://10.0.0.5:8080/f".into())
+        );
+        for bad in [
+            "",
+            "   ",
+            "feeds.example/x?token=fake-feed-token",
+            "ftp://feeds.example/x?token=fake-feed-token",
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "https://",
+        ] {
+            let err = check_feed_url(bad).unwrap_err();
+            assert!(
+                !err.contains("fake-feed-token") && !err.contains("passwd"),
+                "{bad}: {err}"
+            );
+        }
+        let long = format!("https://a.example/{}", "x".repeat(MAX_FEED_URL_CHARS));
+        assert!(check_feed_url(&long).is_err());
+    }
+
+    #[test]
+    fn show_settings_refuse_an_unreadable_schedule() {
+        let now = Utc::now();
+        let ok = ShowSettings {
+            auto_download: true,
+            check_schedule: "  30   */6 * * mon-fri ".into(),
+            max_episodes_to_keep: 5,
+            max_new_episodes_per_check: 0,
+        };
+        assert_eq!(
+            ok.checked(now).unwrap().check_schedule,
+            "30 */6 * * mon-fri"
+        );
+        assert_eq!(
+            ShowSettings::default().checked(now),
+            Ok(ShowSettings::default())
+        );
+        for bad in [
+            "",
+            "hourly",
+            "@hourly",
+            "0 * * *",
+            "0 0 * * * *",
+            "61 * * * *",
+            "0 25 * * *",
+            "0 0 31 2 *",
+        ] {
+            let s = ShowSettings {
+                check_schedule: bad.into(),
+                ..ShowSettings::default()
+            };
+            assert!(s.checked(now).is_err(), "{bad:?} was accepted");
+        }
+        for (keep, new) in [(-1, 3), (0, -1), (MAX_EPISODE_SETTING + 1, 3)] {
+            let s = ShowSettings {
+                max_episodes_to_keep: keep,
+                max_new_episodes_per_check: new,
+                ..ShowSettings::default()
+            };
+            assert!(s.checked(now).is_err());
+        }
     }
 }

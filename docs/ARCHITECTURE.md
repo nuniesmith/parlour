@@ -140,7 +140,9 @@ The owner uses subtitles on most playback.
   job downloads episodes into the podcasts library's folder, a
   writable store Parlour owns (never a media mount), and applies
   each show's retention. A podcasts library is never scanned (POD3,
-  "Episode download and retention (POD3)").
+  "Episode download and retention (POD3)"). Admins add shows by
+  feed address or OPML on Server → Podcasts, where the feed is read
+  before anything is stored (POD4, "Managing feeds (POD4)").
 - Segments (Phase 9, D15): `media_segments` holds intro / credits /
   recap spans per item — one row per (item, kind, source), sources
   `chapters`, `fingerprint`, `manual`, `heuristic`, each with a 0–1

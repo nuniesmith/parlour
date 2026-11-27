@@ -104,6 +104,7 @@
           adminItem('/admin/general', 'General'),
           adminItem('/admin/users', 'Users'),
           adminItem('/admin/library', 'Library'),
+          adminItem('/admin/podcasts', 'Podcasts'),
           adminItem('/admin/metadata', 'Metadata'),
           adminItem('/admin/sessions', 'Sessions'),
           adminItem('/admin/jobs', 'Jobs'),

@@ -25,7 +25,8 @@
 //! - **The notice** for feeds failing repeatedly is reconciled with
 //!   the others (`notices.rs`).
 //!
-//! No API, no UI (POD4–POD6).
+//! POD4's admin routes (`podcast_admin`) queue the two hooks; the
+//! listener API and pages are POD5/POD6.
 
 use std::time::Duration;
 
