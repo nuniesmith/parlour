@@ -3,6 +3,7 @@
   import { page } from '$app/state';
   import { api } from '$lib/api';
   import BookShelf from '$lib/BookShelf.svelte';
+  import PodcastShelf from '$lib/PodcastShelf.svelte';
   import Poster from '$lib/Poster.svelte';
   import type { Item } from '$lib/types';
 
@@ -54,8 +55,9 @@
     }
   }
 
-  // Audiobooks libraries list books instead (Phase 10, AB5); the
-  // library's kind decides which view this page is.
+  // Audiobooks libraries list books instead (Phase 10, AB5), and
+  // podcasts libraries their shows (POD6); the library's kind decides
+  // which view this page is.
   let libraryKind = $state<string | null>(null);
 
   onMount(async () => {
@@ -66,7 +68,7 @@
       return;
     }
     libraryKind = data.kind;
-    if (data.kind !== 'audiobooks') await load();
+    if (data.kind !== 'audiobooks' && data.kind !== 'podcasts') await load();
   });
 
   // The grid (and its sentinel) only exists once the kind is known.
@@ -86,6 +88,8 @@
 
 {#if libraryKind === 'audiobooks'}
   <BookShelf libraryId={page.params.id ?? ''} />
+{:else if libraryKind === 'podcasts'}
+  <PodcastShelf libraryId={page.params.id ?? ''} />
 {:else if libraryKind === null}
   {#if error}
     <p class="error" role="alert">{error}</p>

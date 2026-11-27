@@ -93,7 +93,8 @@ async fn main() {
     );
     // POD2: podcast feed checks on their schedule (D32), with a
     // worker of their own so a slow feed never holds up a scan.
-    parlour_server::podcasts::spawn(pool.clone());
+    // POD6: the same checks keep each show's artwork cached.
+    parlour_server::podcasts::spawn(pool.clone(), metadata.artwork_dir.clone());
     // UI5: keep the Dashboard's notices in line with reality.
     parlour_server::notices::spawn(
         pool.clone(),

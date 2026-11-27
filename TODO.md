@@ -1225,8 +1225,8 @@ hourly check / keep N (0 = all) / 3 new per check. Details:
 their original wording; read them through that.
 
 POD1 (the schema), POD2 (feed checks), POD3 (downloads and
-retention), POD4 (managing feeds) and POD5 (the listener API) are
-built; POD6–POD8 are plan only. Spec:
+retention), POD4 (managing feeds), POD5 (the listener API) and POD6
+(the web pages and player) are built; POD7–POD8 are plan only. Spec:
 `docs/AUDIOBOOKS-PODCASTS.md`.
 
 - [x] POD1 (M) **Schema**: `podcasts` (feed URL, metadata,
@@ -1410,7 +1410,52 @@ built; POD6–POD8 are plan only. Spec:
   (D40), and `listening_sessions` stays *Proposed* (D36 open). Flow:
   `podcast_api_flow.rs`. Spec: AUDIOBOOKS-PODCASTS.md "Native API
   (POD5)" (14 readings for veto).
-- [ ] POD6 (M) **Web**: podcast pages + the AB5 player.
+- [x] POD6 (M) **Web**: podcast pages + the AB5 player.
+  *Done 2026-11-27:* no migration (`podcasts.image_path` is POD1's).
+  - **Pages.**
+    - **Shows list.** A podcasts library's page lists the shows the
+      profile can reach. Each card has artwork, author and this
+      profile's counts, and there is a filter and Current / All.
+    - **Show page** (`/podcast/{id}`). It has the description, shown
+      safely, and the episode list in POD5's order. Each row has its
+      state (new dot, progress ring, played check), date and length,
+      or time left. An undownloaded episode is marked "plays from the
+      publisher". Rows have Play, Mark as played / unplayed, and
+      Download for admins.
+    - **Episode page** (`/episode/{id}`). It holds AB5's player for an
+      episode: back 15 s / forward 30 s, an episode-wide scrubber with
+      the current chapter, next chapter, the chapter list and the show
+      notes. It plays the download (Range), its AAC copy, or the
+      enclosure redirect (D32 as amended). Progress goes through
+      POD5's routes, and sessions through AB8's reports with
+      `episode_id`.
+    - **D41.** With the flag off, a profile sees no explicit show:
+      not in the list, the filter, the Home tile count or the stats,
+      and its pages say "Not found".
+  - **Artwork.** The server fetches it into the artwork cache after
+    each check and after an add, and serves it from
+    `GET /api/v1/podcasts/{id}/artwork` (grant and D41 checked). It is
+    never hot-linked. Only JPEG, PNG, WebP or GIF up to 20 MB is kept,
+    a new address replaces the copy, and a failure names the show on
+    the job, never the address.
+  - **Chapters.** `GET /api/v1/podcast-episodes/{id}/chapters` reads
+    the download's own chapter marks, else the feed's Podcasting 2.0
+    list, server-side. Only start and title are sent, and an
+    unreadable list is reported without its address.
+  - **Elsewhere.**
+    - The stats gain a per-show list.
+    - Now Playing, the history and the admin session list link
+      episodes to their page, with the show's artwork.
+    - A podcasts library's Home tile counts its reachable shows.
+  - **Checked.** In headless Chromium against a private instance of
+    this branch with stub feeds: 68 checks, all passed. The live test
+    instance predates POD1.
+
+  Not here: the persistent player bar, the podcast Home cards,
+  speed, sleep timer and keys (device settings, D35), global search
+  of shows. The bundle is unchanged (format v1, D36 open). Flow:
+  `podcast_pages_flow.rs`. Spec: AUDIOBOOKS-PODCASTS.md "Web pages and
+  player (POD6)" (15 readings for veto).
 - [ ] POD7 (S) **Directory search** (Apple / Podcast Index) —
   only if **D31** wants it. *D31: yes, Apple's search API.*
 - [ ] POD8 (S) **Up Next queue / playlists synced** — only if

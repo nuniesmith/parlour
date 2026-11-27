@@ -424,7 +424,7 @@ the Activity feed. The rest of the schema stays on the old host:
 | `book_sidecars` | a book's match, the server's copy of its `book.parlour.json` (AB6): **open — D40, §13.15** |
 | `series`, `book_series` | audiobook series and each book's place in them (AB7); the new host's scan rebuilds them from each book's series folder and tags. Nothing but a scan writes them, so nothing is lost |
 | `listening_sessions` | each profile's listening sessions, its listening history and stats (AB8): **open — §9**, with `book_progress`. A closed session's Activity line (`playback.listened`) is part of the Activity feed, which travels (D25) |
-| `podcasts` | a podcasts library's shows and their per-show settings (POD1, D31/D32). Not in format v1: their place in the bundle is later work (a format change). Until then an admin adds them again on the new host (POD4's OPML export can carry the list) |
+| `podcasts` | a podcasts library's shows and their per-show settings (POD1, D31/D32). Not in format v1: their place in the bundle is later work (a format change). Until then an admin adds them again on the new host (POD4's OPML export can carry the list). A show's cached artwork (`image_path`, POD6) lives in this host's artwork cache; the new host's first check fetches its own copy |
 | `podcast_episodes` | a show's episodes as its feed lists them, and where this host downloaded them (POD1, D32). The new host's feed checks rebuild the list; the downloaded files live in this host's own podcast store |
 
 ## 9. Proposed — needs the owner's yes: the audio tables

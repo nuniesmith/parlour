@@ -582,6 +582,24 @@ download to device); a device setting plays on one tap instead
 (off), check schedule (hourly), keep *N* (0 = all), new per check
 (3), refresh now (D32 defaults).
 
+*Built on the web in POD6 (2026-11-27):*
+
+- **Shows list.** A podcasts library's page lists its shows (artwork,
+  title, author in small caps, this profile's counts), with a filter
+  and Current / All.
+- **Show page.** It is as above, except:
+  - rows show their buttons (Play, Mark as played / unplayed, admin
+    Download) rather than expanding, and there is no playlist or
+    download-to-device;
+  - the admin's settings stay on Server → Podcasts, linked from the
+    page.
+- **Episode page.** `/episode/[id]` holds the player below: back 15 s
+  / forward 30 s, next chapter, the chapter list and the show notes.
+  There is no speed sheet or sleep timer yet, and the persistent
+  player bar (§4.2) is still to come.
+
+Details: `AUDIOBOOKS-PODCASTS.md`, "Web pages and player (POD6)".
+
 **Player** (from §2.3–§2.5):
 
 - Show name in small caps over the episode title; square artwork.

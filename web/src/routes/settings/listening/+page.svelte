@@ -91,9 +91,16 @@
   }
 
   // POD5: a podcast episode's session has no book; it is named with its
-  // show, and links nowhere until the podcast pages exist (POD6).
+  // show. POD6: it links to the episode's page.
   function sessionHref(s: ListeningSession): string | undefined {
-    return s.item_id ? `/book/${s.item_id}` : undefined;
+    if (s.item_id) return `/book/${s.item_id}`;
+    return s.episode_id ? `/episode/${s.episode_id}` : undefined;
+  }
+
+  /** A session's picture: the book's cover, or the show's artwork. */
+  function sessionArt(s: ListeningSession): string | null {
+    if (s.item_id) return s.has_cover ? posterUrl(s.item_id) : null;
+    return s.artwork_url;
   }
 
   function sessionTitle(s: ListeningSession): string {
@@ -108,7 +115,7 @@
 <h2>Listening</h2>
 <p class="dim">
   What this profile has listened to, kept by the server so it follows you between devices. Times
-  are counted while a book is playing, not while it is paused.
+  are counted while a book or an episode is playing, not while it is paused.
 </p>
 
 {#if error}<p class="error" role="alert">{error}</p>{/if}
@@ -120,8 +127,8 @@
       {#each live as s (s.id)}
         <li>
           <a class="thumb" href={sessionHref(s)} aria-hidden="true" tabindex="-1">
-            {#if s.has_cover && s.item_id}<img
-                src={posterUrl(s.item_id)}
+            {#if sessionArt(s)}<img
+                src={sessionArt(s)}
                 alt=""
                 loading="lazy"
               />{:else}<span>{sessionTitle(s).charAt(0).toUpperCase()}</span>{/if}
@@ -189,6 +196,27 @@
         {/each}
       </ol>
     {/if}
+    {#if stats.shows.length > 0}
+      <h4>By show</h4>
+      <ol class="rows" aria-label="Listening by show">
+        {#each stats.shows as p (p.podcast_id)}
+          <li>
+            <a class="thumb" href={`/podcast/${p.podcast_id}`} aria-hidden="true" tabindex="-1">
+              {#if p.artwork_url}<img src={p.artwork_url} alt="" loading="lazy" />{:else}<span
+                  >{p.title.charAt(0).toUpperCase()}</span
+                >{/if}
+            </a>
+            <div>
+              <a class="title" href={`/podcast/${p.podcast_id}`}>{p.title}</a>
+              <p class="dim small">
+                {formatListened(p.listened_ms)} over {p.episodes}
+                {p.episodes === 1 ? 'episode' : 'episodes'} · last {formatDateTime(p.last_listened_at)}
+              </p>
+            </div>
+          </li>
+        {/each}
+      </ol>
+    {/if}
     <p class="dim small">Days are counted in {stats.time_zone}.</p>
   </section>
 {/if}
@@ -198,14 +226,14 @@
   {#if sessions === null}
     {#if !error}<p class="dim">Loading…</p>{/if}
   {:else if sessions.length === 0}
-    <p class="dim">Nothing yet. Play an audiobook and its sessions show up here.</p>
+    <p class="dim">Nothing yet. Play an audiobook or a podcast episode and its sessions show up here.</p>
   {:else}
     <ul class="rows">
       {#each sessions as s (s.id)}
         <li>
           <a class="thumb" href={sessionHref(s)} aria-hidden="true" tabindex="-1">
-            {#if s.has_cover && s.item_id}<img
-                src={posterUrl(s.item_id)}
+            {#if sessionArt(s)}<img
+                src={sessionArt(s)}
                 alt=""
                 loading="lazy"
               />{:else}<span>{sessionTitle(s).charAt(0).toUpperCase()}</span>{/if}

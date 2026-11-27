@@ -115,7 +115,9 @@ struct LibraryTileDto {
     id: Uuid,
     name: String,
     kind: String,
-    /// Top-level items (movies / series) in the library.
+    /// Top-level items (movies / series) in the library; for a podcasts
+    /// library, the shows this profile can reach (POD6: D41's flag
+    /// applies, so a hidden show isn't counted).
     item_count: i64,
     /// The newest top-level item with a cached backdrop, whose
     /// backdrop the tile shows; `None` → a plain tile.
@@ -282,8 +284,13 @@ async fn home(State(state): State<AppState>, user: AuthUser) -> Result<Json<Home
     // the same order as the sidebar.
     let libraries = sqlx::query_as::<_, LibraryTileDto>(
         "SELECT l.id, l.name, l.kind,
-                (SELECT count(*) FROM media_items i
-                 WHERE i.library_id = l.id AND i.parent_id IS NULL) AS item_count,
+                CASE WHEN l.kind = 'podcasts' THEN
+                    (SELECT count(*) FROM podcasts pc JOIN profiles pr ON pr.id = $1
+                     WHERE pc.library_id = l.id AND (NOT pc.explicit OR pr.allow_explicit))
+                ELSE
+                    (SELECT count(*) FROM media_items i
+                     WHERE i.library_id = l.id AND i.parent_id IS NULL)
+                END AS item_count,
                 (SELECT i.id FROM media_items i
                  WHERE i.library_id = l.id AND i.parent_id IS NULL
                    AND EXISTS (SELECT 1 FROM images im WHERE im.item_id = i.id

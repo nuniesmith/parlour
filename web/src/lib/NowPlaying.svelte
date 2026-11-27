@@ -195,11 +195,19 @@
             href={s.item_kind === 'audiobook'
               ? `/book/${s.item_id}`
               : s.item_kind === 'podcast_episode'
-                ? '/admin/podcasts'
+                ? `/episode/${s.item_id}`
                 : `/item/${s.item_id}`}
             aria-label={`Open ${heading(s)}`}
           >
-            {#if s.poster_item_id && !brokenPosters.includes(s.poster_item_id)}
+            {#if s.item_kind === 'podcast_episode' && s.artwork_url && !brokenPosters.includes(s.artwork_url)}
+              <!-- POD6: the show's artwork, from Parlour's cache. -->
+              <img
+                src={s.artwork_url}
+                alt=""
+                loading="lazy"
+                onerror={() => (brokenPosters = [...brokenPosters, s.artwork_url ?? ''])}
+              />
+            {:else if s.poster_item_id && !brokenPosters.includes(s.poster_item_id)}
               <img
                 src={posterUrl(s.poster_item_id)}
                 alt=""

@@ -1993,6 +1993,10 @@ struct SessionDto {
     /// The item whose poster to show (the series for an episode),
     /// or null when neither has one.
     poster_item_id: Option<Uuid>,
+    /// POD6: a podcast episode's show, for its page
+    /// (`/podcast/{podcast_id}`), and the show's cached artwork.
+    podcast_id: Option<Uuid>,
+    artwork_url: Option<String>,
     started_at: DateTime<Utc>,
     last_seen: DateTime<Utc>,
     position_ms: i64,
@@ -2013,6 +2017,8 @@ struct SessionRow {
     series_title: Option<String>,
     poster_item_id: Option<Uuid>,
     file_duration_ms: Option<i64>,
+    podcast_id: Option<Uuid>,
+    show_image_path: Option<String>,
 }
 
 async fn list_sessions(
@@ -2034,13 +2040,14 @@ async fn list_sessions(
     for (session_id, s) in active {
         if s.episode {
             // POD5: a podcast episode's listen — the show stands where a
-            // series would; no poster yet (show artwork is POD6's).
+            // series would; POD6: with the show's cached artwork.
             let row = sqlx::query_as::<_, SessionRow>(
                 "SELECT u.username, p.name AS profile_name, e.title AS item_title,
                         'podcast_episode' AS item_kind, e.season AS season_number,
                         e.episode_number, pc.title AS series_title,
                         NULL::uuid AS poster_item_id,
-                        COALESCE(e.file_duration_ms, e.duration_ms) AS file_duration_ms
+                        COALESCE(e.file_duration_ms, e.duration_ms) AS file_duration_ms,
+                        pc.id AS podcast_id, pc.image_path AS show_image_path
                  FROM profiles p
                  JOIN users u ON u.id = p.user_id
                  JOIN podcast_episodes e ON e.id = $2
@@ -2068,7 +2075,8 @@ async fn list_sessions(
                                      WHERE im.item_id = c.id AND im.kind = 'poster'
                                        AND im.path <> '' AND im.path NOT LIKE 'pending:%')
                       ORDER BY (c.id = sr.id) DESC LIMIT 1) AS poster_item_id,
-                    (SELECT f.duration_ms FROM media_files f WHERE f.id = $3) AS file_duration_ms
+                    (SELECT f.duration_ms FROM media_files f WHERE f.id = $3) AS file_duration_ms,
+                    NULL::uuid AS podcast_id, NULL::text AS show_image_path
              FROM profiles p
              JOIN users u ON u.id = p.user_id
              JOIN media_items i ON i.id = $2
@@ -2101,6 +2109,10 @@ fn session_dto(session_id: Uuid, s: SessionInfo, row: SessionRow) -> SessionDto 
         season_number: row.season_number,
         episode_number: row.episode_number,
         poster_item_id: row.poster_item_id,
+        artwork_url: row.podcast_id.and_then(|id| {
+            parlour_catalog::podcast_artwork::artwork_route(id, row.show_image_path.as_deref())
+        }),
+        podcast_id: row.podcast_id,
         started_at: s.started_at,
         last_seen: s.last_seen,
         position_ms: s.position_ms,

@@ -1339,7 +1339,7 @@ not yet scheduled in a PR:
 
 ---
 
-## Phase 11 — Podcasts (POD1's schema, POD2's feed checks, POD3's downloads and POD4's feed management built 2026-11-26; POD5's listener API built 2026-11-27; the rest is plan)
+## Phase 11 — Podcasts (POD1's schema, POD2's feed checks, POD3's downloads and POD4's feed management built 2026-11-26; POD5's listener API and POD6's web pages and player built 2026-11-27; the rest is plan)
 
 The server owns the feeds. Clients never fetch RSS themselves, which
 is what lets a Fire Stick, a tablet and the phone agree.
@@ -2547,9 +2547,10 @@ checked before anything is stored:
       feature is wanted.
     - *Artwork:* it isn't hot-linked from the publisher, because that
       would hand every admin's address to the publisher. Caching it is
-      POD6's, with the listener pages.
+      POD6's, with the listener pages. *POD6 (2026-11-27): cached at
+      each check and after an add ("Web pages and player (POD6)").*
     - *Descriptions:* they are the feed's HTML, which POD6 shows
-      safely.
+      safely. *POD6: through an allowlist sanitiser in the page.*
 12. **Admins manage every podcasts library, whatever their profile's
     grants.** This is the Server area's existing rule (Server → Library
     lists every library). The grant path (POD1's join through
@@ -2731,7 +2732,8 @@ Server → Podcasts, under "When an episode counts as finished".
 - **Where an episode's session shows:**
   - **Now Playing** shows it under its show (kind `podcast_episode`,
     the show where a series would be). It links to Server → Podcasts
-    until POD6's pages exist.
+    until POD6's pages exist. *POD6: it links to the episode's page,
+    with the show's artwork.*
   - **Activity.** Its closed line reads "*user* listened to *Show ·
     Episode* for …". The `episode_id` and `podcast_id` are in the
     detail, with no item link, because an episode isn't a catalog item.
@@ -2764,8 +2766,8 @@ Hidden) and a note on what it does.
 
 **Not built here.**
 
-- The listener pages and player (POD6).
-- Show artwork (POD6 caches it; POD4 reading 11).
+- The listener pages and player (POD6). *Built in POD6.*
+- Show artwork (POD6 caches it; POD4 reading 11). *Built in POD6.*
 - Directory search (POD7).
 - Bookmarks, playlists and collections (D35, CL2/POD phases).
 - A bulk episode progress sync (CL2).
@@ -2845,7 +2847,8 @@ Hidden) and a note on what it does.
      or Now Playing line.
    - *What the stats count:* their totals and days count episodes, and
      the per-book list stays books. A per-show list is POD6's, if its
-     screen wants one.
+     screen wants one. *POD6: added (`shows` in the stats, POD6
+     reading 5).*
    - *Activity:* an episode's line has no item link (Activity's item
      link is to `media_items`) and names the episode in its detail.
 9. **D41 as built.**
@@ -2881,11 +2884,13 @@ Hidden) and a note on what it does.
     - *Links:* the Podcasting 2.0 chapter and transcript links, which
       are publisher addresses too. Showing transcripts is deferred
       (D35), and chapters are POD6's to fetch server-side if its player
-      wants them.
+      wants them. *POD6: read server-side by a route of their own, only
+      start times and titles sent (POD6 reading 4).*
     - *Artwork:* POD4 reading 11 keeps it from being hot-linked, and
-      caching it is POD6's.
+      caching it is POD6's. *POD6: `artwork_url`, Parlour's own route.*
     - *Descriptions:* they are passed as the feed gives them (HTML),
-      for POD6 to show safely.
+      for POD6 to show safely. *POD6: sanitised in the page (POD6
+      reading 6).*
 13. **Shows sort by sort title, and `q` matches title or author**, as
     the book list does for books. The episode order is POD4 reading
     13's.
@@ -2897,6 +2902,464 @@ Hidden) and a note on what it does.
     - POD5's run 1 found this, and D41 replaced the idea of tying
       explicit shows to it. Building the enforcement is outside POD5;
       it is noted for the review and fix loop.
+
+### Web pages and player (POD6, built 2026-11-27)
+
+POD6 is the listener's web UI for podcasts: a podcasts library's list
+of shows, a show's page with its episode list, and an episode's page
+with AB5's player. It is built on POD5's listener API. Three server
+additions serve it:
+
+- the show's artwork, cached by Parlour (POD4 reading 11);
+- an episode's chapters, read server-side (POD5 reading 12);
+- a per-show listening list in the stats (POD5 reading 8).
+
+Two owner decisions bind it, as they bound POD5:
+
+- **D32, amended:** an undownloaded episode plays through the redirect
+  to its enclosure.
+- **D41:** a profile with the explicit flag off never sees an explicit
+  show.
+
+There is **no migration**. `podcasts.image_path` is POD1's column,
+filled here for the first time. The bundle stays at format v1. The
+flow `crates/server/tests/podcast_pages_flow.rs` runs the server side
+on a fresh database, against a local stub feed, artwork and chapter
+host, with real ffmpeg/ffprobe and a throwaway artwork cache. The pages
+and the player were checked in headless Chromium against a private
+instance of this branch (below).
+
+Audiobookshelf's and Overcast's behaviour cited here is from
+`UI-AUDIO-REFERENCE.md` and general knowledge, behaviour only; nothing
+was copied.
+
+**The code:**
+
+- `parlour_catalog::podcast_artwork` caches a show's artwork.
+- `parlour_catalog::podcast_chapters` reads the JSON chapter list and
+  a download's own chapter marks.
+- `podcast_api.rs` gains the artwork and chapters routes, plus
+  `artwork_url` on shows and episodes.
+- `podcasts.rs` runs the artwork step after each check, and after an
+  admin's add or OPML import.
+- `listening.rs` gains the per-show stats and history artwork.
+- `playback.rs` gains the show and artwork on Now Playing.
+- `discover.rs` counts a podcasts library's shows for its Home tile.
+
+**The pages:**
+
+- `web/src/lib/PodcastShelf.svelte`: a podcasts library's view at
+  `/library/{id}`.
+- `web/src/routes/podcast/[id]`: the show page.
+- `web/src/routes/episode/[id]`: the episode page and its player.
+- `web/src/lib/feedHtml.ts`: the description sanitiser.
+- `ShowArt.svelte` and `EpisodeMark.svelte`: the artwork tile and the
+  episode-state mark.
+
+**Who sees what (D31, D41).** Every page reads POD5's listener API, so
+a profile sees only the shows its grant reaches. With D41's flag off it
+sees no explicit show anywhere:
+
+- **The shows list:** not listed, and not found by the filter (POD5's
+  `q`).
+- **Counts:** not counted on the Home library tile (reading 11).
+- **Listening:** not in the stats or the history.
+- **Its artwork and chapters:** 404.
+- **Its show and episode pages:** "Not found", worded exactly as for a
+  show that doesn't exist. Nothing of the show is on the page.
+
+Shows and episodes are not in the global search (reading 14).
+
+**The shows list** (`/library/{id}` for a podcasts library;
+UI-AUDIO-REFERENCE §4.4 "Shows list").
+
+- **The cards.** One card per show, by sort title. Each card has:
+  - the artwork, else an initial tile;
+  - the title, on two lines;
+  - the author, in small capitals;
+  - the episode count, and this profile's "in progress" and "played"
+    counts.
+- **The filter.** A box that filters by title or author on the
+  server.
+- **Current / All.** A switch: "current" shows are those with an
+  episode this profile hasn't finished (reading 10). An empty library
+  points admins to Server → Podcasts.
+
+**The show page** (`/podcast/{id}`).
+
+- **The header:**
+  - the artwork;
+  - the title and author;
+  - the episode count, "Serial" for a serial show, the genres and the
+    language;
+  - an "Explicit" badge, which only a profile allowed explicit content
+    can ever see;
+  - this profile's played / in-progress counts;
+  - the feed's description, shown safely (below) and folded when long;
+  - for admins, a link to Server → Podcasts' page for the show.
+- **The episode list.** The order is POD5's: a serial show runs oldest
+  first, any other newest first. The list is shown 50 at a time.
+- **Each row** has:
+  - this profile's state (reading 7): a dot for new, a progress ring
+    for part-played, a check for played;
+  - the title, which links to the episode page;
+  - the date, and the length, or for a part-played episode the time
+    left;
+  - the season, episode number and type (trailer / bonus);
+  - a one-line summary;
+  - an undownloaded episode's note: "Not downloaded to Parlour — plays
+    from the publisher."
+- **The buttons:**
+  - **Play** (Resume for a part-played episode) opens the episode page
+    and starts it.
+  - **Mark as played** or **Mark as unplayed** writes progress through
+    POD5. Unplaying by hand goes back to 0 (AB11).
+  - For admins on an undownloaded episode, **Download** queues POD4's
+    `{"episode_id"}` hook. The row says the download is queued, and
+    the page looks again every 3 s until the file is in.
+
+**The episode page and player** (`/episode/{id}`;
+UI-AUDIO-REFERENCE §4.4 "Player"). It is AB5's book player, for one
+episode.
+
+- **The header:**
+  - the show's name in small capitals, linking to the show;
+  - the title, date, length, and season and episode;
+  - this profile's state;
+  - for an undownloaded episode, "plays straight from the publisher's
+    server";
+  - for admins, "Download to Parlour".
+- **The player** (UI-AUDIO-REFERENCE C3–C5, C7):
+  - The current chapter's title (else the episode's) sits over an
+    episode-wide scrubber, with "Next chapter" beside it.
+  - Elapsed and remaining time sit under the scrubber.
+  - The transport is back 15 s, play / pause, forward 30 s.
+  - Under it: Mark as played or unplayed, and Start over.
+- **Below the player:**
+  - the chapters, each with a check once played; the current one is
+    filled to the playhead and shows the time left in it, and a click
+    plays from it;
+  - the show notes, shown safely.
+- **Where the audio comes from** is POD5's `delivery` for the `web`
+  profile:
+  - `file` streams the download with Range.
+  - `aac` waits for AB10's AAC copy, which answers 503 until it is
+    made. The page says it is converting and why, exactly as the book
+    page does.
+  - `enclosure` sets the `<audio>` to the stream route, which
+    redirects to the publisher (D32 as amended). The page says so.
+    Because the redirect carries `Referrer-Policy: no-referrer`, the
+    publisher's request has no Referer. If the publisher's copy can't
+    be played, the page says the publisher's server may be down.
+- **Progress** follows AB11's rules through POD5's routes, exactly as
+  the book page writes it:
+  - every 15 s while playing, on pause, on a seek, and with
+    `keepalive` when the page goes away;
+  - only once the page has played, so opening an episode changes
+    nothing;
+  - each write carries `client_updated_at`;
+  - the audio's end writes `finished: true`.
+- **The length** is the one the browser measures once it knows it;
+  until then it is POD5's `length_ms` (the download's, else the
+  feed's).
+- **Listening sessions** use AB8's reports, widened by POD5, with
+  `episode_id`:
+  - the first play opens one;
+  - a report goes every 15 s while the page is open;
+  - the end, or leaving the page, closes it;
+  - an admin's stop (409) pauses the player and says why.
+- **`?play=1`** (from a row's Play) starts the episode once it has
+  loaded.
+
+**Show artwork (POD4 reading 11).** A page never loads the publisher's
+artwork address. That address is the publisher's (it would hand them
+every listener's IP), and a paid feed's may hold its token.
+
+- **The copy.** The server fetches the image into the artwork cache,
+  `PARLOUR_ARTWORK_DIR/podcasts/<show>/cover-<key>.<ext>`, and records
+  it in `podcasts.image_path`.
+  - `<key>` is the first 16 hex digits of the address's SHA-256, so it
+    says nothing of the address.
+  - Only a JPEG, PNG, WebP or GIF is kept, recognised by its first
+    bytes, at most 20 MB. Anything else is refused, an SVG or an HTML
+    error page included, because the copy is served from Parlour's own
+    origin.
+- **When** (reading 1):
+  - after every check of the show, scheduled or "refresh now", in the
+    `refresh_podcasts` job;
+  - in the background, right after an admin adds the show by URL or
+    by OPML import.
+
+  A copy already made for the feed's current address is left alone,
+  so a check costs nothing once the image is cached.
+- **When the feed changes it:**
+  - **A new address** gets a new copy at the next check, and the old
+    file is removed.
+  - **No artwork any more:** the copy is removed and `image_path`
+    cleared.
+  - **A fetch that fails** keeps the older copy. It is listed on the
+    job as "*Show*: the artwork wasn't cached (*reason*)", by title,
+    never by address (`without_url`). It doesn't fail the job. The
+    job's result gains `artwork: {cached, failed}`.
+- **Serving.** `GET /api/v1/podcasts/{id}/artwork` serves the copy:
+  - to a signed-in profile that can reach the show (its grant and
+    D41's flag); anyone else gets 404, and no sign-in gets 401;
+  - typed by its extension, with `X-Content-Type-Options: nosniff`
+    and `Cache-Control: private, max-age=604800`;
+  - with no copy, 404.
+
+  Shows, episodes, Now Playing, the history and the stats carry
+  `artwork_url` (`…/artwork?v=<key>`, so a new copy is a new address),
+  or null. A page shows an initial tile when it is null or the image
+  fails, as the book pages do.
+
+**Descriptions (POD5 reading 12).** Show and episode descriptions are
+the feed's HTML, written by whoever publishes the feed. The pages never
+insert it as it comes (`web/src/lib/feedHtml.ts`, reading 6):
+
+- **How.** It is read into an inert document (`DOMParser`: no script
+  runs and nothing is fetched) and written out again from an
+  allowlist.
+- **Kept:** paragraphs, line breaks, lists, quotes, bold, italic,
+  underline and code. Headings become bold paragraphs.
+- **Links:** only absolute `http`, `https` and `mailto` addresses.
+  They open in a new tab with `rel="noopener noreferrer nofollow"`.
+  Any other link (e.g. `javascript:`) keeps its text and loses the
+  link.
+- **Dropped with their contents:** scripts, styles, frames, forms,
+  media and **images**. An image would hot-link the publisher.
+- **Unwrapped:** every other element keeps its text and loses the
+  element.
+- **Attributes:** none survives except a link's checked `href`.
+- **Plain text:** a description with no markup is escaped, and its
+  line breaks are kept. A row's one-line summary is the same text,
+  stripped of markup.
+
+**Chapters (POD5 reading 12; reading 4).**
+`GET /api/v1/podcast-episodes/{id}/chapters` returns
+`{source, chapters: [{start_ms, title}], error}`. It is read
+server-side when the player asks:
+
+1. **The download's own chapter marks** (ID3 `CHAP`, MP4 chapters,
+   read with ffprobe), when it has titled ones. No publisher is asked.
+   `source: "file"`.
+2. **Else, the feed's Podcasting 2.0 chapter list**
+   (`podcast:chapters`, `chapters_url`), fetched now from the
+   publisher, and read as JSON. `source: "feed"`.
+   - **Limits:** 15 s and 1 MB.
+   - **What is kept:** only `startTime` and `title`. A chapter's
+     `img` and `url` are dropped, because both are publisher
+     addresses. A `"toc": false` chapter is dropped too.
+   - **The order:** by start time, the first of two at the same time
+     kept, at most 1 000 chapters.
+   - **When it fails:** the answer is an empty list and an `error` in
+     plain words ("The publisher's chapter list couldn't be read: the
+     chapter list answered HTTP 404."), never the address, so the
+     player plays on without chapters.
+3. **Neither:** `source: null`, no chapters.
+
+The route answers 404 to a profile that can't reach the episode, as
+POD5's routes do. Nothing is stored.
+
+**Listening stats, history, Now Playing (reading 5).**
+
+- **Stats.** `GET /api/v1/listening/stats` gains `shows`:
+  - each show with this profile's listening time, sessions, distinct
+    episodes and last listen, most listened first
+    (UI-AUDIO-REFERENCE §4.4, "total time per show");
+  - only shows the profile can reach (its grant, and D41's flag).
+
+  Preferences → Listening shows it as "By show", under "By book".
+- **History.** A profile's history and the admin's session list link
+  an episode's session to its page, with the show's artwork.
+- **Now Playing.** An episode's card links to the episode page
+  (POD5's placeholder was Server → Podcasts) and shows the show's
+  artwork. `/api/v1/admin/sessions` gains `podcast_id` and
+  `artwork_url` (reading 12).
+
+**Home (reading 11).** A podcasts library's Home tile counts the shows
+the profile can reach ("2 shows"), D41's flag included. It used to
+count the library's `media_items`, which for podcasts is always 0.
+
+**The bundle.** It is unchanged at format v1:
+
+- `podcasts` (and with it `image_path`) stays *left out*. A new host's
+  first check of a show fetches its artwork again into the new host's
+  own cache.
+- `listening_sessions` and episode progress stay with **D36, still
+  open**.
+
+**Checked in a browser (2026-11-27).**
+
+- **Why not the test instance.** The live test instance still runs a
+  build from before POD1: its migrations stop at 2026-11-10 and it has
+  no podcast tables. It wasn't redeployed, because that isn't this
+  task's to do.
+- **The setup.** The checks ran instead against a private instance of
+  this branch on oryx's loopback:
+  - its own throwaway Postgres;
+  - a local stub host serving two feeds with tokenised addresses;
+  - MP3, ALAC and PNG fixtures made with ffmpeg;
+  - a Podcasting 2.0 chapter list;
+  - a description with a `<script>`, an `<img onerror>`, an `onclick`
+    and a `javascript:` link.
+- **The run.** chrome-headless-shell 151 over CDP: **68 checks, 68
+  passed**. They cover:
+  - the shows list (order, artwork from Parlour, initial tile, filter,
+    counts);
+  - the show page (order, states, not-downloaded rows, admin Download,
+    a safe description in which nothing injected ran);
+  - the player on a download: play, ±seek, chapter tracking, pause
+    saving the position, a chapter click, playing to the end marking
+    it played;
+  - an undownloaded episode playing through the redirect;
+  - the ALAC download playing as its AAC copy;
+  - the feed's chapter list;
+  - Now Playing linking to the episode with the show's artwork;
+  - the show page's ring, check and counts updating;
+  - Mark played / unplayed;
+  - a download landing;
+  - Listening's "By show" and history links;
+  - the Home tile;
+  - a D41-off profile, which saw one show, found nothing by filtering
+    and got "Not found" on the explicit show's pages.
+- **What left Parlour.** The browser's only requests off Parlour's
+  origin were the two redirected enclosures, both sent with no
+  Referer. The stub host's log agrees. Artwork, chapter list and feeds
+  were fetched by the server only, and the token never appeared in the
+  server's log.
+
+**Not built here:**
+
+- **The persistent player bar** (UI-AUDIO-REFERENCE §4.2): a separate
+  web task for books and episodes together (reading 8).
+- **The podcast Home screen** (§4.4 "Home"): the episode cards and the
+  Playlists row. Playlists are D35's, in CL2/POD phases.
+- **Device settings:** speed, sleep timer and skip intervals (D35; the
+  reference's C5/C6 defaults are used), and keyboard shortcuts.
+- **Deferred (D35):** transcripts.
+- **Later tasks:** the Up Next queue (POD8 / D35), directory search
+  (POD7), and bookmarks (books only, D35).
+- **Not stored:** episode artwork (POD1 reading 12 kept none).
+- **Search:** shows and episodes in the global search (reading 14).
+- **Still a gap:** `library_access.max_rating`, still enforced nowhere
+  (POD5 reading 14).
+
+#### Readings made in POD6 — for the owner's veto
+
+1. **Artwork is cached when a show is checked (and right after an
+   admin adds it), not when a page first asks for it.**
+   - *Why:* a page view never makes the server reach out to a
+     publisher, and a broken artwork address is tried once per check,
+     not once per listener per page. The check already holds the
+     address, and the job already lists per-show trouble.
+   - *Cost:* a show added before POD6 gets its artwork at its next
+     check. With auto-download off (the default), that is the next
+     "Refresh now".
+   - *If vetoed:* the artwork route fetches a missing copy on first
+     request.
+2. **The original image is kept and served as fetched, at most 20 MB,
+   and only as JPEG, PNG, WebP or GIF.**
+   - *Size:* Parlour has no image library, so there is no resizing.
+     Feed artwork is commonly 1400–3000 px, and a list page downloads
+     each once, then the browser keeps it for 7 days (versioned by
+     `?v=<key>`).
+   - *SVG is refused:* it can carry script, and the copy is served
+     from Parlour's origin.
+   - *If wanted:* a thumbnail size is a later task with an image
+     dependency.
+3. **A failed artwork fetch keeps the older copy, names the show on the
+   job, and raises no notice.**
+   - *Why:* artwork is cosmetic, unlike a failing feed (POD2's notice).
+     It is tried again at the next check.
+4. **Chapters are read server-side, per request: the download's own
+   marks first, else the feed's JSON chapter list. Nothing is stored.**
+   - *Why the download first:* it needs no publisher and is exactly
+     the audio being played.
+   - *Why the feed's list next:* it covers undownloaded episodes.
+   - *Why not stored:* nothing in POD1 holds chapters (POD1 reading
+     12), and storing them would be a migration for something read
+     once per listen.
+   - *Cost:* the publisher of an undownloaded episode with a chapter
+     list sees Parlour's address (not the listener's) once per episode
+     page opened, and a download is probed by ffprobe each time.
+   - *Left out:* a chapter's image and link are dropped (publisher
+     addresses), and so is `"toc": false`.
+   - *If vetoed:* deferring chapters is removing the route and the
+     list. Storing them is one table plus a step in the download.
+5. **The stats gain a per-show list (POD5 reading 8 left it to POD6).**
+   - UI-AUDIO-REFERENCE §4.4 asks for "total time per show and per
+     book", and Overcast's stats (§2.8) are per show.
+   - It follows D41's flag, as the totals do.
+   - The book list stays books.
+6. **Descriptions are sanitised in the page, from an allowlist, not on
+   the server.**
+   - *Why the page:* POD5 passes the feed's HTML as given (POD5
+     reading 12), so a native client (Phase 12) must sanitise too. CL6
+     should say so.
+   - *What it drops:* images, because they would hot-link the
+     publisher.
+   - *If vetoed:* sanitising on the server (e.g. an HTML-sanitiser
+     crate) changes POD5's answers, which is the owner's call for the
+     API contract.
+7. **An episode's state.**
+   - *The states:*
+     - **New:** at 0 and not finished, which includes one un-played
+       by hand.
+     - **In progress:** its position is past 0.
+     - **Played:** finished.
+   - *The ring:* the position over the length, the download's else the
+     feed's. With no length known, a small sliver shows that it has
+     started.
+   - *Not checked:* ABS's and Overcast's exact "new" rules (Overcast
+     also ages episodes).
+8. **The player lives on the episode page, as AB5's does on the book
+   page.**
+   - Leaving the page stops playback (saving progress and closing the
+     session).
+   - UI-AUDIO-REFERENCE §4.2's persistent player bar is "a
+     prerequisite web task" for books and episodes alike, not POD6's
+     line.
+   - A row's Play opens the episode page with `?play=1`.
+9. **The controls are the reference's podcast defaults, with no
+   settings.**
+   - *What there is:* back 15 s and forward 30 s (C5), next chapter,
+     and the chapter list below the player.
+   - *Not built:* speed, a sleep timer and skip-interval settings.
+     These are device settings (D35) and not in POD6's line. There are
+     no keyboard shortcuts yet.
+10. **Current / All on the shows list defaults to All.**
+    - The choice is remembered per browser.
+    - "Current" is a show with an episode this profile hasn't
+      finished. Under D31 every show counts for every profile, so
+      "All" is the honest default (UI-AUDIO-REFERENCE §4.4 notes the
+      same limit).
+11. **A podcasts library's Home tile counts the shows this profile
+    can reach, D41 included.**
+    - It used to count `media_items`, which was always 0 for podcasts.
+    - Counting every show would leak an explicit show's existence to a
+      profile with D41 off.
+12. **Now Playing links an episode to the listener's episode page.**
+    - That page is read with the admin's own active profile, so an
+      admin whose profile can't reach the show sees "Not found" there.
+    - Server → Podcasts stays the admin's management view of any show.
+    - The card's artwork follows the same rule, and falls back to the
+      initial tile.
+13. **An admin's Download on the episode page doesn't swap the source
+    of an episode that is playing.**
+    - It keeps playing from the publisher, and the page says to open
+      it again to play Parlour's copy.
+    - *Why:* a mid-play swap would reload the audio and move the
+      playhead.
+14. **Shows and episodes are not in the global search.**
+    - They are not `media_items` (POD1 reading 1), and the search runs
+      over the catalog.
+    - The shows list's filter (POD5's `q`) is their search for now.
+    - *If wanted:* adding them is a search-side change that must apply
+      the grant and D41's flag.
+15. **A show's page lists 50 episodes at a time, with "Show more".**
+    The API sends the whole list (POD5), and a long-running show can
+    have more than a thousand episodes.
 
 ---
 

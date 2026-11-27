@@ -286,7 +286,7 @@ async fn run_queued_job(pool: &PgPool, http: &reqwest::Client) -> parlour_jobs::
         .unwrap()
         .expect("a queued refresh_podcasts job");
     let id = job.id;
-    parlour_server::podcasts::run_refresh_job_claimed(pool, http, job).await;
+    parlour_server::podcasts::run_refresh_job_claimed(pool, http, job, None).await;
     parlour_jobs::get(pool, id).await.unwrap().unwrap()
 }
 

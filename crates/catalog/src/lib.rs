@@ -37,6 +37,10 @@
 //!   its new episodes are downloaded and its retention applied (POD3).
 //! - `podcast_download` — episode download into the podcasts library's
 //!   writable store, and retention (POD3, D32).
+//! - `podcast_artwork` — a show's artwork fetched into the artwork
+//!   cache, never hot-linked (POD6).
+//! - `podcast_chapters` — an episode's chapters, from its download or
+//!   the feed's Podcasting 2.0 chapter list, read server-side (POD6).
 //!
 //! Matching files to TMDB/TVDB metadata is `metadata_sync`
 //! (Milestone 1.4, providers in `parlour-metadata`); artwork
@@ -52,6 +56,8 @@ pub mod fingerprint;
 pub mod metadata_sync;
 pub mod opml;
 pub mod parse;
+pub mod podcast_artwork;
+pub mod podcast_chapters;
 pub mod podcast_download;
 pub mod podcast_feed;
 pub mod podcasts;
