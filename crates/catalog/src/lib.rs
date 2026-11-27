@@ -50,6 +50,7 @@ pub mod book_sync;
 pub mod emby;
 pub mod fingerprint;
 pub mod metadata_sync;
+pub mod opml;
 pub mod parse;
 pub mod podcast_download;
 pub mod podcast_feed;

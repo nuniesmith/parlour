@@ -53,6 +53,9 @@ pub struct AppState {
     /// D39: an admin's saved setting overrides it; read the setting in
     /// force with `backup::effective`.
     pub backup: Option<crate::backup::BackupSettings>,
+    /// POD4: the client an admin's add-by-URL and OPML import fetch
+    /// feeds with (the same settings as the feed checks).
+    pub podcast_http: reqwest::Client,
 }
 
 impl AppState {
@@ -69,6 +72,7 @@ impl AppState {
             export_dir: crate::export::export_dir(std::path::Path::new("cache")),
             import_dir: crate::import::import_dir(std::path::Path::new("cache")),
             backup: None,
+            podcast_http: parlour_catalog::podcasts::http_client(),
         }
     }
 }
@@ -108,6 +112,7 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::import::routes())
         .merge(crate::backup::routes())
         .merge(crate::sidecars::routes())
+        .merge(crate::podcast_admin::routes())
         .fallback(fallback)
         .layer(PropagateRequestIdLayer::x_request_id())
         .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))

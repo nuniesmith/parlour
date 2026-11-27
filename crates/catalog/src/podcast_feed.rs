@@ -242,16 +242,16 @@ pub fn parse_feed(text: &str) -> Result<Feed, FeedError> {
     })
 }
 
-fn qname(start: &BytesStart<'_>) -> String {
+pub(crate) fn qname(start: &BytesStart<'_>) -> String {
     String::from_utf8_lossy(start.name().as_ref()).to_ascii_lowercase()
 }
 
-fn local(name: &str) -> &str {
+pub(crate) fn local(name: &str) -> &str {
     name.rsplit(':').next().unwrap_or(name)
 }
 
 /// An attribute's value, entities resolved where they can be.
-fn attr(start: &BytesStart<'_>, key: &str) -> Option<String> {
+pub(crate) fn attr(start: &BytesStart<'_>, key: &str) -> Option<String> {
     for a in start.attributes().with_checks(false).flatten() {
         if String::from_utf8_lossy(a.key.as_ref()).eq_ignore_ascii_case(key) {
             let v = match a.unescape_value() {

@@ -1339,7 +1339,7 @@ not yet scheduled in a PR:
 
 ---
 
-## Phase 11 — Podcasts (POD1's schema, POD2's feed checks and POD3's downloads built 2026-11-26; the rest is plan)
+## Phase 11 — Podcasts (POD1's schema, POD2's feed checks, POD3's downloads and POD4's feed management built 2026-11-26; the rest is plan)
 
 The server owns the feeds. Clients never fetch RSS themselves, which
 is what lets a Fire Stick, a tablet and the phone agree.
@@ -1584,6 +1584,8 @@ flow test makes exactly these writes.
   - **Settings API.** AB11's settings API (`…/audiobook-settings`)
     accepts audiobooks libraries only, so editing a podcasts
     library's finish rule needs it widened (POD4/POD5).
+    *POD4 left it to POD5, which writes the first episode progress
+    (POD4 reading 10).*
 - **Bundle (format v1 unchanged).** `podcasts` and `podcast_episodes`
   are *left out* in `coverage.rs`:
   - The shows are an admin's deliberate work. Their place in the
@@ -1682,6 +1684,8 @@ flow test makes exactly these writes.
     - A file belongs to one episode.
     - The show's folder is NULL until POD3/POD4 names it (ABS fixes a
       show's folder when it is added).
+      *POD3 names it at the first download, and POD4 keeps that
+      (POD4 reading 2).*
 12. **More of the feed is kept than the plan's sketch listed.**
     - *Added, show:* `sort_title`, `language`, `explicit`,
       `podcast_type` (a serial show lists its episodes oldest
@@ -1817,6 +1821,7 @@ Failures are listed by the show's title.
   names (`parlour_jobs::cron`). It is read in UTC, as the nightly
   tick is. An expression Parlour can't read is treated as the hourly
   default and logged; POD4 will refuse one at input.
+  *POD4 does ("Managing feeds (POD4)").*
 - **The tick.** Once a minute, if any show is due, a tick queues one
   `refresh_podcasts` job `{"trigger": "schedule"}`. It doesn't when a
   refresh job is already waiting, or when one started within the
@@ -1848,7 +1853,8 @@ with the others):
 - **Clearing.** A successful check (200 or 304) resets the count, and
   the next pass resolves the notice.
 - **No link.** The Alerts rail has no link for it until POD4 gives
-  shows a page.
+  shows a page. *POD4 did: the notice links to the show's page
+  ("Open the show").*
 
 **Unchanged.** The bundle stays at format v1, with no table change
 and nothing new in `coverage.rs`. `podcasts`, `podcast_episodes` and
@@ -1917,7 +1923,8 @@ change is the job's name on the Jobs page ("Podcast feed check").
 10. **Fetch limits.**
     - 60 s per fetch, 15 s to connect, 64 MB per feed.
     - Up to 10 redirects are followed, and the stored URL is not
-      rewritten on a permanent one (POD4 can offer that).
+      rewritten on a permanent one (POD4 can offer that; it didn't,
+      POD4 reading 11).
     - Parlour's own User-Agent, with no contact address.
     - Any status but 200/304 is a failure.
 11. **The feed URL never leaves the database.**
@@ -2221,6 +2228,321 @@ each feed request instead, so feed checks behave as before.
 12. **Podcasts libraries are never scanned.** The scanner returns an
     empty report for them. This also covers the file watcher and the
     nightly scan.
+
+### Managing feeds (POD4, built 2026-11-26)
+
+POD4 gives admins the screens and API to manage a podcasts library's
+shows: add a show by its feed address, import and export OPML, refresh
+a show now, download an episode by hand, and edit a show's D32
+settings. Shows get a management page, and the Dashboard's
+failing-feed notice links to it. Listening is not here: the listener
+API is POD5's, and the podcast pages and player are POD6's.
+
+There is no migration: every column POD4 writes is POD1's. The bundle
+stays at format v1, with nothing new in `coverage.rs`. The flow
+`crates/server/tests/podcast_manage_flow.rs` runs it all on a fresh
+database, against a local stub feed and enclosure host (never the real
+internet), with real ffprobe and a throwaway store.
+
+- **The code:**
+  - `crates/server/src/podcast_admin.rs` holds the routes.
+  - `parlour_catalog::podcasts` gains `add_podcast`,
+    `check_feed_url` and `ShowSettings`.
+  - `parlour_catalog::opml` is the OPML reader and writer.
+- **The pages:** Server → Podcasts (`/admin/podcasts`) and a show's
+  page (`/admin/podcasts/{id}`).
+
+Audiobookshelf's behaviour cited in this section and its readings
+(what ABS does on add, on OPML import, on removal) is from general
+knowledge of ABS. Unlike POD1–POD3, it was **not** re-checked against
+ABS's source in this run, so treat those remarks as unconfirmed.
+Nothing was copied. The D31/D32 rules themselves are as decided.
+
+**Who (D31).** Every POD4 route is under `/api/v1/admin/` and answers
+404 to anyone who isn't an admin, as the rest of the Server area does.
+Admins manage every podcasts library, whatever their own profile's
+grants say, as on Server → Library. Everyone with access to a podcasts
+library sees every show in it: there are no subscriptions, and the
+grant path is POD5/POD6's.
+
+**The API.**
+
+| Route | What |
+|---|---|
+| `GET /api/v1/admin/libraries/{id}/podcasts` | The library's shows, by sort title. For each: episodes, downloaded, last check, last error, failures in a row, `auto_download`, `check_schedule`. |
+| `POST /api/v1/admin/libraries/{id}/podcasts` `{"feed_url"}` | Add a show (below). 201 with the show page's data. |
+| `POST /api/v1/admin/libraries/{id}/podcasts/opml` | Import: the OPML file is the request body. 200 with a report. |
+| `GET /api/v1/admin/libraries/{id}/podcasts/opml` | Export: the library's shows as an OPML file download. |
+| `GET /api/v1/admin/podcasts/{id}` | A show, as on its page. It holds the details, the feed address, the folder and the check state. It also holds `settings` and ABS's `default`, whether a check is waiting, and the episode list. |
+| `PUT /api/v1/admin/podcasts/{id}/settings` | D32's four settings, all four required. |
+| `POST /api/v1/admin/podcasts/{id}/refresh` | "Refresh now". 202 with the job. |
+| `POST /api/v1/admin/podcast-episodes/{id}/download` | "Download". 202 with the job. |
+
+A library that isn't a podcasts library is a 400, and an unknown one
+is a 404.
+
+**Adding a show by its address.**
+
+1. **The address** is trimmed. It must be an `http` or `https` URL
+   with a host, at most 2048 characters. It is stored as typed.
+2. **A duplicate** is refused with a 409 naming the show already there.
+   A duplicate is the same address in the same library (POD1's
+   uniqueness). Another podcasts library may hold the same feed.
+3. **The feed is fetched and read at once**, with POD2's fetch and
+   parser and POD2's limits (60 s, 64 MB, 200 only). If it fails, the
+   add is refused with a 400 and nothing is stored, for example:
+   - "That address can't be added: not an RSS feed (the document's
+     root is \<html\>)."
+   - "… the feed answered HTTP 404."
+   - "… could not fetch the feed: could not connect."
+4. **Stored with its first check.** A feed that reads is stored in one
+   transaction together with its first check: the show as the feed
+   describes it, its validators, `last_checked_at`, and a row per
+   episode. A new show is therefore never empty, and never a row that
+   fails every check. A feed without a title is named "Untitled
+   podcast" (or, from OPML, after its outline).
+5. **The new show** has ABS's defaults: auto-download off, hourly,
+   keep all, 3 per check. Nothing is downloaded. As in POD3, the cutoff
+   for "new" is this first check, so a show's back catalogue is never
+   downloaded on its own. An episode is downloaded by hand, or the next
+   new one arrives once auto-download is on.
+6. **The folder** stays NULL until the first download, which names it
+   as POD3 does (reading 2).
+
+**OPML import.**
+
+- **Reading the file.** The root must be `<opml>` with a `<body>`. Every
+  `<outline>` with a non-blank `xmlUrl` is a feed, at any depth (apps
+  nest them in folders), whatever its `type`. Its name is its `text`,
+  else its `title`. A file that isn't OPML is refused with a 400, and
+  so is an empty one. The body limit is the server's default, 2 MB.
+- **Each feed** is added exactly as an add by address is: checked,
+  fetched and read, then stored with its first check. Four are fetched
+  at a time.
+- **Skipped, never duplicated:**
+  - a feed already in the library;
+  - an address listed again in the same file (the first one counts).
+- **The report** has the feed count, how many were added, skipped and
+  not added, and one line per feed in the file's order. Each line has
+  the feed's name (its outline's name, else the stored title, else
+  "Feed *n* in the file"), the outcome, the show's id when there is
+  one, and why a feed was not added. It never includes an address.
+
+**OPML export.**
+
+- **The format.** An OPML 2.0 file named after the library (ASCII
+  letters, digits and dashes, e.g. `Podcasts.opml`). There is one
+  `<outline type="rss">` per show, sorted by title, with the title as
+  `text` and `title` and the feed address as `xmlUrl`.
+- **Its use.** This is how shows move to a new host until the bundle
+  carries them (POD1's note). The importer reads the file back: the
+  flow does exactly that round trip into a second library.
+- **Addresses.** The export includes each feed's full address, private
+  token and all, because a feed can't be re-added without it. The page
+  says so.
+
+**Refresh now.** "Refresh now" queues POD2's hook, a `refresh_podcasts`
+job `{"podcast_id": …}`. It checks the show whatever its schedule.
+
+- **Failures.** It counts toward the failures in a row like any other
+  check, so three failed refreshes raise the Dashboard notice.
+- **Downloads.** When the show's `auto_download` is on, it also
+  downloads new episodes and applies retention (POD3).
+- **A second click** while a check is waiting returns the waiting job
+  instead of queueing another.
+
+**Download by hand.** "Download" queues POD3's hook, a
+`refresh_podcasts` job `{"episode_id": …}`. It downloads that one
+episode, whatever the show's settings say.
+
+- **Already downloaded.** An episode that already has a file is refused
+  with a 409 "This episode is already downloaded.", and nothing is
+  queued. The job leaves such an episode alone anyway.
+- **A second click** returns the waiting job.
+- **Failures.** A failed download is listed on the job as POD3 lists
+  it, and the episode stays "not downloaded".
+
+**Per-show settings (D32).** `PUT …/settings` takes the four settings,
+checked before anything is stored:
+
+- **`auto_download`** turns the download of new episodes and the
+  scheduled check on together (POD1 reading 5). Turning it back on
+  after the 24-failure rule turned it off is allowed (POD2 reading 13).
+- **`check_schedule`** must be a five-field cron expression
+  (`parlour_jobs::cron`, UTC) that fires within the next five years.
+  Its white space is folded.
+  - **Refused:** an unreadable one (`every hour`, `@hourly`, four or six
+    fields, `61 * * * *`), with "The check schedule can't be read: …".
+    This is POD2 reading 4's promise: it is no longer only logged and
+    run hourly.
+  - **Also refused:** one that never fires (`0 0 31 2 *`), with "The
+    check schedule never fires."
+- **`max_new_episodes_per_check`** and **`max_episodes_to_keep`** must
+  each be 0 to 100 000. 0 means no cap and keep all, as before.
+- **Refused edits.** An unknown field is refused (422), and a refused
+  edit changes nothing.
+- **What the edit changes.** `updated_at` moves only when a value
+  changes. The next scheduled tick reads the new schedule, and the next
+  check reads the new limits.
+
+**The pages.**
+
+- **Server → Podcasts** (`/admin/podcasts`, in the Server sidebar):
+  - **Choosing a library.** With several podcasts libraries, a picker
+    chooses one (`?library=`). With none, the page says how to make
+    one: a library of kind Podcasts whose folder is a writable folder
+    kept for Parlour, never a media folder.
+  - **The table.** It lists the shows, with episodes downloaded / total,
+    last check, status (OK, not checked yet, or failing with the count
+    and the last error), and auto-download and its schedule. Each show
+    has "Manage" and "Refresh now".
+  - **Below the table.** The "Add a show" form, and the OPML import (a
+    file picker) and "Export OPML" link. The import's report is shown
+    as a table that links to each added or existing show.
+- **A show's page** (`/admin/podcasts/{id}`):
+  - **Feed checks.** Last checked, failing (count and last error),
+    scheduled checks on/off, and "Refresh now". The button reads
+    "Check queued…" while one waits.
+  - **Settings.** The four settings with their meanings, "Save
+    settings" and "Back to the defaults".
+  - **Details.** Feed address (admins only), folder (or "named at the
+    first download"), type, language, genres, explicit, and when it
+    was added.
+  - **Episodes.** The episode list:
+    - **Order.** A serial show's list runs oldest first, and an
+      episodic one's newest first. Undated episodes come last.
+    - **Columns.** Title with season/episode and trailer/bonus,
+      published, length, and downloaded (date and size), "Queued…" or
+      a "Download" button.
+  - **Polling.** While a check or a download waits, the page looks
+    again every 2 s (for at most ten minutes), so the result appears
+    without a reload.
+- **The Dashboard notice.** The failing-feed notice
+  (`podcast_feed_failing`) now links to its show's page ("Open the
+  show"), from the `podcast_id` in its detail. POD2 left it with no
+  link.
+
+**The feed address stays out of sight.**
+
+- **Where it never appears:** in an add's or an import's error, in the
+  import report, in the log, in a job (payload, errors or result) or in
+  a notice. This covers both the flow test and the browser check.
+- **Where admins see it:** on the show's page and in the OPML export.
+- **Why the import isn't a job:** a job's payload is shown on the Jobs
+  page and in its API, so the import runs in the request instead
+  (reading 3).
+
+**Not built here.**
+
+- **Removing a show**, and what removing does to its downloaded files
+  (ABS asks).
+- **Rewriting a feed's address** after a permanent redirect (POD2
+  reading 10).
+- **Editing a show's title.**
+- **Showing artwork or descriptions.**
+- **Directory search.** That is POD7.
+- **The library's finish rule for episodes.** That is POD5 (reading
+  10).
+
+#### Readings made in POD4 — for the owner's veto
+
+1. **An add fetches and checks the feed in the request, and stores the
+   show with that first check.**
+   - *Not a job:* it is neither queued as a `{"podcast_id"}` job nor
+     stored first and checked later.
+   - *Why:* validating at input needs the fetch anyway, so one fetch
+     both refuses a non-feed and fills the show. A new show is never an
+     empty row, and never a row that fails every check. ABS also reads
+     the feed when a show is added.
+   - *Cost:* the admin waits for the fetch, up to 60 s for a slow host.
+2. **A show's folder is named at its first download, as POD3 does, not
+   when it is added (ABS does it at add).**
+   - *Why:*
+     - ABS fixes the folder at add because its add form has the admin
+       choose the folder. Parlour has no such choice: the store is the
+       library's.
+     - Adding needn't touch the disk, so shows can be listed before
+       the store is mounted or while it is full. A show nobody
+       downloads from (auto-download is off by default) leaves no
+       empty folder.
+     - There is one naming path, POD3's, with its clash rules and
+       overlap guard.
+   - *If vetoed:* `podcast_download::show_folder` is called at add.
+3. **OPML import runs in the request, four feeds at a time, not as a
+   job.**
+   - *Why:* a job's payload and errors are shown on the Jobs page and in
+     its API, and an import's input is a list of addresses that may hold
+     tokens. In the request, nothing but the report leaves, and the
+     report names feeds only.
+   - *Cost:* a long file holds the request open. Ten feeds on good
+     hosts take a few seconds, while a hundred dead hosts take minutes.
+     ABS runs its import as a background task.
+   - *If vetoed:* a job that reads the file from the cache folder, never
+     from its payload.
+4. **What counts as a feed in OPML.**
+   - Every `outline` with an `xmlUrl`, at any depth, whatever its
+     `type`. The name is `text`, else `title`.
+   - Repeats in the file: the first counts. There is no cap on the
+     number of feeds, and the file limit is 2 MB.
+   - The export is OPML 2.0, `type="rss"`, with `text`, `title` and
+     `xmlUrl`, sorted by title.
+5. **A feed's address is stored as typed (trimmed), and duplicates are
+   exact matches.**
+   - Only `http`/`https`, at most 2048 characters.
+   - It is not normalised, so `HTTPS://Host/feed` and
+     `https://host/feed` would be two shows. Normalising could change a
+     token's encoding, and ABS stores the address as given too.
+6. **Admins see the feed address; nobody else, and no error, ever
+   does.**
+   - It is on the show page (with a note that it may hold a token) and
+     in the OPML export, which is useless without it. ABS shows it to
+     admins.
+   - *If vetoed:* the page masks the query string.
+7. **Settings checks.**
+   - *The schedule:* a five-field cron that fires within five years,
+     with its white space folded. Every-minute schedules are allowed,
+     as ABS allows them.
+   - *The limits:* 0–100 000. ABS has no upper bound, and this one only
+     catches typos.
+   - *The edit:* all four settings in one PUT, as AB11's settings are.
+8. **A show's title and sort title can't be edited here.**
+   - *Why:* every successful check rewrites them from the feed (POD2
+     reading 6), so an edit would last until the next check. Nothing on
+     the management page needs it.
+   - *If wanted:* a "keep my title" flag is a migration, plus one
+     condition in the check.
+9. **A second click doesn't queue a second job.**
+   - "Refresh now" and "Download" return the job already waiting for
+     the same show or episode, if there is one. A job that is already
+     running doesn't count, so a refresh after it starts queues a new
+     one.
+   - Downloading an episode that has a file is a 409, not a queued job
+     that does nothing.
+10. **The podcasts library's finish rule is POD5's, not POD4's.**
+    - AB11's `…/audiobook-settings` still accepts audiobooks libraries
+      only. Nothing writes episode progress until POD5's API, so
+      widening it now would edit a rule nothing reads.
+    - The rule applies with ABS's default (10 s) when POD5 starts
+      writing progress. POD5 widens the settings route, or adds a
+      podcasts twin, with the API that uses it.
+11. **Left out of POD4:** removing a show, rewriting an address after a
+    permanent redirect, artwork and descriptions.
+    - *Removing a show:* it isn't in POD4's line. ABS asks whether to
+      delete the files too, and that is the owner's call when the
+      feature is wanted.
+    - *Artwork:* it isn't hot-linked from the publisher, because that
+      would hand every admin's address to the publisher. Caching it is
+      POD6's, with the listener pages.
+    - *Descriptions:* they are the feed's HTML, which POD6 shows
+      safely.
+12. **Admins manage every podcasts library, whatever their profile's
+    grants.** This is the Server area's existing rule (Server → Library
+    lists every library). The grant path (POD1's join through
+    `library_access`) is for the listener API and pages, POD5/POD6.
+13. **Episode order on the show page:** a serial show's runs oldest
+    first and an episodic one's newest first. Undated episodes come
+    last, and the guid breaks ties. This is what podcast apps do, and
+    POD1 reading 12 kept `podcast_type` for it.
 
 ---
 

@@ -1223,8 +1223,9 @@ hourly check / keep N (0 = all) / 3 new per check. Details:
 `docs/AUDIOBOOKS-PODCASTS.md` → Phase 11. The lines below keep
 their original wording; read them through that.
 
-POD1 (the schema), POD2 (feed checks) and POD3 (downloads and
-retention) are built; POD4–POD8 are plan only. Spec:
+POD1 (the schema), POD2 (feed checks), POD3 (downloads and
+retention) and POD4 (managing feeds) are built; POD5–POD8 are plan
+only. Spec:
 `docs/AUDIOBOOKS-PODCASTS.md`.
 
 - [x] POD1 (M) **Schema**: `podcasts` (feed URL, metadata,
@@ -1327,9 +1328,40 @@ retention) are built; POD4–POD8 are plan only. Spec:
   The bundle is unchanged (format v1, D36 open). Flow:
   `podcast_download_flow.rs`. Spec: AUDIOBOOKS-PODCASTS.md "Episode
   download and retention (POD3)" (12 readings for veto).
-- [ ] POD4 (M) **Manage feeds in the UI**: add by URL, OPML
+- [x] POD4 (M) **Manage feeds in the UI**: add by URL, OPML
   import/export, refresh now, per-feed settings; who may add
   is **D31**.
+  *Done 2026-11-26:* no migration (every column is POD1's).
+  - **Who.** Admins only (D31): every route is under
+    `/api/v1/admin/` and is a 404 for anyone else. There are no
+    subscriptions.
+  - **Add by URL.** The feed is fetched and read in the request. An
+    address that isn't an http(s) feed is refused with a plain error
+    that never repeats the address (a paid feed's token), and nothing
+    is stored. A duplicate in the library is a 409. A feed that reads
+    is stored together with its first check, so the show is never
+    empty. Nothing is downloaded, and the folder is still named at the
+    first download (POD3).
+  - **OPML.** Import adds each feed the same way, four at a time. It
+    skips feeds already in the library and repeats in the file, and
+    reports added / skipped / not added by name, never by address.
+    Export downloads the library's shows as OPML 2.0, which imports
+    back (round trip).
+  - **Refresh now / Download.** They queue POD2's `{"podcast_id"}`
+    and POD3's `{"episode_id"}` jobs, and a second click returns the
+    waiting job. An episode that already has a file is a 409.
+  - **Settings.** D32's four settings, with an unreadable or
+    never-firing cron schedule refused at input (POD2 reading 4).
+  - **Pages.** Server → Podcasts lists a library's shows, with the add
+    form, OPML import and export. A show's page has its check state,
+    settings, details and episode list with "Download". The
+    Dashboard's failing-feed notice links to the show's page.
+
+  Not here: playback, the listener pages and API (POD5/POD6), removing
+  a show, and the podcasts library's finish rule (POD5). The bundle is
+  unchanged (format v1, D36 open). Flow: `podcast_manage_flow.rs`.
+  Spec: AUDIOBOOKS-PODCASTS.md "Managing feeds (POD4)" (13 readings
+  for veto).
 - [ ] POD5 (M) **Native API**: podcasts, episodes, episode
   stream (Range; or redirect to the enclosure if not
   downloaded), progress get/put/delete, OPML.

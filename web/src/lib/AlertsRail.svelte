@@ -1,19 +1,14 @@
 <script lang="ts">
   // Alerts rail (UI5): the server's active notices, newest
   // first, each with a severity icon, a timestamp, a link to
-  // where it can be dealt with, and a per-admin Dismiss.
-  import { formatDateTime, type Notice } from '$lib/types';
+  // where it can be dealt with (`noticeLink`; POD4: a failing podcast
+  // feed links to its show), and a per-admin Dismiss.
+  import { formatDateTime, noticeLink, type Notice } from '$lib/types';
 
   let {
     notices,
     ondismiss,
   }: { notices: Notice[] | null; ondismiss: (n: Notice) => void } = $props();
-
-  const LINKS: Record<string, { href: string; label: string }> = {
-    job_failed: { href: '/admin/jobs', label: 'Open jobs' },
-    metadata_review: { href: '/admin/metadata', label: 'Review matches' },
-    sidecars_unwritable: { href: '/admin/library', label: 'Open libraries' },
-  };
 
   const SEVERITY_LABEL: Record<string, string> = {
     info: 'For your information',
@@ -58,8 +53,9 @@
               <time datetime={n.created_at}>{formatDateTime(n.created_at)}</time>
             </p>
             <p class="links">
-              {#if LINKS[n.kind]}
-                <a href={LINKS[n.kind].href}>{LINKS[n.kind].label}</a>
+              {#if noticeLink(n)}
+                {@const link = noticeLink(n)!}
+                <a href={link.href}>{link.label}</a>
               {/if}
               <button type="button" onclick={() => ondismiss(n)}>Dismiss</button>
             </p>

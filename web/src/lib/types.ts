@@ -1022,3 +1022,113 @@ export function formatListened(ms: number): string {
   if (h === 0) return `${m} min`;
   return m === 0 ? `${h} h` : `${h} h ${m} min`;
 }
+
+// ---------------------------------------------------------------- POD4
+
+/** D32's four per-show settings (ABS's defaults: off, hourly, 0, 3). */
+export interface ShowSettings {
+  auto_download: boolean;
+  /** Five-field cron, read in UTC. */
+  check_schedule: string;
+  /** 0 = keep all. */
+  max_episodes_to_keep: number;
+  /** 0 = no cap. */
+  max_new_episodes_per_check: number;
+}
+
+/** A show in Server → Podcasts' list. */
+export interface PodcastSummary {
+  id: string;
+  title: string;
+  author: string | null;
+  episodes: number;
+  downloaded: number;
+  last_checked_at: string | null;
+  last_error: string | null;
+  consecutive_failures: number;
+  auto_download: boolean;
+  check_schedule: string;
+}
+
+export interface PodcastEpisodeRow {
+  id: string;
+  title: string;
+  published_at: string | null;
+  duration_ms: number | null;
+  season: number | null;
+  episode_number: number | null;
+  episode_type: string | null;
+  enclosure_length: number | null;
+  downloaded_at: string | null;
+  file_size_bytes: number | null;
+  file_duration_ms: number | null;
+  download_queued: boolean;
+}
+
+/** A show's management page (admins only). */
+export interface PodcastShow {
+  id: string;
+  library_id: string;
+  library_name: string;
+  title: string;
+  sort_title: string;
+  author: string | null;
+  language: string | null;
+  explicit: boolean;
+  podcast_type: string | null;
+  genres: string[];
+  /** May hold a private token: shown to admins only. */
+  feed_url: string;
+  folder_path: string | null;
+  last_checked_at: string | null;
+  last_error: string | null;
+  consecutive_failures: number;
+  settings: ShowSettings;
+  default: ShowSettings;
+  refresh_queued: boolean;
+  created_at: string;
+  episodes: PodcastEpisodeRow[];
+}
+
+export interface OpmlImportLine {
+  name: string;
+  outcome: 'added' | 'already_in_library' | 'repeated_in_file' | 'refused';
+  podcast_id: string | null;
+  error: string | null;
+  new_episodes: number | null;
+}
+
+export interface OpmlImportReport {
+  feeds: number;
+  added: number;
+  skipped: number;
+  refused: number;
+  lines: OpmlImportLine[];
+}
+
+export const OPML_OUTCOME_LABELS: Record<OpmlImportLine['outcome'], string> = {
+  added: 'Added',
+  already_in_library: 'Already in this library',
+  repeated_in_file: 'Listed twice in the file',
+  refused: 'Not added',
+};
+
+/** Where a notice can be dealt with, when it has such a place. */
+export function noticeLink(n: Notice): { href: string; label: string } | null {
+  switch (n.kind) {
+    case 'job_failed':
+      return { href: '/admin/jobs', label: 'Open jobs' };
+    case 'metadata_review':
+      return { href: '/admin/metadata', label: 'Review matches' };
+    case 'sidecars_unwritable':
+      return { href: '/admin/library', label: 'Open libraries' };
+    case 'podcast_feed_failing': {
+      const id = n.detail?.podcast_id;
+      return typeof id === 'string' && id
+        ? { href: `/admin/podcasts/${encodeURIComponent(id)}`, label: 'Open the show' }
+        : { href: '/admin/podcasts', label: 'Open podcasts' };
+    }
+    default:
+      return null;
+  }
+}
