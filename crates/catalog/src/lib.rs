@@ -33,7 +33,10 @@
 //!   read into POD1's shapes (POD2). Pure, fixture-tested.
 //! - `podcasts` — a show's feed check: the conditional GET, the
 //!   episode rows, the refresh state and the 24-failure rule (POD2,
-//!   D32).
+//!   D32); after a successful check of a show with auto-download on,
+//!   its new episodes are downloaded and its retention applied (POD3).
+//! - `podcast_download` — episode download into the podcasts library's
+//!   writable store, and retention (POD3, D32).
 //!
 //! Matching files to TMDB/TVDB metadata is `metadata_sync`
 //! (Milestone 1.4, providers in `parlour-metadata`); artwork
@@ -48,6 +51,7 @@ pub mod emby;
 pub mod fingerprint;
 pub mod metadata_sync;
 pub mod parse;
+pub mod podcast_download;
 pub mod podcast_feed;
 pub mod podcasts;
 pub mod probe;

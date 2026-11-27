@@ -1,4 +1,5 @@
-//! Podcast feed checks on the Postgres queue (POD2, D32).
+//! Podcast feed checks and episode downloads on the Postgres queue
+//! (POD2–POD3, D32).
 //!
 //! - **The schedule.** Once a minute a tick looks for shows whose
 //!   check is due (`auto_download` on and the show's cron schedule
@@ -13,10 +14,18 @@
 //!   one show whatever its schedule says (POD4's "refresh now").
 //!   A feed's failure is recorded on the show and listed on the job;
 //!   only a database error fails the job.
+//! - **Downloads (POD3).** After a successful check of a show with
+//!   `auto_download` on, the same run downloads the show's new
+//!   episodes and applies its retention
+//!   (`parlour_catalog::podcast_download`), so there is no second
+//!   scheduler. A job queued with `{"episode_id": …}` downloads that
+//!   one episode whatever its show's settings say (POD4's "download").
+//!   A download's failure is listed on the job by show and episode
+//!   title; it doesn't fail the job.
 //! - **The notice** for feeds failing repeatedly is reconciled with
 //!   the others (`notices.rs`).
 //!
-//! Nothing is downloaded (POD3). No API, no UI (POD4–POD6).
+//! No API, no UI (POD4–POD6).
 
 use std::time::Duration;
 
@@ -68,6 +77,15 @@ pub async fn run_refresh_job_claimed(
     http: &reqwest::Client,
     job: parlour_jobs::Job,
 ) {
+    if let Some(id) = job.payload.get("episode_id") {
+        let Some(id) = id.as_str().and_then(|s| Uuid::parse_str(s).ok()) else {
+            let _ = parlour_jobs::fail(pool, job.id, "the job names no valid episode").await;
+            return;
+        };
+        let result = parlour_catalog::podcasts::download_one(pool, http, id, Some(job.id)).await;
+        finish(pool, job.id, result).await;
+        return;
+    }
     let shows: Result<Vec<(Uuid, String)>, sqlx::Error> = match job.payload["podcast_id"].as_str() {
         Some(id) => match Uuid::parse_str(id) {
             Ok(id) => {
@@ -89,18 +107,29 @@ pub async fn run_refresh_job_claimed(
         }
         Err(e) => Err(e),
     };
+    finish(pool, job.id, result).await;
+}
+
+/// Record a run's summary and finish the job; only a database error
+/// fails it.
+async fn finish(
+    pool: &parlour_db::PgPool,
+    job_id: Uuid,
+    result: Result<parlour_catalog::podcasts::RefreshReport, sqlx::Error>,
+) {
     match result {
         Ok(report) => {
-            tracing::info!(job_id = %job.id, checked = report.checked,
+            tracing::info!(job_id = %job_id, checked = report.checked,
                 failed = report.failed, new_episodes = report.new_episodes,
-                "podcast feed check finished");
+                downloaded = report.downloaded, download_failed = report.download_failed,
+                removed = report.removed, "podcast feed check finished");
             let summary = serde_json::to_value(&report).unwrap_or(serde_json::Value::Null);
-            let _ = parlour_jobs::set_result(pool, job.id, summary).await;
-            let _ = parlour_jobs::complete(pool, job.id).await;
+            let _ = parlour_jobs::set_result(pool, job_id, summary).await;
+            let _ = parlour_jobs::complete(pool, job_id).await;
         }
         Err(e) => {
-            tracing::warn!(job_id = %job.id, error = %e, "podcast feed check failed");
-            let _ = parlour_jobs::fail(pool, job.id, &e.to_string()).await;
+            tracing::warn!(job_id = %job_id, error = %e, "podcast feed check failed");
+            let _ = parlour_jobs::fail(pool, job_id, &e.to_string()).await;
         }
     }
 }

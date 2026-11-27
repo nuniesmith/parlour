@@ -288,6 +288,12 @@ pub async fn scan_library_with(
         .bind(library_id)
         .fetch_optional(pool)
         .await?;
+    // A podcasts library's rows come from its feeds (POD2), and its
+    // folder is the podcast store downloads are written into (POD3):
+    // a scan must never catalogue those files as videos.
+    if matches!(kind, Some((ref k,)) if k == "podcasts") {
+        return Ok(ScanReport::default());
+    }
     if matches!(kind, Some((ref k,)) if k == "audiobooks") {
         return crate::audiobooks::scan_audiobooks(
             pool,
