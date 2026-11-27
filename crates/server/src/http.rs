@@ -113,6 +113,7 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::backup::routes())
         .merge(crate::sidecars::routes())
         .merge(crate::podcast_admin::routes())
+        .merge(crate::podcast_api::routes())
         .fallback(fallback)
         .layer(PropagateRequestIdLayer::x_request_id())
         .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
@@ -261,6 +262,14 @@ mod tests {
             "/api/v1/audiobooks/progress",
             "/api/v1/audiobooks/00000000-0000-0000-0000-000000000000",
             "/api/v1/audiobooks/00000000-0000-0000-0000-000000000000/progress",
+            "/api/v1/podcasts",
+            "/api/v1/podcasts/opml",
+            "/api/v1/podcasts/00000000-0000-0000-0000-000000000000",
+            "/api/v1/podcast-episodes/00000000-0000-0000-0000-000000000000",
+            "/api/v1/podcast-episodes/00000000-0000-0000-0000-000000000000/progress",
+            "/api/v1/podcast-episodes/00000000-0000-0000-0000-000000000000/stream",
+            "/api/v1/podcast-episodes/not-a-uuid/aac.m4a",
+            "/api/v1/admin/profiles",
         ] {
             let (status, _) = get(test_router(), path).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{path}");

@@ -94,7 +94,11 @@
                   · {s.profile_name}</span
                 >{/if}
             </td>
-            <td><a href={`/book/${s.item_id}`}>{s.title}</a></td>
+            <td>
+              {#if s.item_id}<a href={`/book/${s.item_id}`}>{s.title}</a>{:else}{s.show_title
+                  ? `${s.show_title} · `
+                  : ''}{s.title}{/if}
+            </td>
             <td>{formatListened(s.listened_ms)}</td>
             <td>
               {formatDurationMs(s.start_position_ms) || '0:00'} → {formatDurationMs(s.position_ms) ||

@@ -1,11 +1,12 @@
 <script lang="ts">
   // Server → Users: accounts (an admin can rename any of them —
   // UI10 — and set a new password for any of them — D37), invites,
-  // and which profiles may see which libraries.
+  // which profiles may see which libraries, and (D41, POD5) which
+  // profiles may see explicit podcasts.
   import { onMount } from 'svelte';
   import { api } from '$lib/api';
   import { loadSession, session } from '$lib/session.svelte';
-  import type { AdminUser, Invite, Library } from '$lib/types';
+  import type { AdminProfile, AdminUser, Invite, Library } from '$lib/types';
 
   let error = $state<string | null>(null);
   let notice = $state<string | null>(null);
@@ -23,6 +24,34 @@
   let passwordId = $state<string | null>(null);
   let newPassword = $state('');
   let passwordSaving = $state(false);
+  let profiles = $state<AdminProfile[]>([]);
+  let explicitSaving = $state<string | null>(null);
+
+  async function loadProfiles() {
+    const { data, error: err } = await api<AdminProfile[]>('/api/v1/admin/profiles');
+    profiles = data ?? [];
+    if (err) error = err;
+  }
+
+  async function setExplicit(p: AdminProfile, allow: boolean) {
+    error = null;
+    notice = null;
+    explicitSaving = p.id;
+    const { data, error: err } = await api<AdminProfile>(`/api/v1/admin/profiles/${p.id}/explicit`, {
+      method: 'PUT',
+      body: JSON.stringify({ allow_explicit: allow }),
+    });
+    explicitSaving = null;
+    if (data) {
+      profiles = profiles.map((x) => (x.id === data.id ? data : x));
+      notice = allow
+        ? `${data.username} · ${data.name} can see explicit podcasts again.`
+        : `${data.username} · ${data.name} no longer sees explicit podcasts.`;
+    } else {
+      error = err ?? 'Could not change that profile.';
+      await loadProfiles();
+    }
+  }
 
   function startPassword(u: AdminUser) {
     error = null;
@@ -100,6 +129,7 @@
     const [, libs] = await Promise.all([
       loadUsers(),
       api<Library[]>('/api/v1/admin/libraries'),
+      loadProfiles(),
     ]);
     libraries = libs.data ?? [];
     if (libs.data) librariesLoaded = true;
@@ -203,6 +233,35 @@
   Renaming keeps the account's password, profiles and signed-in sessions. Usernames are unique
   regardless of capitals. Setting a password signs the account out everywhere else; accounts marked
   “No password” came from an import without passwords and can't sign in until you set one.
+</p>
+
+<h2>Profiles</h2>
+<div class="table-wrap"><table>
+  <thead><tr><th>User</th><th>Profile</th><th>Explicit podcasts</th></tr></thead>
+  <tbody>
+    {#each profiles as p (p.id)}
+      <tr>
+        <td>{p.username}</td>
+        <td>{p.name}</td>
+        <td>
+          <label>
+            <input
+              type="checkbox"
+              checked={p.allow_explicit}
+              disabled={explicitSaving === p.id}
+              onchange={(e) => setExplicit(p, (e.currentTarget as HTMLInputElement).checked)}
+            />
+            {p.allow_explicit ? 'Allowed' : 'Hidden'}
+          </label>
+        </td>
+      </tr>
+    {/each}
+  </tbody>
+</table></div>
+<p class="dim">
+  Explicit podcasts are allowed for every profile unless you turn them off here. Turned off, the
+  profile doesn't see shows whose feed marks them explicit, or their episodes. Only an admin can
+  change this.
 </p>
 
 <h2>Invites</h2>

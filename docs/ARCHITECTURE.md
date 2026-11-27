@@ -72,13 +72,21 @@ capability profile (web, android-phone, android-tv/fire-tv, ios —
 not User-Agent guessing); session context (LAN / tailnet / public,
 per-user remote cap).
 
-Audio-only media (book tracks; podcast episodes later) has its own
-profiles under the same rule (AB10, CL5's profiles:
+Audio-only media (book tracks; downloaded podcast episodes since
+POD5) has its own profiles under the same rule (AB10, CL5's profiles:
 `parlour_playback::AudioProfile`): container + codec pairs per
 client family, and a track a profile can't play is served as a kept
-AAC-in-MP4 copy (`/api/v1/stream/{file}/aac.m4a`). See
+AAC-in-MP4 copy (`/api/v1/stream/{file}/aac.m4a`; an episode's is
+`/api/v1/podcast-episodes/{id}/aac.m4a`). See
 `AUDIOBOOKS-PODCASTS.md`, "Transcode fallback and audio profiles
-(AB10)".
+(AB10)". A podcast episode that isn't downloaded is not decided at
+all: its stream is a redirect to the publisher's enclosure (D32 as
+amended 2026-11-27), so it plays whatever the publisher sends.
+
+What a profile may play is also the profile's own: D41 (2026-11-27)
+gives each profile an admin-set "explicit content" flag (on by
+default); off, the shows whose feed marks them explicit, and their
+episodes, streams and progress, are not found for that profile.
 
 ## 5. Transcoding — all vendors, probed
 
@@ -143,6 +151,12 @@ The owner uses subtitles on most playback.
   "Episode download and retention (POD3)"). Admins add shows by
   feed address or OPML on Server → Podcasts, where the feed is read
   before anything is stored (POD4, "Managing feeds (POD4)").
+  Listeners reach shows through `/api/v1/podcasts` and
+  `/api/v1/podcast-episodes` (POD5, "Native API (POD5)"): a
+  downloaded episode streams from the store with Range, one that
+  isn't redirects to its enclosure, and progress and listening
+  sessions are the books' own (`book_progress`,
+  `listening_sessions`, each with an `episode_id`).
 - Segments (Phase 9, D15): `media_segments` holds intro / credits /
   recap spans per item — one row per (item, kind, source), sources
   `chapters`, `fingerprint`, `manual`, `heuristic`, each with a 0–1

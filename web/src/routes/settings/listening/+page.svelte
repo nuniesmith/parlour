@@ -90,6 +90,16 @@
     return `from ${from} to ${to}${end}`;
   }
 
+  // POD5: a podcast episode's session has no book; it is named with its
+  // show, and links nowhere until the podcast pages exist (POD6).
+  function sessionHref(s: ListeningSession): string | undefined {
+    return s.item_id ? `/book/${s.item_id}` : undefined;
+  }
+
+  function sessionTitle(s: ListeningSession): string {
+    return s.show_title ? `${s.show_title} · ${s.title}` : s.title;
+  }
+
   function device(s: ListeningSession): string {
     return [s.client_name, s.device_name].filter(Boolean).join(' · ');
   }
@@ -109,13 +119,15 @@
     <ul class="rows">
       {#each live as s (s.id)}
         <li>
-          <a class="thumb" href={`/book/${s.item_id}`} aria-hidden="true" tabindex="-1">
-            {#if s.has_cover}<img src={posterUrl(s.item_id)} alt="" loading="lazy" />{:else}<span
-                >{s.title.charAt(0).toUpperCase()}</span
-              >{/if}
+          <a class="thumb" href={sessionHref(s)} aria-hidden="true" tabindex="-1">
+            {#if s.has_cover && s.item_id}<img
+                src={posterUrl(s.item_id)}
+                alt=""
+                loading="lazy"
+              />{:else}<span>{sessionTitle(s).charAt(0).toUpperCase()}</span>{/if}
           </a>
           <div>
-            <a class="title" href={`/book/${s.item_id}`}>{s.title}</a>
+            <a class="title" href={sessionHref(s)}>{sessionTitle(s)}</a>
             <p class="dim small">
               At {formatDurationMs(s.position_ms) || '0:00'} · {formatListened(s.listened_ms)} so far{device(
                 s,
@@ -191,13 +203,15 @@
     <ul class="rows">
       {#each sessions as s (s.id)}
         <li>
-          <a class="thumb" href={`/book/${s.item_id}`} aria-hidden="true" tabindex="-1">
-            {#if s.has_cover}<img src={posterUrl(s.item_id)} alt="" loading="lazy" />{:else}<span
-                >{s.title.charAt(0).toUpperCase()}</span
-              >{/if}
+          <a class="thumb" href={sessionHref(s)} aria-hidden="true" tabindex="-1">
+            {#if s.has_cover && s.item_id}<img
+                src={posterUrl(s.item_id)}
+                alt=""
+                loading="lazy"
+              />{:else}<span>{sessionTitle(s).charAt(0).toUpperCase()}</span>{/if}
           </a>
           <div>
-            <a class="title" href={`/book/${s.item_id}`}>{s.title}</a>
+            <a class="title" href={sessionHref(s)}>{sessionTitle(s)}</a>
             <p class="small">
               {formatDateTime(s.started_at)} · listened {span(s)} ·
               {formatListened(s.listened_ms)}{#if s.live}<span class="now"> · now</span>{/if}

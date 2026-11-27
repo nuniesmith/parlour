@@ -1339,7 +1339,7 @@ not yet scheduled in a PR:
 
 ---
 
-## Phase 11 — Podcasts (POD1's schema, POD2's feed checks, POD3's downloads and POD4's feed management built 2026-11-26; the rest is plan)
+## Phase 11 — Podcasts (POD1's schema, POD2's feed checks, POD3's downloads and POD4's feed management built 2026-11-26; POD5's listener API built 2026-11-27; the rest is plan)
 
 The server owns the feeds. Clients never fetch RSS themselves, which
 is what lets a Fire Stick, a tablet and the phone agree.
@@ -1358,10 +1358,16 @@ kept below it.
 - **Only admins add shows** — by searching Apple's (iTunes)
   directory (no key), by RSS URL, or by OPML import (admin-only);
   OPML export too. POD7 becomes Apple search, not Podcast Index.
-- **The server downloads episodes, and only downloaded episodes
-  play** (ABS is not a pass-through). The "redirect to the
-  enclosure if it isn't downloaded" idea is dropped. An episode not
-  downloaded shows in the feed list and can be downloaded by hand.
+- **The server downloads episodes** (ABS is not a pass-through). An
+  episode not downloaded shows in the feed list and can be
+  downloaded by hand. *As decided on 2026-11-24, only downloaded
+  episodes played and the enclosure redirect was dropped.* **D32 was
+  amended on 2026-11-27 (owner): an episode that isn't downloaded
+  streams by redirecting to its enclosure**, with the consequences
+  the owner accepted (a paid feed's tokenised enclosure URL reaches
+  listeners through the redirect, the publisher sees their IP, and a
+  redirected stream has no AB10 audio plan). Built in POD5 ("Native
+  API (POD5)").
 - **Per-show settings**, with ABS's defaults: auto-download new
   episodes (**off**), check schedule (cron, **hourly**), max
   episodes to keep (**0 = all**; when over, delete the oldest, at
@@ -1422,6 +1428,9 @@ episode lists, and the shared audio player from AB5.
 the enclosure if it isn't downloaded, per D32), `GET|PUT|DELETE
 /episodes/{id}/progress`, `GET /podcasts/opml`, and the bulk sync
 in Phase 12.
+*Built in POD5 as `/api/v1/podcasts…` and
+`/api/v1/podcast-episodes/{id}…` ("Native API (POD5)"); adding a
+show stayed admin-only under `/api/v1/admin/` (POD4, D31).*
 
 ### Schema (POD1, built 2026-11-26)
 
@@ -1570,22 +1579,25 @@ flow test makes exactly these writes.
 
     If it deletes the row, the next feed check must not treat the
     episode as new and fetch it again.
-- **POD5 / POD6.**
+- **POD5 / POD6.** *All four done in POD5 ("Native API (POD5)").*
   - **Playback.** AB10's audio plan reads `file_container` /
     `file_codec`. The AAC fallback serves only `kind = 'audiobook'`
-    files today and needs widening.
+    files today and needs widening. *POD5: widened to downloaded
+    episodes.*
   - **Sessions.** `listening_sessions` is still book-only (`item_id`
     NOT NULL). An episode's listening session needs the same
-    `episode_id` treatment.
+    `episode_id` treatment. *POD5: given it.*
   - **Explicit shows.** `explicit` is stored, but nothing yet decides
     how a grant's `max_rating` treats an explicit show (ABS has a
     per-user "explicit content" permission instead). That is POD5's
-    to raise.
+    to raise. *Decided as D41 (2026-11-27): a per-profile flag, on by
+    default; `max_rating` plays no part.*
   - **Settings API.** AB11's settings API (`…/audiobook-settings`)
     accepts audiobooks libraries only, so editing a podcasts
     library's finish rule needs it widened (POD4/POD5).
     *POD4 left it to POD5, which writes the first episode progress
-    (POD4 reading 10).*
+    (POD4 reading 10). POD5 added a podcasts twin,
+    `…/podcast-settings`.*
 - **Bundle (format v1 unchanged).** `podcasts` and `podcast_episodes`
   are *left out* in `coverage.rs`:
   - The shows are an admin's deliberate work. Their place in the
@@ -1673,6 +1685,9 @@ flow test makes exactly these writes.
      episodes play, so that is the length a listener hears.
    - The feed's length is the fallback when there is no file (for a
      mark-finished on an undownloaded episode, if POD5 allows one).
+     *Since D32's amendment (2026-11-27) an undownloaded episode plays
+     through the redirect, so POD5 takes every write on it, against
+     the feed's length (POD5 reading 5).*
 10. **Episodes auto-finish under their podcasts library's rule.**
     - AB11's `finish_remaining_seconds` / `finish_percent` are on
       every library row, so ABS's 10 s applies to episodes by
@@ -2543,6 +2558,345 @@ checked before anything is stored:
     first and an episodic one's newest first. Undated episodes come
     last, and the guid breaks ties. This is what podcast apps do, and
     POD1 reading 12 kept `podcast_type` for it.
+
+### Native API (POD5, built 2026-11-27)
+
+POD5 is the listener side of podcasts: the API a profile's player (the
+web UI in POD6, the apps in Phase 12) uses to list shows and episodes,
+stream an episode, and keep its progress and listening sessions. Admin
+management stays where POD4 put it, under `/api/v1/admin/`.
+
+Two owner decisions of 2026-11-27 bind it:
+
+- **D32, amended:** an episode that is **not** downloaded streams by
+  redirecting to its enclosure. The owner accepted the consequences:
+  - a paid feed's tokenised enclosure URL reaches every listener with
+    access, through the redirect;
+  - the publisher sees each such listener's IP;
+  - a redirected stream gets no AB10 audio plan.
+- **D41:** a per-profile "explicit content" flag, on by default, that
+  only an admin sets.
+
+The code:
+
+- `crates/server/src/podcast_api.rs` holds the listener routes.
+- `playback.rs` gains the episode AAC fallback, and the reports gain
+  `episode_id`.
+- `listening.rs` gains `Target::Episode`.
+- `book_settings.rs` gains the podcasts twin.
+- `profiles.rs` gains the admin D41 routes.
+
+One migration, `20261204000000_pod5_explicit_episode_sessions.sql`, adds
+`profiles.allow_explicit` and `listening_sessions.episode_id`. The
+timestamp is an ordering key only; it was written on 2026-11-27. The
+flow `crates/server/tests/podcast_api_flow.rs` runs all of it on a
+fresh database, against a local stub feed and enclosure host, with real
+ffmpeg/ffprobe.
+
+Audiobookshelf's behaviour cited here (its per-user explicit
+permission, its OPML export) is from general knowledge of ABS. It was
+not re-checked against ABS's source in this run. Nothing was copied.
+
+**Who sees what.** A profile reaches a show only through its
+`library_access` grant on the show's podcasts library (D31, POD1's
+join). It reaches an explicit show (`podcasts.explicit`, from the
+feed's `itunes:explicit`) only while its `allow_explicit` is on (D41).
+Anything it can't reach answers 404, the same not-found as a show that
+doesn't exist. That covers:
+
+- the show and its episodes;
+- an episode's stream and AAC copy;
+- its progress, read or written;
+- a playback report naming the episode.
+
+A stream token proves *who* asks. The grant and the flag are checked
+again on every stream request, so taking either away stops playback at
+once (reading 2).
+
+**The API.**
+
+| Route | What |
+|---|---|
+| `GET /api/v1/podcasts?library_id=&q=` | The shows the profile can reach, by sort title; `q` matches title or author. For each: the show as its feed describes it (title, author, description, language, `explicit`, `podcast_type`, genres), its last check, episodes, downloaded, newest episode date, and this profile's finished and in-progress counts. |
+| `GET /api/v1/podcasts/{id}?client=` | One show and its episode list. A serial show's runs oldest first, every other show's newest first, undated last (POD4 reading 13). Each episode is as below. |
+| `GET /api/v1/podcast-episodes/{id}?client=` | One episode, with its show's title. With a client that needs the AAC copy, it starts making the copy now, as the book detail does for its resume track. |
+| `GET /api/v1/podcast-episodes/{id}/stream` | A downloaded episode's file with HTTP Range. An episode not downloaded is a **302 to its enclosure**. |
+| `GET /api/v1/podcast-episodes/{id}/aac.m4a` | AB10's AAC-in-MP4 copy of a downloaded episode, with Range. It answers 503 + `Retry-After` while the copy is made. |
+| `GET\|PUT\|DELETE /api/v1/podcast-episodes/{id}/progress` | This profile's progress on the episode (below). |
+| `GET /api/v1/podcasts/opml?library_id=` | The reachable shows as OPML 2.0. **Admins only** (reading 10). |
+| `GET\|PUT /api/v1/admin/libraries/{id}/podcast-settings` | A podcasts library's finish rule (below). |
+| `GET /api/v1/admin/profiles`, `PUT /api/v1/admin/profiles/{id}/explicit` | Every profile with its D41 flag, and setting it (`{"allow_explicit": bool}`). |
+
+The stream and AAC routes are authorised like a book track's: a stream
+token (6 h, HMAC) for that episode, or a signed-in session. Without
+either they answer 401, before saying whether the episode exists.
+
+**An episode, as a listener sees it.** Each episode carries:
+
+- the feed's fields (title, subtitle, description, published, season,
+  episode number, type);
+- `duration_ms`, the feed's length, and `length_ms`, the length
+  progress uses: the download's, else the feed's;
+- `downloaded`, with the download's date, size, length, container and
+  codec;
+- `stream_url` (tokenised) and `delivery`, one of:
+  - `file`: the download;
+  - `aac`: its AAC copy;
+  - `enclosure`: the stream route, which redirects to the publisher;
+- `content_type`: for an enclosure, the type the feed announces;
+- `plan`, with `?client=` (AB10's profiles), for a downloaded episode
+  only;
+- this profile's `progress`, in the book's shape.
+
+No answer body carries the feed's address, the enclosure's, the
+chapter or transcript links, or the publisher's artwork address
+(reading 12).
+
+**Streaming (D32 as amended).**
+
+- **Downloaded:** the file in the podcast store, with Range, typed by
+  its extension. A `?client=` the file doesn't suit gets
+  `delivery: aac` and the AAC route. That is AB10's fallback, widened
+  from `kind = 'audiobook'` to downloaded episodes (reading 4).
+- **Not downloaded:** `302 Found` with:
+  - `Location` set to the enclosure URL;
+  - `Cache-Control: no-store`;
+  - `Referrer-Policy: no-referrer`;
+  - no body.
+
+  Only an absolute `http`/`https` enclosure is followed. Anything else
+  is a 404 with a plain message that never repeats the address. The
+  redirect's `Location` is the one place the enclosure URL leaves the
+  server. It is not in any JSON answer, error, log line, job, notice or
+  Activity line. The flow checks the answers and the jobs, notices,
+  Activity and sessions tables for the fixture token.
+- **Admin stop.** An admin's stop on Now Playing revokes the episode's
+  stream token, so the next request is refused (401). A player that has
+  already followed a redirect holds the publisher's address, and that
+  can't be stopped (reading 3).
+
+**Progress.** Progress is AB11's rules, unchanged: the same pure
+`apply_write`, upserted into `book_progress` on `(profile_id,
+episode_id)` (POD1).
+
+- **The length** is the download's `file_duration_ms`, else the feed's
+  `duration_ms`. With neither, a position isn't clamped and never
+  finishes the episode, as for a book of unknown length.
+- **The finish rule** is the podcasts library's own
+  `finish_remaining_seconds` / `finish_percent`, with ABS's 10 s by
+  default.
+- **The writes:**
+  - A position is clamped to the length and stamps
+    `last_listened_at`. A position within the rule finishes the
+    episode, and a finished episode moved back before it is unfinished.
+  - `finished: true` marks it finished, and `finished: false` on a
+    finished episode puts the position back to 0.
+  - A move of the position clears `hidden`.
+  - `client_updated_at` is stored as sent (else the server's time). The
+    last write to arrive wins.
+- **Undownloaded episodes** take every write, with the feed's length
+  (reading 5).
+- **Not in the book sync.** Episode rows never appear in
+  `GET /api/v1/audiobooks/progress`, and there is no episode bulk sync
+  yet (reading 11).
+
+**The finish rule (POD4 reading 10).** `GET|PUT
+/api/v1/admin/libraries/{id}/podcast-settings` takes
+`{"finish_remaining_seconds", "finish_percent"}`:
+
+- the same columns and checks as AB11's (0–86 400 s, 0 = off; 1–100 %
+  or null = off);
+- a podcasts library only (any other kind is a 400, and
+  `…/audiobook-settings` still refuses a podcasts library);
+- an unknown field is refused (422);
+- the next progress write reads it.
+
+It is a twin rather than a widened route (reading 7). It is edited on
+Server → Podcasts, under "When an episode counts as finished".
+
+**Listening sessions (AB8, widened).**
+
+- **The column.** `listening_sessions` gains `episode_id` beside
+  `item_id`, exactly one set (`listening_sessions_one_target_check`),
+  deleted with the episode.
+- **The reports.** The player uses the same
+  `POST /api/v1/playback/{start,progress,stopped}` with `episode_id`
+  instead of `item_id`. Sending both, or neither, is a 400. Every AB8
+  rule holds:
+  - a new start replaces the profile's open session on the episode;
+  - listening time is the player's measure, capped by the clock;
+  - an hour's silence closes a session;
+  - a report on a closed session opens a fresh one;
+  - an admin stop answers the next report 409.
+- **Where an episode's session shows:**
+  - **Now Playing** shows it under its show (kind `podcast_episode`,
+    the show where a series would be). It links to Server → Podcasts
+    until POD6's pages exist.
+  - **Activity.** Its closed line reads "*user* listened to *Show ·
+    Episode* for …". The `episode_id` and `podcast_id` are in the
+    detail, with no item link, because an episode isn't a catalog item.
+  - **The profile's history** (`/api/v1/listening/sessions`) gains
+    `episode_id`, `podcast_id` and `show_title`. `item_id` is null for
+    an episode.
+  - **The stats' totals and days** count episodes. The per-book list
+    stays books (reading 8).
+
+**D41 in the UI.** Server → Users gains a **Profiles** table: each
+account's profiles, with an "Explicit podcasts" checkbox (Allowed /
+Hidden) and a note on what it does.
+
+- **Who.** Only an admin can change the flag. A profile's own
+  `PATCH /api/v1/profiles/{id}` ignores it.
+- **Activity.** Each change writes a `profile.explicit_changed` line.
+- **While off:** progress rows on explicit episodes are kept, only
+  unreachable. Turned back on, they return.
+- **Also covered:** the history, the stats and the admin's OPML export
+  follow the flag.
+
+**The bundle.** It is unchanged at format v1:
+
+- `profiles.allow_explicit` is *left out* (`coverage.rs`). An imported
+  profile starts with the default (on). Its bundle home is the
+  format-v2 step (D40).
+- `listening_sessions` stays *Proposed*, and its new `episode_id` goes
+  with it (**D36 is still open**).
+- Episode progress stays inside `book_progress`'s open proposal.
+
+**Not built here.**
+
+- The listener pages and player (POD6).
+- Show artwork (POD6 caches it; POD4 reading 11).
+- Directory search (POD7).
+- Bookmarks, playlists and collections (D35, CL2/POD phases).
+- A bulk episode progress sync (CL2).
+- Removing a show.
+- Enforcing `library_access.max_rating` (reading 14).
+
+#### Readings made in POD5 — for the owner's veto
+
+1. **Route names: `/api/v1/podcasts` and
+   `/api/v1/podcast-episodes/{id}`.**
+   - *Not* the sketch's bare `/episodes`: `episode` already names a
+     TV episode (`media_items.kind`), and POD4's admin routes say
+     `podcast-episodes`.
+   - The list takes `library_id` like `/api/v1/audiobooks`. Adding a
+     show stays admin-only under `/api/v1/admin/` (D31), so there is
+     no listener `POST /podcasts`.
+2. **A stream token is not enough on its own: the grant and D41's flag
+   are checked again on every stream request.**
+   - *Books differ:* there a valid token alone streams for its 6 h.
+   - *Why:* D41 says an explicit episode's stream is a 404 once the
+     flag is off, and a token minted while it was on must not keep
+     playing. Taking a grant away works the same way.
+   - *Cost:* one indexed query per Range request.
+3. **The redirect.**
+   - *The status:* `302`, not 301/308, because it must never be cached
+     as permanent: the episode may be downloaded later and then
+     streams from Parlour.
+   - *The headers:* `no-store`, and `no-referrer` so the publisher
+     isn't told Parlour's address.
+   - *What is followed:* only absolute http(s) addresses.
+   - *What an admin stop can do:* it refuses the next redirect but
+     can't take back one already followed. There is no channel to the
+     client (UI3's stop is server-side only).
+   - *Logging:* the request log (tower-http) records request paths,
+     not response headers, so `Location` is not logged.
+4. **AB10's fallback for episodes is a route of its own**
+   (`…/podcast-episodes/{id}/aac.m4a`), on the same cached-ffmpeg
+   runner.
+   - *The stamp:* the download's size and `downloaded_at`, so a
+     re-download after retention makes a new copy.
+   - *Channels:* POD3 doesn't store the episode's channel count, so
+     the copy keeps the source's channels at 128 kb/s, where a book's
+     uses 64 kb/s per channel.
+   - *After retention:* once retention removes the file, the route is
+     a 404. The kept copy stays in the cache folder, as a book's does.
+   - *Undownloaded episodes:* no plan and no fallback. That is D32's
+     accepted cost.
+5. **An undownloaded episode takes every progress write, mark-finished
+   included, against the feed's length.**
+   - *Why:* POD1 reading 9 left this to POD5. Since D32's amendment,
+     such an episode plays through the redirect, so its position has
+     to be writable like any other. Refusing a mark-finished on it
+     would leave a played episode unmarkable.
+   - *With no length at all:* nothing is clamped and nothing
+     auto-finishes. A by-hand finish still works.
+6. **`apply_write` is used as AB11 built it.**
+   - *What it does:* a move of the position clears `hidden`, and
+     un-finishing clears it too (that moves the position to 0).
+     Finishing alone (`finished: true` with no move) keeps it, as
+     AB11's tests pin.
+   - *The wording:* POD1's and the brief's "a write that changes the
+     position or the finished flag clears `hidden`" says slightly more
+     than the code does. POD5 follows the code rather than change
+     AB11's rule for books too.
+7. **The finish rule is a twin, `…/podcast-settings`, not a widened
+   `…/audiobook-settings`.**
+   - *Why:* the audiobook route's body requires `parse_subtitles`,
+     which means nothing for a feed. Widening it would either make
+     podcasts send a dead field or make a required field optional for
+     books.
+   - *What's shared:* both write the same `libraries` columns with the
+     same checks. The form sits on Server → Podcasts, where an admin
+     manages the library.
+8. **Listening sessions are widened, with a migration, not deferred.**
+   - *Why:* ABS keeps podcast listening sessions like book ones (D29),
+     and without one an episode's listen would leave no history, stats
+     or Now Playing line.
+   - *What the stats count:* their totals and days count episodes, and
+     the per-book list stays books. A per-show list is POD6's, if its
+     screen wants one.
+   - *Activity:* an episode's line has no item link (Activity's item
+     link is to `media_items`) and names the episode in its detail.
+9. **D41 as built.**
+   - *Show-level only:* POD1 keeps no per-episode explicit flag (a
+     feed's item-level `itunes:explicit` isn't stored), so an episode
+     follows its show.
+   - *Who sets it:* only admins, through new admin routes. ABS sets
+     its permission on the user, and Parlour's unit is the profile
+     (D29), so a kids' profile under a parent's account can differ.
+   - *While off:* progress is kept, only hidden.
+   - *Activity:* a change is logged in it.
+10. **OPML: export only, and admins only.**
+    - *Export only:* import stays POD4's admin import, because only
+      admins add shows (D31).
+    - *Admins only:* an OPML file is nothing without each feed's
+      address, and POD4 reading 6 keeps those addresses (a paid feed's
+      token) to admins. D32's amendment exposes *enclosure* addresses
+      through the redirect, not feed addresses. A non-admin gets the
+      admin surface's 404.
+    - *What it lists:* unlike POD4's library export, this one follows
+      the admin's own profile (its grants and D41's flag).
+    - *If the owner wants listeners to export:* it is one extractor
+      change, and the owner should know it hands out feed addresses.
+11. **No bulk episode progress sync (`?since=`).**
+    - *What exists:* the book sync stays books only, and per-episode
+      GET is enough for Phase 11's "resumes on another client".
+    - *Why not here:* the combined books-and-episodes sync is CL2's
+      ("the sync endpoint"), and a second one-off endpoint now would be
+      replaced there.
+12. **What a listener's answers leave out.**
+    - *Addresses:* the feed's and the enclosure's, both possibly
+      tokenised.
+    - *Links:* the Podcasting 2.0 chapter and transcript links, which
+      are publisher addresses too. Showing transcripts is deferred
+      (D35), and chapters are POD6's to fetch server-side if its player
+      wants them.
+    - *Artwork:* POD4 reading 11 keeps it from being hot-linked, and
+      caching it is POD6's.
+    - *Descriptions:* they are passed as the feed gives them (HTML),
+      for POD6 to show safely.
+13. **Shows sort by sort title, and `q` matches title or author**, as
+    the book list does for books. The episode order is POD4 reading
+    13's.
+14. **Known gap, not POD5's: `library_access.max_rating` is stored but
+    enforced nowhere.**
+    - It is written by `grant_access` (`libraries.rs`, "will enforce in
+      1.3+"), yet TODO A6 is checked "enforced in SQL", and no query
+      reads it.
+    - POD5's run 1 found this, and D41 replaced the idea of tying
+      explicit shows to it. Building the enforcement is outside POD5;
+      it is noted for the review and fix loop.
 
 ---
 

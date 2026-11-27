@@ -1218,14 +1218,15 @@ the rest wait on the owner's decisions.
 **2026-11-24:** D31/D32 mirror Audiobookshelf's podcast model —
 podcasts are a library reached by the normal access grants (no
 per-profile subscriptions), admin-only adding, server downloads
-and plays only downloaded episodes, per-show auto-download (off) /
+episodes (an undownloaded one streams by redirect to its enclosure —
+D32 as amended 2026-11-27), per-show auto-download (off) /
 hourly check / keep N (0 = all) / 3 new per check. Details:
 `docs/AUDIOBOOKS-PODCASTS.md` → Phase 11. The lines below keep
 their original wording; read them through that.
 
 POD1 (the schema), POD2 (feed checks), POD3 (downloads and
-retention) and POD4 (managing feeds) are built; POD5–POD8 are plan
-only. Spec:
+retention), POD4 (managing feeds) and POD5 (the listener API) are
+built; POD6–POD8 are plan only. Spec:
 `docs/AUDIOBOOKS-PODCASTS.md`.
 
 - [x] POD1 (M) **Schema**: `podcasts` (feed URL, metadata,
@@ -1362,9 +1363,53 @@ only. Spec:
   unchanged (format v1, D36 open). Flow: `podcast_manage_flow.rs`.
   Spec: AUDIOBOOKS-PODCASTS.md "Managing feeds (POD4)" (13 readings
   for veto).
-- [ ] POD5 (M) **Native API**: podcasts, episodes, episode
+- [x] POD5 (M) **Native API**: podcasts, episodes, episode
   stream (Range; or redirect to the enclosure if not
   downloaded), progress get/put/delete, OPML.
+  *Done 2026-11-27:* built to **D41** (decided 2026-11-27: a
+  per-profile explicit flag, on by default) and **D32 as amended**
+  (2026-11-27: an undownloaded episode streams by redirect).
+  Migration `20261204000000_pod5_explicit_episode_sessions.sql`.
+  - **Routes.** `GET /api/v1/podcasts` (the reachable shows, with
+    counts and this profile's finished / in-progress) and
+    `/api/v1/podcasts/{id}` (the episode list, serial oldest first,
+    episodic newest first). `GET /api/v1/podcast-episodes/{id}`, its
+    `/stream`, `/aac.m4a` and `GET|PUT|DELETE …/progress`.
+  - **Who.** A profile reaches shows only through its grant on the
+    podcasts library (D31). With its `allow_explicit` off (D41), an
+    explicit show and everything of it is a 404. The grant and the
+    flag are re-checked on every stream request, token or not.
+  - **Stream.** A downloaded episode streams with Range, and AB10's
+    plan and AAC fallback are widened to it. An undownloaded one is a
+    `302` to its enclosure (`no-store`, `no-referrer`). That is the
+    only place the enclosure address leaves the server, never in an
+    answer, error, log, job, notice or Activity line.
+  - **Progress.** AB11's `apply_write`, unchanged, upserted on
+    `(profile_id, episode_id)`. The length is the download's, else
+    the feed's. Undownloaded episodes take every write, mark-finished
+    included.
+  - **Finish rule.** A podcasts twin of AB11's settings,
+    `GET|PUT /api/v1/admin/libraries/{id}/podcast-settings`, edited on
+    Server → Podcasts.
+  - **Sessions.** `listening_sessions.episode_id` (exactly one target):
+    the playback reports take `episode_id`, with AB8's rules. Episode
+    sessions show on Now Playing (under the show, admin stop revokes
+    the token), in the history and stats totals, and as an Activity
+    line naming "Show · Episode".
+  - **D41 in the UI.** Server → Users → Profiles has an "Explicit
+    podcasts" checkbox per profile (`GET /api/v1/admin/profiles`,
+    `PUT …/{id}/explicit`); only admins can change it.
+  - **OPML.** `GET /api/v1/podcasts/opml` is export only and admins
+    only: it carries feed addresses (POD4 reading 6). Import stays
+    POD4's.
+
+  Not here: the listener pages and player (POD6), a bulk episode
+  progress sync (CL2), artwork. `library_access.max_rating` is still
+  enforced nowhere (a known gap outside POD5). The bundle is unchanged
+  (format v1): `profiles.allow_explicit` is left out until format v2
+  (D40), and `listening_sessions` stays *Proposed* (D36 open). Flow:
+  `podcast_api_flow.rs`. Spec: AUDIOBOOKS-PODCASTS.md "Native API
+  (POD5)" (14 readings for veto).
 - [ ] POD6 (M) **Web**: podcast pages + the AB5 player.
 - [ ] POD7 (S) **Directory search** (Apple / Podcast Index) —
   only if **D31** wants it. *D31: yes, Apple's search API.*

@@ -573,7 +573,9 @@ offline, remove after finished. All device-side.
 the episode list with each row's title, date, duration and this
 profile's state (new, part-played with a progress ring, finished
 check); episodes the server hasn't downloaded are marked and, for
-admins, offer **Download** (only downloaded episodes play, D32).
+admins, offer **Download** (D32). An episode that isn't downloaded
+still plays: its stream redirects to the publisher (D32 as amended
+2026-11-27, POD5), so the row says it streams from the publisher.
 Tapping a row expands it (play, add to playlist, mark finished,
 download to device); a device setting plays on one tap instead
 (from §2.15). **Admins** get the show's settings here: auto-download
@@ -677,7 +679,7 @@ Sessions.*
 | Per-profile progress; ABS's shelves; hide from Continue Listening; auto-finish; history and stats from sessions; no play count | D29 |
 | Admin Match on the book page; embedded covers | D30 |
 | Podcasts as a library in the pill; admin-only add via Apple search / URL / OPML; no subscribe button | D31 |
-| Only downloaded episodes play; admin per-show download / retention | D32 |
+| Admin per-show download / retention; an undownloaded episode streams from the publisher by redirect (amended 2026-11-27) | D32 |
 | Mobile Downloads tab and storage page; web has none | D33 |
 | Books + podcasts in one app; app-vs-video shape deferred | D34 |
 | Synced vs device settings (§4.6); queue on the device; effects deferred | D35 |

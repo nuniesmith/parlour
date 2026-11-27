@@ -27,6 +27,12 @@
 //! The book's position is still written through
 //! `PUT /api/v1/audiobooks/{id}/progress` (AB4/AB11), unchanged.
 //!
+//! POD5: a podcast episode's listen is the same kind of session. The
+//! reports name it with `episode_id` instead of `item_id`; it is
+//! reached through its show's library grant and D41's explicit flag
+//! (`crate::podcast_api`), and its position is written through
+//! `PUT /api/v1/podcast-episodes/{id}/progress`.
+//!
 //! Media URLs carry a short-lived HMAC stream token (file +
 //! profile + expiry) so a leaked URL is neither permanent nor a
 //! skeleton key; a valid session cookie + library access also
@@ -107,6 +113,10 @@ pub struct SessionInfo {
     /// `listening_sessions` as well, positions are book-global, and
     /// an admin stop revokes every track of the book.
     pub book: bool,
+    /// POD5: a listening session (`book` is set too) on a podcast
+    /// episode; `item_id` then holds the episode's id, and an admin
+    /// stop revokes the episode's stream token.
+    pub episode: bool,
 }
 
 /// First video stream: codec, width, height, HDR format.
@@ -401,6 +411,23 @@ fn revoke_tokens(state: &PlaybackState, profile_id: Uuid, file_id: Uuid) {
     // one token lifetime; drop those.
     revoked.retain(|_, at| now - *at <= TOKEN_TTL_SECS * 1000);
     revoked.insert((profile_id, file_id), now);
+}
+
+/// POD5: what a stream token says about `id` (a file's id, or an
+/// episode's, which stands in for one): the profile it was issued to
+/// when it is valid, `None` when it is absent, forged, expired or for
+/// something else, and an error when an admin stopped the stream it
+/// fed (a session cookie must not quietly re-authorise it).
+pub(crate) fn token_profile(
+    state: &PlaybackState,
+    token: Option<&str>,
+    id: Uuid,
+) -> Result<Option<Uuid>, AppError> {
+    match token.map(|t| verify_token(state, t, id)) {
+        Some(TokenCheck::Valid(pid)) => Ok(Some(pid)),
+        Some(TokenCheck::Revoked) => Err(AppError::Unauthorized("this stream was stopped".into())),
+        Some(TokenCheck::Invalid) | None => Ok(None),
+    }
 }
 
 /// Authorise a media request: a valid stream token for this
@@ -1296,7 +1323,7 @@ pub fn audio_fallback_stamp(size_bytes: i64, mtime: DateTime<Utc>) -> String {
 }
 
 #[derive(FromRow)]
-struct AudioSource {
+pub(crate) struct AudioSource {
     id: Uuid,
     path: String,
     size_bytes: i64,
@@ -1347,14 +1374,41 @@ fn audio_fallback_job(app: &AppState, src: &AudioSource) -> CacheJob {
     }
 }
 
+/// POD5: a downloaded podcast episode as a fallback source (AB10's
+/// treatment, widened). Its stamp is the file's size and the time it
+/// was downloaded, so a re-download after retention makes a new copy.
+/// The episode's channel count isn't kept, so the copy keeps the
+/// source's (AAC at 128 kb/s). `None` when the episode has no file.
+pub(crate) async fn load_episode_audio_source(
+    app: &AppState,
+    episode_id: Uuid,
+) -> Result<Option<AudioSource>, AppError> {
+    sqlx::query_as::<_, AudioSource>(
+        "SELECT id, file_path AS path, COALESCE(file_size_bytes, 0) AS size_bytes,
+                downloaded_at AS mtime, file_codec AS codec, NULL::integer AS channels
+         FROM podcast_episodes
+         WHERE id = $1 AND file_path IS NOT NULL AND downloaded_at IS NOT NULL",
+    )
+    .bind(episode_id)
+    .fetch_optional(&app.pool)
+    .await
+    .map_err(AppError::from)
+}
+
 /// Start making a track's AAC copy now, so it is ready (or nearly) by
 /// the time the player asks: the book detail does this for the track a
 /// profile will resume in, as playback-info starts a video's remux.
 pub(crate) async fn prepare_audio_fallback(app: &AppState, file_id: Uuid) {
     if let Ok(src) = load_audio_source(app, file_id).await {
-        let job = audio_fallback_job(app, &src);
-        ensure_job(app, job, false);
+        prepare_audio_fallback_for(app, &src);
     }
+}
+
+/// Start making the AAC copy of a source already loaded (POD5's
+/// episodes use this).
+pub(crate) fn prepare_audio_fallback_for(app: &AppState, src: &AudioSource) {
+    let job = audio_fallback_job(app, src);
+    ensure_job(app, job, false);
 }
 
 /// `GET /api/v1/stream/{file_id}/aac.m4a` — a book track as AAC in
@@ -1371,10 +1425,20 @@ async fn stream_aac(
 ) -> Result<Response, AppError> {
     authorise_media(&app, file_id, q.token.as_deref(), user.0.as_ref()).await?;
     let src = load_audio_source(&app, file_id).await?;
-    let job = audio_fallback_job(&app, &src);
+    serve_audio_fallback(&app, &headers, &src).await
+}
+
+/// Serve a source's AAC copy with Range once it is made; 503 with
+/// `Retry-After` until then. The caller has authorised the request.
+pub(crate) async fn serve_audio_fallback(
+    app: &AppState,
+    headers: &HeaderMap,
+    src: &AudioSource,
+) -> Result<Response, AppError> {
+    let job = audio_fallback_job(app, src);
     let (dir, stamp) = (job.dir.clone(), job.stamp.clone());
-    ensure_job(&app, job, false);
-    match job_status(&app, &dir, &stamp) {
+    ensure_job(app, job, false);
+    match job_status(app, &dir, &stamp) {
         RemuxStatus::Ready => {}
         RemuxStatus::Failed(_) => {
             return Err(AppError::Internal(
@@ -1398,7 +1462,7 @@ async fn stream_aac(
     serve_range(
         out.to_str().unwrap_or_default(),
         size as i64,
-        &headers,
+        headers,
         "audio/mp4",
     )
     .await
@@ -1409,7 +1473,12 @@ async fn stream_aac(
 
 #[derive(Deserialize)]
 struct ReportBody {
+    /// The item played. POD5: absent when `episode_id` names a podcast
+    /// episode instead (the handlers then put the episode's id here).
+    #[serde(default)]
     item_id: Uuid,
+    /// POD5: the podcast episode listened to, instead of `item_id`.
+    episode_id: Option<Uuid>,
     file_id: Option<Uuid>,
     position_ms: Option<i64>,
     duration_ms: Option<i64>,
@@ -1448,6 +1517,44 @@ fn find_session<'a>(
         }
     }?;
     sessions.get_mut(&id)
+}
+
+/// The kind of what a report is about, when the profile can reach it
+/// (404 otherwise): an item's own kind, or `podcast_episode` when the
+/// report names `episode_id` (POD5) — whose id then stands in
+/// `body.item_id` for the rest of the report's handling.
+async fn report_kind(
+    app: &AppState,
+    profile_id: Uuid,
+    body: &mut ReportBody,
+) -> Result<String, AppError> {
+    if let Some(episode_id) = body.episode_id {
+        if !body.item_id.is_nil() && body.item_id != episode_id {
+            return Err(AppError::BadRequest(
+                "send item_id or episode_id, not both".into(),
+            ));
+        }
+        crate::podcast_api::require_episode_access(app, profile_id, episode_id).await?;
+        body.item_id = episode_id;
+        return Ok(PODCAST_EPISODE.to_string());
+    }
+    if body.item_id.is_nil() {
+        return Err(AppError::BadRequest("send item_id or episode_id".into()));
+    }
+    require_item_access(app, profile_id, body.item_id).await
+}
+
+/// What [`report_kind`] calls a podcast episode.
+const PODCAST_EPISODE: &str = "podcast_episode";
+
+/// A listening session's target for a report of this kind: a book or
+/// an episode (AB8, POD5); `None` for a video item.
+fn listen_target(kind: &str, id: Uuid) -> Option<crate::listening::Target> {
+    match kind {
+        "audiobook" => Some(crate::listening::Target::Book(id)),
+        PODCAST_EPISODE => Some(crate::listening::Target::Episode(id)),
+        _ => None,
+    }
 }
 
 /// The item's kind, when the profile can reach it; 404 otherwise.
@@ -1543,13 +1650,13 @@ async fn report_start(
     ClientIp(ip): ClientIp,
     version: Version,
     headers: HeaderMap,
-    Json(body): Json<ReportBody>,
+    Json(mut body): Json<ReportBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let profile_id = active_profile(&user)?;
-    let kind = require_item_access(&app, profile_id, body.item_id).await?;
+    let kind = report_kind(&app, profile_id, &mut body).await?;
     let (client, remote) = client_and_remote(&body, ip, version, &headers);
-    if kind == "audiobook" {
-        return listen_start(&app, profile_id, body, client, remote).await;
+    if let Some(target) = listen_target(&kind, body.item_id) {
+        return listen_start(&app, profile_id, target, body, client, remote).await;
     }
     upsert_position(&app, profile_id, &body, true).await?;
     let plan = body.file_id.and_then(|file_id| {
@@ -1580,6 +1687,7 @@ async fn report_start(
                 remote,
                 stopped: false,
                 book: false,
+                episode: false,
             },
         );
     }
@@ -1606,13 +1714,13 @@ async fn report_progress(
     ClientIp(ip): ClientIp,
     version: Version,
     headers: HeaderMap,
-    Json(body): Json<ReportBody>,
+    Json(mut body): Json<ReportBody>,
 ) -> Result<Response, AppError> {
     let profile_id = active_profile(&user)?;
-    let kind = require_item_access(&app, profile_id, body.item_id).await?;
-    if kind == "audiobook" {
+    let kind = report_kind(&app, profile_id, &mut body).await?;
+    if let Some(target) = listen_target(&kind, body.item_id) {
         let (client, remote) = client_and_remote(&body, ip, version, &headers);
-        return listen_progress(&app, profile_id, body, client, remote).await;
+        return listen_progress(&app, profile_id, target, body, client, remote).await;
     }
     upsert_position(&app, profile_id, &body, false).await?;
     let mut sessions = app.playback.sessions.lock().unwrap();
@@ -1664,12 +1772,12 @@ fn end_registry_sessions(app: &AppState, profile_id: Uuid, body: &ReportBody) ->
 async fn report_stopped(
     State(app): State<AppState>,
     user: AuthUser,
-    Json(body): Json<ReportBody>,
+    Json(mut body): Json<ReportBody>,
 ) -> Result<StatusCode, AppError> {
     let profile_id = active_profile(&user)?;
-    let kind = require_item_access(&app, profile_id, body.item_id).await?;
-    if kind == "audiobook" {
-        return listen_stopped(&app, profile_id, body).await;
+    let kind = report_kind(&app, profile_id, &mut body).await?;
+    if let Some(target) = listen_target(&kind, body.item_id) {
+        return listen_stopped(&app, profile_id, target, body).await;
     }
     upsert_position(&app, profile_id, &body, false).await?;
     // Whether a session that was still playing ended here. Players
@@ -1717,13 +1825,15 @@ fn listen_labels(client: &ClientInfo) -> crate::listening::ClientLabels {
     }
 }
 
-/// A book's start report: open a listening session (closing any the
-/// profile still had open on the book) and put it in the registry.
-/// No `user_data` write and no Activity line: a listen is not a play
-/// (D29), and the Activity feed gets the session when it closes.
+/// A book's (or POD5: an episode's) start report: open a listening
+/// session (closing any the profile still had open on it) and put it in
+/// the registry. No `user_data` write and no Activity line: a listen is
+/// not a play (D29), and the Activity feed gets the session when it
+/// closes.
 async fn listen_start(
     app: &AppState,
     profile_id: Uuid,
+    target: crate::listening::Target,
     body: ReportBody,
     client: ClientInfo,
     remote: RemoteInfo,
@@ -1734,7 +1844,7 @@ async fn listen_start(
         &app.pool,
         session_id,
         profile_id,
-        body.item_id,
+        target,
         beat.position_ms,
         beat.duration_ms,
         &listen_labels(&client),
@@ -1760,6 +1870,7 @@ async fn listen_start(
             remote,
             stopped: false,
             book: true,
+            episode: matches!(target, crate::listening::Target::Episode(_)),
         },
     );
     Ok(Json(serde_json::json!({ "session_id": session_id })))
@@ -1774,6 +1885,7 @@ async fn listen_start(
 async fn listen_progress(
     app: &AppState,
     profile_id: Uuid,
+    target: crate::listening::Target,
     body: ReportBody,
     client: ClientInfo,
     remote: RemoteInfo,
@@ -1788,40 +1900,34 @@ async fn listen_progress(
     }
     let beat = listen_beat(&body);
     let now = Utc::now();
-    let session = match crate::listening::report(
-        &app.pool,
-        profile_id,
-        body.item_id,
-        body.session_id,
-        beat,
-        false,
-    )
-    .await?
-    {
-        Some(session) => session,
-        None => {
-            let id = Uuid::new_v4();
-            crate::listening::open(
-                &app.pool,
-                id,
-                profile_id,
-                body.item_id,
-                beat.position_ms,
-                beat.duration_ms,
-                &listen_labels(&client),
-            )
-            .await?;
-            crate::listening::OpenSession {
-                id,
-                started_at: now,
-                position_ms: beat.position_ms,
-                duration_ms: beat.duration_ms,
-                client_name: client.name.clone(),
-                client_version: client.version.clone(),
-                device_name: client.device.clone(),
+    let session =
+        match crate::listening::report(&app.pool, profile_id, target, body.session_id, beat, false)
+            .await?
+        {
+            Some(session) => session,
+            None => {
+                let id = Uuid::new_v4();
+                crate::listening::open(
+                    &app.pool,
+                    id,
+                    profile_id,
+                    target,
+                    beat.position_ms,
+                    beat.duration_ms,
+                    &listen_labels(&client),
+                )
+                .await?;
+                crate::listening::OpenSession {
+                    id,
+                    started_at: now,
+                    position_ms: beat.position_ms,
+                    duration_ms: beat.duration_ms,
+                    client_name: client.name.clone(),
+                    client_version: client.version.clone(),
+                    device_name: client.device.clone(),
+                }
             }
-        }
-    };
+        };
     {
         let mut sessions = app.playback.sessions.lock().unwrap();
         if let Some(old) = body.session_id.filter(|old| *old != session.id) {
@@ -1847,6 +1953,7 @@ async fn listen_progress(
             remote,
             stopped: false,
             book: true,
+            episode: matches!(target, crate::listening::Target::Episode(_)),
         });
         entry.last_seen = now;
         entry.position_ms = session.position_ms;
@@ -1862,18 +1969,11 @@ async fn listen_progress(
 async fn listen_stopped(
     app: &AppState,
     profile_id: Uuid,
+    target: crate::listening::Target,
     body: ReportBody,
 ) -> Result<StatusCode, AppError> {
     let beat = listen_beat(&body);
-    crate::listening::report(
-        &app.pool,
-        profile_id,
-        body.item_id,
-        body.session_id,
-        beat,
-        true,
-    )
-    .await?;
+    crate::listening::report(&app.pool, profile_id, target, body.session_id, beat, true).await?;
     end_registry_sessions(app, profile_id, &body);
     Ok(StatusCode::NO_CONTENT)
 }
@@ -1932,6 +2032,31 @@ async fn list_sessions(
     active.sort_by_key(|(id, s)| (s.started_at, *id));
     let mut out = Vec::new();
     for (session_id, s) in active {
+        if s.episode {
+            // POD5: a podcast episode's listen — the show stands where a
+            // series would; no poster yet (show artwork is POD6's).
+            let row = sqlx::query_as::<_, SessionRow>(
+                "SELECT u.username, p.name AS profile_name, e.title AS item_title,
+                        'podcast_episode' AS item_kind, e.season AS season_number,
+                        e.episode_number, pc.title AS series_title,
+                        NULL::uuid AS poster_item_id,
+                        COALESCE(e.file_duration_ms, e.duration_ms) AS file_duration_ms
+                 FROM profiles p
+                 JOIN users u ON u.id = p.user_id
+                 JOIN podcast_episodes e ON e.id = $2
+                 JOIN podcasts pc ON pc.id = e.podcast_id
+                 WHERE p.id = $1",
+            )
+            .bind(s.profile_id)
+            .bind(s.item_id)
+            .fetch_optional(&app.pool)
+            .await
+            .map_err(AppError::from)?;
+            if let Some(row) = row {
+                out.push(session_dto(session_id, s, row));
+            }
+            continue;
+        }
         // Episode -> season -> series; a movie has neither parent.
         let row = sqlx::query_as::<_, SessionRow>(
             "SELECT u.username, p.name AS profile_name, i.title AS item_title,
@@ -1958,28 +2083,32 @@ async fn list_sessions(
         .await
         .map_err(AppError::from)?;
         if let Some(row) = row {
-            out.push(SessionDto {
-                session_id,
-                username: row.username,
-                profile_name: row.profile_name,
-                item_id: s.item_id,
-                item_title: row.item_title,
-                item_kind: row.item_kind,
-                series_title: row.series_title,
-                season_number: row.season_number,
-                episode_number: row.episode_number,
-                poster_item_id: row.poster_item_id,
-                started_at: s.started_at,
-                last_seen: s.last_seen,
-                position_ms: s.position_ms,
-                duration_ms: s.duration_ms.or(row.file_duration_ms),
-                client: s.client,
-                remote: s.remote,
-                plan: s.plan,
-            });
+            out.push(session_dto(session_id, s, row));
         }
     }
     Ok(Json(out))
+}
+
+fn session_dto(session_id: Uuid, s: SessionInfo, row: SessionRow) -> SessionDto {
+    SessionDto {
+        session_id,
+        username: row.username,
+        profile_name: row.profile_name,
+        item_id: s.item_id,
+        item_title: row.item_title,
+        item_kind: row.item_kind,
+        series_title: row.series_title,
+        season_number: row.season_number,
+        episode_number: row.episode_number,
+        poster_item_id: row.poster_item_id,
+        started_at: s.started_at,
+        last_seen: s.last_seen,
+        position_ms: s.position_ms,
+        duration_ms: s.duration_ms.or(row.file_duration_ms),
+        client: s.client,
+        remote: s.remote,
+        plan: s.plan,
+    }
 }
 
 /// UI3 admin stop. There is no channel to a client in v1, so
@@ -1998,18 +2127,24 @@ async fn stop_session(
         match sessions.get_mut(&session_id) {
             Some(s) if !s.stopped => {
                 s.stopped = true;
-                Some((s.profile_id, s.file_id, s.item_id, s.book))
+                Some((s.profile_id, s.file_id, s.item_id, s.book, s.episode))
             }
             _ => None,
         }
     };
-    let Some((profile_id, file_id, item_id, book)) = target else {
+    let Some((profile_id, file_id, item_id, book, episode)) = target else {
         return Err(AppError::NotFound("no such session".into()));
     };
     if let Some(file_id) = file_id {
         revoke_tokens(&app.playback, profile_id, file_id);
     }
-    if book {
+    if episode {
+        // POD5: an episode's stream token is minted for the episode's
+        // id. A stream redirected to the publisher can't be stopped
+        // past the redirect; the next request for it is refused.
+        revoke_tokens(&app.playback, profile_id, item_id);
+        crate::listening::close_by_admin(&app.pool, session_id).await;
+    } else if book {
         // AB8: a listening session plays the book track after track,
         // so every track's tokens go; the session closes here.
         let tracks: Vec<(Uuid,)> = sqlx::query_as("SELECT id FROM media_files WHERE item_id = $1")
@@ -2032,23 +2167,29 @@ async fn stop_session(
     let viewer = viewer
         .map(|(name,)| name)
         .unwrap_or_else(|| "someone".into());
-    let title = crate::activity::item_label(&app.pool, item_id).await;
-    crate::activity::record(
-        &app.pool,
-        crate::activity::Entry::by_user(
-            "playback.stopped_by_admin",
-            admin.0.user_id,
-            &admin.0.username,
-            format!(
-                "{} stopped {viewer}'s playback of {title}",
-                admin.0.username
-            ),
-        )
-        .profile(profile_id)
-        .item(item_id)
-        .detail(serde_json::json!({ "session_id": session_id })),
+    let title = if episode {
+        crate::listening::episode_label(&app.pool, item_id).await
+    } else {
+        crate::activity::item_label(&app.pool, item_id).await
+    };
+    let mut entry = crate::activity::Entry::by_user(
+        "playback.stopped_by_admin",
+        admin.0.user_id,
+        &admin.0.username,
+        format!(
+            "{} stopped {viewer}'s playback of {title}",
+            admin.0.username
+        ),
     )
-    .await;
+    .profile(profile_id);
+    entry = if episode {
+        entry.detail(serde_json::json!({ "session_id": session_id, "episode_id": item_id }))
+    } else {
+        entry
+            .item(item_id)
+            .detail(serde_json::json!({ "session_id": session_id }))
+    };
+    crate::activity::record(&app.pool, entry).await;
     tracing::info!(%session_id, admin = %admin.0.username, "playback session stopped by admin");
     Ok(StatusCode::NO_CONTENT)
 }

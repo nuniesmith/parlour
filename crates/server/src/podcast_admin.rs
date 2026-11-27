@@ -29,6 +29,9 @@
 //! A feed address can carry a private token (paid feeds put one there).
 //! It is shown only to admins, on the show and in the OPML export, and
 //! never in an error, the log, a job or a notice.
+//!
+//! POD5 (`crate::podcast_api`) is the listener side: the shows a
+//! profile reaches through its grants, episode streams and progress.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -288,7 +291,7 @@ async fn import_opml(
 
 /// A file name made of the library's name: ASCII letters, digits and
 /// dashes only, so the header needs no encoding.
-fn opml_file_name(library: &str) -> String {
+pub(crate) fn opml_file_name(library: &str) -> String {
     let mut name = String::new();
     for c in library.chars() {
         if c.is_ascii_alphanumeric() {

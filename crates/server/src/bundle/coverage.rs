@@ -119,6 +119,12 @@ pub const SCHEMA: &[Table] = &[
                 "autoplay_next",
                 Value("profiles.json profiles[].preferences.autoplay_next"),
             ),
+            (
+                "allow_explicit",
+                Left("D41's per-profile explicit-content permission (POD5); not in format v1 — \
+                      its bundle home is the format-v2 step (D40), so an imported profile \
+                      starts with the default (on)"),
+            ),
         ],
     },
     Table::LeftOut {

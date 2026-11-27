@@ -13,6 +13,11 @@
 //!     write leaving less than this much of the book marks it finished;
 //!   - `finish_percent` (default null = off, else 1–100): finish at
 //!     this share of the book instead of the time rule.
+//! - `GET | PUT /api/v1/admin/libraries/{id}/podcast-settings` (POD5) —
+//!   a podcasts library's twin, `{"finish_remaining_seconds",
+//!   "finish_percent"}`: the same finish rule, read by episode progress
+//!   writes (`crate::podcast_api`). A twin rather than a widened route,
+//!   because `parse_subtitles` means nothing for a podcasts library.
 
 use axum::extract::{Path, State};
 use axum::routing::get;
@@ -155,11 +160,129 @@ async fn put_settings(
     Ok(Json(dto(library_id, settings)))
 }
 
-pub fn routes() -> Router<AppState> {
-    Router::new().route(
-        "/api/v1/admin/libraries/{id}/audiobook-settings",
-        get(get_settings).put(put_settings),
+// ------------------------------------------------- podcasts (POD5)
+
+/// A podcasts library's own settings: its finish rule for episodes,
+/// with Audiobookshelf's defaults (10 s, no percentage).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PodcastSettings {
+    pub finish_remaining_seconds: i32,
+    pub finish_percent: Option<i32>,
+}
+
+impl Default for PodcastSettings {
+    fn default() -> Self {
+        PodcastSettings {
+            finish_remaining_seconds: DEFAULT_FINISH_REMAINING_SECONDS,
+            finish_percent: None,
+        }
+    }
+}
+
+impl PodcastSettings {
+    /// What an admin sent, checked as the audiobook rule is.
+    pub fn validate(&self) -> Result<(), String> {
+        AudiobookSettings {
+            parse_subtitles: false,
+            finish_remaining_seconds: self.finish_remaining_seconds,
+            finish_percent: self.finish_percent,
+        }
+        .validate()
+    }
+}
+
+#[derive(Serialize)]
+struct PodcastSettingsDto {
+    library_id: Uuid,
+    #[serde(flatten)]
+    settings: PodcastSettings,
+    /// ABS's defaults.
+    default: PodcastSettings,
+}
+
+async fn load_podcast(state: &AppState, id: Uuid) -> Result<PodcastSettings, AppError> {
+    let row: Option<(String, i32, Option<i32>)> = sqlx::query_as(
+        "SELECT kind, finish_remaining_seconds, finish_percent FROM libraries WHERE id = $1",
     )
+    .bind(id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(AppError::from)?;
+    match row {
+        None => Err(AppError::NotFound("no such library".into())),
+        Some((kind, ..)) if kind != "podcasts" => Err(AppError::BadRequest(
+            "only a podcasts library has podcast settings".into(),
+        )),
+        Some((_, finish_remaining_seconds, finish_percent)) => Ok(PodcastSettings {
+            finish_remaining_seconds,
+            finish_percent,
+        }),
+    }
+}
+
+fn podcast_dto(library_id: Uuid, settings: PodcastSettings) -> PodcastSettingsDto {
+    PodcastSettingsDto {
+        library_id,
+        settings,
+        default: PodcastSettings::default(),
+    }
+}
+
+async fn get_podcast_settings(
+    State(state): State<AppState>,
+    _admin: AdminUser,
+    Path(id): Path<String>,
+) -> Result<Json<PodcastSettingsDto>, AppError> {
+    let library_id = parse_id(&id)?;
+    Ok(Json(podcast_dto(
+        library_id,
+        load_podcast(&state, library_id).await?,
+    )))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PodcastSettingsBody {
+    finish_remaining_seconds: i32,
+    finish_percent: Option<i32>,
+}
+
+/// Set both at once; the next episode progress write reads them.
+async fn put_podcast_settings(
+    State(state): State<AppState>,
+    _admin: AdminUser,
+    Path(id): Path<String>,
+    Json(body): Json<PodcastSettingsBody>,
+) -> Result<Json<PodcastSettingsDto>, AppError> {
+    let library_id = parse_id(&id)?;
+    load_podcast(&state, library_id).await?;
+    let settings = PodcastSettings {
+        finish_remaining_seconds: body.finish_remaining_seconds,
+        finish_percent: body.finish_percent,
+    };
+    settings.validate().map_err(AppError::BadRequest)?;
+    sqlx::query(
+        "UPDATE libraries SET finish_remaining_seconds = $2, finish_percent = $3 WHERE id = $1",
+    )
+    .bind(library_id)
+    .bind(settings.finish_remaining_seconds)
+    .bind(settings.finish_percent)
+    .execute(&state.pool)
+    .await
+    .map_err(AppError::from)?;
+    Ok(Json(podcast_dto(library_id, settings)))
+}
+
+pub fn routes() -> Router<AppState> {
+    Router::new()
+        .route(
+            "/api/v1/admin/libraries/{id}/audiobook-settings",
+            get(get_settings).put(put_settings),
+        )
+        .route(
+            "/api/v1/admin/libraries/{id}/podcast-settings",
+            get(get_podcast_settings).put(put_podcast_settings),
+        )
 }
 
 #[cfg(test)]
@@ -188,5 +311,22 @@ mod tests {
         assert!(with(10, Some(100)).validate().is_ok());
         assert!(with(10, Some(0)).validate().is_err());
         assert!(with(10, Some(101)).validate().is_err());
+    }
+
+    #[test]
+    fn podcast_settings_default_to_audiobookshelfs_and_are_checked() {
+        let d = PodcastSettings::default();
+        assert_eq!(d.finish_remaining_seconds, 10);
+        assert_eq!(d.finish_percent, None);
+        assert!(d.validate().is_ok());
+        let with = |s: i32, p: Option<i32>| PodcastSettings {
+            finish_remaining_seconds: s,
+            finish_percent: p,
+        };
+        assert!(with(0, None).validate().is_ok());
+        assert!(with(-1, None).validate().is_err());
+        assert!(with(86_401, None).validate().is_err());
+        assert!(with(30, Some(90)).validate().is_ok());
+        assert!(with(30, Some(0)).validate().is_err());
     }
 }

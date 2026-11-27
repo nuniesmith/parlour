@@ -21,6 +21,12 @@
 //! - `GET /api/v1/admin/listening/sessions?profile_id=&before=&limit=`
 //!   — every profile's sessions, for admins
 //!
+//! POD5 widened sessions to podcast episodes (`Target::Episode`,
+//! `listening_sessions.episode_id`): the same open / replace / beat /
+//! close rules, reached through the same reports with `episode_id`.
+//! An episode's session is listed with its show, and counts in the
+//! stats' totals and days (the per-book list stays books).
+//!
 //! The native-client session API (device tokens, sessions recorded
 //! offline and uploaded later, the documented contract) is CL3/CL6.
 
@@ -77,6 +83,37 @@ pub fn listened_label(ms: i64) -> String {
     }
 }
 
+/// What a session is a listen to: a book (`listening_sessions.item_id`)
+/// or a podcast episode (`episode_id`, POD5). Exactly one is stored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Target {
+    Book(Uuid),
+    Episode(Uuid),
+}
+
+impl Target {
+    /// The book's or the episode's id.
+    pub fn id(self) -> Uuid {
+        match self {
+            Target::Book(id) | Target::Episode(id) => id,
+        }
+    }
+    /// The `item_id` column's value.
+    pub fn item_id(self) -> Option<Uuid> {
+        match self {
+            Target::Book(id) => Some(id),
+            Target::Episode(_) => None,
+        }
+    }
+    /// The `episode_id` column's value.
+    pub fn episode_id(self) -> Option<Uuid> {
+        match self {
+            Target::Episode(id) => Some(id),
+            Target::Book(_) => None,
+        }
+    }
+}
+
 /// What a player said about itself when it opened a session.
 #[derive(Debug, Clone, Default)]
 pub struct ClientLabels {
@@ -107,25 +144,27 @@ pub struct Beat {
     pub listened_ms: Option<i64>,
 }
 
-/// Open a session for `profile_id` on a book. Any session the same
-/// profile still has open on the same book is closed first
-/// (`replaced`), with its Activity line.
+/// Open a session for `profile_id` on a book or an episode. Any
+/// session the same profile still has open on the same one is closed
+/// first (`replaced`), with its Activity line.
 pub async fn open(
     pool: &parlour_db::PgPool,
     session_id: Uuid,
     profile_id: Uuid,
-    item_id: Uuid,
+    target: Target,
     position_ms: i64,
     duration_ms: Option<i64>,
     client: &ClientLabels,
 ) -> Result<(), AppError> {
     let replaced: Vec<(Uuid,)> = sqlx::query_as(
         "UPDATE listening_sessions SET ended_at = now(), end_reason = 'replaced'
-         WHERE profile_id = $1 AND item_id = $2 AND ended_at IS NULL
+         WHERE profile_id = $1 AND item_id IS NOT DISTINCT FROM $2
+           AND episode_id IS NOT DISTINCT FROM $3 AND ended_at IS NULL
          RETURNING id",
     )
     .bind(profile_id)
-    .bind(item_id)
+    .bind(target.item_id())
+    .bind(target.episode_id())
     .fetch_all(pool)
     .await
     .map_err(AppError::from)?;
@@ -135,24 +174,26 @@ pub async fn open(
     sqlx::query(
         "INSERT INTO listening_sessions
              (id, profile_id, item_id, start_position_ms, position_ms, duration_ms,
-              client_name, client_version, device_name)
-         VALUES ($1, $2, $3, $4, $4, $5, $6, $7, $8)",
+              client_name, client_version, device_name, episode_id)
+         VALUES ($1, $2, $3, $4, $4, $5, $6, $7, $8, $9)",
     )
     .bind(session_id)
     .bind(profile_id)
-    .bind(item_id)
+    .bind(target.item_id())
     .bind(position_ms.max(0))
     .bind(duration_ms.filter(|d| *d > 0))
     .bind(&client.name)
     .bind(&client.version)
     .bind(&client.device)
+    .bind(target.episode_id())
     .execute(pool)
     .await
     .map_err(AppError::from)?;
     Ok(())
 }
 
-/// Apply one report to the profile's open session on the book: the
+/// Apply one report to the profile's open session on the book or
+/// episode: the
 /// one named by `session_id`, or without one the most recently heard
 /// from. `close` ends it as well (`stopped`). Returns the session, or
 /// `None` when no open session matches (it was closed meanwhile, or
@@ -160,7 +201,7 @@ pub async fn open(
 pub async fn report(
     pool: &parlour_db::PgPool,
     profile_id: Uuid,
-    item_id: Uuid,
+    target: Target,
     session_id: Option<Uuid>,
     beat: Beat,
     close: bool,
@@ -170,15 +211,17 @@ pub async fn report(
         "SELECT id, position_ms,
                 GREATEST((EXTRACT(EPOCH FROM (now() - last_seen_at)) * 1000)::bigint, 0)
          FROM listening_sessions
-         WHERE profile_id = $1 AND item_id = $2 AND ended_at IS NULL
+         WHERE profile_id = $1 AND item_id IS NOT DISTINCT FROM $2
+           AND episode_id IS NOT DISTINCT FROM $4 AND ended_at IS NULL
            AND ($3::uuid IS NULL OR id = $3)
          ORDER BY last_seen_at DESC, id
          LIMIT 1
          FOR UPDATE",
     )
     .bind(profile_id)
-    .bind(item_id)
+    .bind(target.item_id())
     .bind(session_id)
+    .bind(target.episode_id())
     .fetch_optional(&mut *tx)
     .await
     .map_err(AppError::from)?;
@@ -270,7 +313,9 @@ async fn record_closed(pool: &parlour_db::PgPool, session_id: Uuid) {
     #[derive(FromRow)]
     struct Closed {
         profile_id: Uuid,
-        item_id: Uuid,
+        item_id: Option<Uuid>,
+        episode_id: Option<Uuid>,
+        podcast_id: Option<Uuid>,
         user_id: Uuid,
         username: String,
         start_position_ms: i64,
@@ -282,7 +327,10 @@ async fn record_closed(pool: &parlour_db::PgPool, session_id: Uuid) {
         end_reason: Option<String>,
     }
     let row = sqlx::query_as::<_, Closed>(
-        "SELECT s.profile_id, s.item_id, u.id AS user_id, u.username, s.start_position_ms,
+        "SELECT s.profile_id, s.item_id, s.episode_id,
+                (SELECT e.podcast_id FROM podcast_episodes e WHERE e.id = s.episode_id)
+                    AS podcast_id,
+                u.id AS user_id, u.username, s.start_position_ms,
                 s.position_ms, s.duration_ms, s.listened_ms, s.started_at, s.ended_at,
                 s.end_reason
          FROM listening_sessions s
@@ -301,23 +349,33 @@ async fn record_closed(pool: &parlour_db::PgPool, session_id: Uuid) {
             return;
         }
     };
-    let title = crate::activity::item_label(pool, row.item_id).await;
+    let title = match (row.item_id, row.episode_id) {
+        (Some(item_id), _) => crate::activity::item_label(pool, item_id).await,
+        (None, Some(episode_id)) => episode_label(pool, episode_id).await,
+        (None, None) => "something".to_string(),
+    };
+    let mut entry = crate::activity::Entry::by_user(
+        "playback.listened",
+        row.user_id,
+        &row.username,
+        format!(
+            "{} listened to {title} for {}",
+            row.username,
+            listened_label(row.listened_ms)
+        ),
+    )
+    .profile(row.profile_id);
+    // An episode isn't a catalog item, so the line names it in its
+    // detail instead (Activity's item link is to `media_items`).
+    if let Some(item_id) = row.item_id {
+        entry = entry.item(item_id);
+    }
     crate::activity::record(
         pool,
-        crate::activity::Entry::by_user(
-            "playback.listened",
-            row.user_id,
-            &row.username,
-            format!(
-                "{} listened to {title} for {}",
-                row.username,
-                listened_label(row.listened_ms)
-            ),
-        )
-        .profile(row.profile_id)
-        .item(row.item_id)
-        .detail(serde_json::json!({
+        entry.detail(serde_json::json!({
             "session_id": session_id,
+            "episode_id": row.episode_id,
+            "podcast_id": row.podcast_id,
             "started_at": row.started_at,
             "ended_at": row.ended_at,
             "end_reason": row.end_reason,
@@ -330,6 +388,22 @@ async fn record_closed(pool: &parlour_db::PgPool, session_id: Uuid) {
     .await;
 }
 
+/// How an episode reads in an Activity line or on Now Playing: "Show ·
+/// Episode". Never fails the caller.
+pub async fn episode_label(pool: &parlour_db::PgPool, episode_id: Uuid) -> String {
+    let row: Result<Option<(String, String)>, _> = sqlx::query_as(
+        "SELECT p.title, e.title FROM podcast_episodes e
+         JOIN podcasts p ON p.id = e.podcast_id WHERE e.id = $1",
+    )
+    .bind(episode_id)
+    .fetch_optional(pool)
+    .await;
+    match row {
+        Ok(Some((show, episode))) => format!("{show} · {episode}"),
+        _ => "an episode".to_string(),
+    }
+}
+
 // ------------------------------------------------------------- reading
 
 #[derive(Debug, Serialize, FromRow)]
@@ -338,7 +412,12 @@ struct SessionDto {
     profile_id: Uuid,
     username: String,
     profile_name: String,
-    item_id: Uuid,
+    /// The book, or null for an episode's session (POD5).
+    item_id: Option<Uuid>,
+    /// POD5: the episode and its show, for an episode's session.
+    episode_id: Option<Uuid>,
+    podcast_id: Option<Uuid>,
+    show_title: Option<String>,
     title: String,
     has_cover: bool,
     authors: Vec<String>,
@@ -365,10 +444,14 @@ struct SessionPage {
 }
 
 /// `$1` profile or NULL (every profile), `$2` `before` or NULL, `$3`
-/// limit, `$4` whether to keep only books the profile `$1` can reach
-/// (the profile's own view; an admin's view shows everything).
+/// limit, `$4` whether to keep only books and episodes the profile `$1`
+/// can reach (the profile's own view; an admin's view shows
+/// everything). An episode is reached through its show's library, and
+/// an explicit show only by a profile allowed explicit content (D41).
 const SESSIONS_SQL: &str = "
-    SELECT s.id, s.profile_id, u.username, p.name AS profile_name, s.item_id, i.title,
+    SELECT s.id, s.profile_id, u.username, p.name AS profile_name, s.item_id,
+           s.episode_id, e.podcast_id, pc.title AS show_title,
+           COALESCE(i.title, e.title) AS title,
            EXISTS (SELECT 1 FROM images im WHERE im.item_id = i.id AND im.kind = 'poster'
                    AND im.path <> '' AND im.path NOT LIKE 'pending:%') AS has_cover,
            COALESCE((SELECT array_agg(pp.name ORDER BY ip.sort_order, pp.name)
@@ -381,11 +464,15 @@ const SESSIONS_SQL: &str = "
     FROM listening_sessions s
     JOIN profiles p ON p.id = s.profile_id
     JOIN users u ON u.id = p.user_id
-    JOIN media_items i ON i.id = s.item_id
+    LEFT JOIN media_items i ON i.id = s.item_id
+    LEFT JOIN podcast_episodes e ON e.id = s.episode_id
+    LEFT JOIN podcasts pc ON pc.id = e.podcast_id
     WHERE ($1::uuid IS NULL OR s.profile_id = $1)
       AND ($2::timestamptz IS NULL OR s.started_at < $2)
-      AND (NOT $4 OR EXISTS (SELECT 1 FROM library_access a
-                             WHERE a.library_id = i.library_id AND a.profile_id = $1))
+      AND (NOT $4 OR (EXISTS (SELECT 1 FROM library_access a
+                              WHERE a.library_id = COALESCE(i.library_id, pc.library_id)
+                                AND a.profile_id = $1)
+                      AND (pc.id IS NULL OR NOT pc.explicit OR p.allow_explicit)))
     ORDER BY s.started_at DESC, s.id
     LIMIT $3";
 
@@ -475,7 +562,8 @@ struct StatsDto {
     today_ms: i64,
     /// Days with listening, newest first.
     days: Vec<DayDto>,
-    /// Books by listening time, most first.
+    /// Books by listening time, most first. Episodes count in the
+    /// totals and days above, not here (POD5).
     books: Vec<BookTotalDto>,
 }
 
@@ -511,9 +599,13 @@ async fn my_stats(
                     WHERE (s.started_at AT TIME ZONE $2)::date = (now() AT TIME ZONE $2)::date
                 ), 0)::bigint
          FROM listening_sessions s
-         JOIN media_items i ON i.id = s.item_id
-         JOIN library_access a ON a.library_id = i.library_id AND a.profile_id = $1
-         WHERE s.profile_id = $1",
+         JOIN profiles pr ON pr.id = s.profile_id
+         LEFT JOIN media_items i ON i.id = s.item_id
+         LEFT JOIN podcast_episodes e ON e.id = s.episode_id
+         LEFT JOIN podcasts pc ON pc.id = e.podcast_id
+         JOIN library_access a ON a.library_id = COALESCE(i.library_id, pc.library_id)
+                              AND a.profile_id = $1
+         WHERE s.profile_id = $1 AND (pc.id IS NULL OR NOT pc.explicit OR pr.allow_explicit)",
     )
     .bind(profile_id)
     .bind(&tz)
@@ -524,9 +616,14 @@ async fn my_stats(
         "SELECT to_char((s.started_at AT TIME ZONE $2)::date, 'YYYY-MM-DD') AS date,
                 SUM(s.listened_ms)::bigint AS listened_ms
          FROM listening_sessions s
-         JOIN media_items i ON i.id = s.item_id
-         JOIN library_access a ON a.library_id = i.library_id AND a.profile_id = $1
+         JOIN profiles pr ON pr.id = s.profile_id
+         LEFT JOIN media_items i ON i.id = s.item_id
+         LEFT JOIN podcast_episodes e ON e.id = s.episode_id
+         LEFT JOIN podcasts pc ON pc.id = e.podcast_id
+         JOIN library_access a ON a.library_id = COALESCE(i.library_id, pc.library_id)
+                              AND a.profile_id = $1
          WHERE s.profile_id = $1 AND s.listened_ms > 0
+           AND (pc.id IS NULL OR NOT pc.explicit OR pr.allow_explicit)
          GROUP BY 1
          ORDER BY 1 DESC",
     )

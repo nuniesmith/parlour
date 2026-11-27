@@ -696,6 +696,23 @@ on 2026-11-20, which is still open and isn't touched here.)
   until Jordan asks; it must be answered before POD3 runs in
   production.
 
+  **Amended 2026-11-27 (owner): the enclosure redirect is allowed.**
+  An episode that is **not** downloaded streams by redirecting to its
+  enclosure URL, as TODO's POD5 line had it ("or redirect to the
+  enclosure if not downloaded"). This amends "plays only downloaded
+  ones" for undownloaded episodes only; everything else above
+  (download, retention, refresh, the per-show settings) stands. The
+  owner accepted these consequences, which POD5's first run raised:
+  - a paid feed's tokenised enclosure URL is handed, by the redirect
+    itself, to every listener with access to the library;
+  - the publisher sees each such listener's IP address;
+  - a redirected stream bypasses AB10's audio plan (there is no
+    probed file to decide on, and no AAC fallback).
+
+  The enclosure URL still never appears in a log, a job's errors, a
+  notice or web UI error text; the redirect's `Location` is the one
+  place it leaves the server (POD5, built 2026-11-27).
+
   *Question as put (2026-11-23):* **D32 — DECISION NEEDED: podcast episode download, retention
   and refresh.** (1) Does the server **download** episode audio
   (offline-proof, costs disk) or only parse the feed and let
@@ -890,3 +907,29 @@ on 2026-11-20, which is still open and isn't touched here.)
   changes once. A match is an admin's deliberate work, the same kind
   of thing D14 carries for video, and (a) makes migration lose it
   silently unless an opt-in was on beforehand.
+
+## 2026-11-27 — Explicit podcasts per profile (POD5)
+
+- **D41 — DECIDED 2026-11-27 (owner): (a) a per-profile "explicit
+  content" flag, on by default**, mirroring Audiobookshelf's per-user
+  permission. `profiles.allow_explicit` (migration
+  `20261204000000_pod5_explicit_episode_sessions.sql`) is set by an
+  admin only (Server → Users → Profiles;
+  `PUT /api/v1/admin/profiles/{id}/explicit`); a profile's own
+  settings can't change it. With it **off**, a show whose feed marks it
+  explicit (`podcasts.explicit`) and all of its episodes — their
+  detail, stream, AAC copy, progress and listening reports — answer
+  404 to that profile, the same not-found as a show without a grant.
+  With it **on** (the default), nothing changes. The column is left
+  out of export format v1; its bundle home is the format-v2 step
+  (D40). Built in POD5.
+
+  *Question as put (2026-11-27, POD5 run 1):* `explicit` is stored on
+  a show, but nothing decided how it limits a profile. Options: (a) a
+  per-profile "explicit content" flag like ABS's, default on (a
+  migration); (b) a grant with any `max_rating` hides explicit shows
+  (no migration); (c) no filter, `explicit` only reported. Recommended
+  (a). The brief's idea of tying explicit shows to a grant's
+  `max_rating` is superseded by this decision. (`library_access.
+  max_rating` itself is stored but not enforced anywhere — a known gap
+  outside POD5, noted for the review loop.)
