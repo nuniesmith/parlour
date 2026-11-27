@@ -60,6 +60,14 @@ services:
       # - /srv/media/films:/media/films:rw
       - parlour-artwork:/artwork
       - parlour-cache:/cache
+      # The podcast store (POD3, D32): a writable folder Parlour owns,
+      # beside the artwork and cache, never a media mount. Downloads
+      # go there once a podcasts library is created with /podcasts as
+      # its folder (the explicit ops step). Production picks the disk
+      # (still to be decided for sullivan): swap this for a bind mount
+      # such as /srv/podcasts:/podcasts. See docs/AUDIOBOOKS-PODCASTS.md
+      # "Episode download and retention (POD3)".
+      - parlour-podcasts:/podcasts
       # Nightly backups (XFER7), with PARLOUR_BACKUP_DIR=/backups:
       # - /srv/backups/parlour:/backups
     # GPU transcoding (Phase 2) — enable ONE block for your host:
@@ -71,3 +79,4 @@ volumes:
   parlour-db:
   parlour-artwork:
   parlour-cache:
+  parlour-podcasts:

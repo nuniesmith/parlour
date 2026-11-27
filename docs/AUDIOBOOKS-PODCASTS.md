@@ -1339,7 +1339,7 @@ not yet scheduled in a PR:
 
 ---
 
-## Phase 11 — Podcasts (POD1's schema and POD2's feed checks built 2026-11-26; the rest is plan)
+## Phase 11 — Podcasts (POD1's schema, POD2's feed checks and POD3's downloads built 2026-11-26; the rest is plan)
 
 The server owns the feeds. Clients never fetch RSS themselves, which
 is what lets a Fire Stick, a tablet and the phone agree.
@@ -1557,7 +1557,9 @@ flow test makes exactly these writes.
     24th failure in a row turns `auto_download` off. A successful
     check clears `last_error` and the count. Feeds failing repeatedly
     raise the Dashboard notice.
-- **POD3.**
+- **POD3.** *Done in POD3 ("Episode download and retention (POD3)"):
+  retention takes the second way, clearing the `file_*` columns
+  (POD3 reading 1).*
   - **Store.** It writes into `folder_path` inside the writable
     store, and fills the `file_*` columns and `downloaded_at`.
   - **Retention.** When retention removes an episode, ABS deletes
@@ -1942,6 +1944,283 @@ change is the job's name on the Jobs page ("Podcast feed check").
       one scheduled check: one more failure turns it off again, and a
       success resets the count.
     - A success never turns auto-download back on by itself.
+
+### Episode download and retention (POD3, built 2026-11-26)
+
+POD3 downloads episodes into the writable podcast store and keeps each
+show to its D32 limit. It rides on POD2's `refresh_podcasts` job: the
+same worker and the same run, right after a show's check, so there is
+no second scheduler. Nothing is added to the API or the UI. POD4 manages
+feeds and episode lists, and POD5/POD6 play episodes.
+
+There is no migration: every column POD3 writes is POD1's. The flow
+`crates/server/tests/podcast_download_flow.rs` runs all of it on a
+fresh database. It uses a local stub feed-and-enclosure host, real
+ffprobe, and a throwaway folder as the store. The code is
+`parlour_catalog::podcast_download` (store, download, retention),
+`parlour_catalog::podcasts::refresh_podcasts` (the run), and
+`crates/server/src/podcasts.rs` (the job).
+
+Audiobookshelf's behaviour quoted here was checked on 2026-11-26
+against its server source on `master` (its podcast manager and podcast
+controller). That reading was for behaviour only, and nothing was
+copied.
+
+**The store (D32).**
+
+- **What it is.** A podcasts library's folder (its `library_paths`
+  row) is the writable podcast store. If a library has several
+  folders, the first by path is used. Setting it up is the explicit
+  ops step:
+  1. Mount a writable folder that Parlour owns.
+  2. Create a podcasts library with that folder.
+
+  The store is never a video or book media mount, and never a
+  read-only mount flipped to writable. Parlour never creates the
+  store's own folder, only the show folders inside it.
+- **Overlap guard.** A store that is, contains or sits inside any
+  other library's folder is refused for every download, naming the
+  library it overlaps. So a podcasts library pointed into `/media`
+  writes nothing.
+- **The oryx test instance.** `docker-compose.yml` mounts a named
+  volume, `parlour-podcasts`, at `/podcasts`. It sits beside the
+  artwork and cache volumes, under the instance's own data. After the
+  owner's next `docker compose up -d`, an admin creates a podcasts
+  library whose folder is `/podcasts` (Server → Library already allows
+  it). This run did not restart or change the live instance.
+- **Production.** Which disk on sullivan holds the store is **still
+  to be decided** (D32: no ABS equivalent, deferred until Jordan
+  asks), and it must be answered before POD3 runs there. The answer
+  replaces the named volume with a bind mount such as
+  `/srv/podcasts:/podcasts`.
+- **A show's folder** (`podcasts.folder_path`) is named the first
+  time an episode is downloaded for the show:
+  - **The name** is the show's title as a safe name: no `/ \ : * ? " < > |`
+    or control characters, white space folded, no leading or trailing
+    dots, at most 150 bytes, and `Podcast` if nothing is left.
+  - **Clashes.** If another show holds the name, or a folder of that
+    name is already on disk (not Parlour's to share), the show gets
+    ` (2)`, ` (3)` and so on.
+  - **After that** the stored folder is used even when the title
+    changes. If the folder disappears, it is made again inside the
+    store.
+- **Never scanned.** A podcasts library's rows come from its feeds,
+  so a library scan (the nightly one scans every library) does nothing
+  for it. Before POD3 a scan walked a podcasts library as if it held
+  videos, and a video podcast's `.mp4` in the store would have become
+  a film.
+
+**New episodes (the scheduled path).** After a successful check (a
+200 or a 304) of a show with `auto_download` on, the run downloads the
+show's new episodes. It works out which ones as Audiobookshelf does:
+
+- **The cutoff** is the publish date of the newest downloaded episode.
+  When none is downloaded, it is the show's previous check
+  (`last_checked_at` before this check). For a show never checked, it
+  is the time the show was added (`created_at`).
+- **New** means not downloaded and published strictly after the
+  cutoff. An episode without a date is never new.
+- **Order and limit.** Newest first (the guid breaks ties), at most
+  the show's `max_new_episodes_per_check` (default 3; 0 = no cap).
+
+So:
+
+- **The back catalogue** of a newly added show is never downloaded on
+  its own.
+- **A later check** never works through older episodes: once the
+  newest download moves the cutoff, everything older is old.
+- **Retention.** An episode it took back to "not downloaded" is older
+  than the newest download, so a check never fetches it again.
+
+A check by hand (`{"podcast_id": …}`) downloads in the same way when
+the show's `auto_download` is on, and only checks the feed when it is
+off.
+
+**A download** (`podcast_download::download_episode`):
+
+1. **The show's folder** is found or named (above). If that fails,
+   the download fails.
+2. **Fetch.** The enclosure is fetched into a hidden temporary file,
+   `.{episode id}.part`, in the show's folder. Only a 200 is an
+   answer; redirects are followed. The download fails when:
+   - nothing arrives for 60 s;
+   - it takes over 3 hours;
+   - it passes 4 GB;
+   - it arrives empty.
+3. **Probe.** The file is probed with ffprobe the way the scanner
+   probes a book's tracks (`audiobooks::probe_audio`). A file with no
+   audio stream ffprobe can read is a failure (an HTML paywall page,
+   say).
+4. **Name and rename.** The file is renamed into place as the
+   episode's title, made safe as above (`Episode` if nothing is left).
+   - **The extension** is the enclosure URL's, when it is a known
+     audio one. Otherwise it comes from the probed container (`mov` →
+     `m4a`), then the MIME type, else `audio`.
+   - **Clashes.** If that name is on disk or is another episode's
+     file, the name gets the episode's short id (` [1a2b3c4d]`), then
+     its full id.
+5. **The row.** Only then are `file_path` (absolute), `file_size_bytes`,
+   `file_duration_ms`, `file_container`, `file_codec` and
+   `downloaded_at` filled, in one update:
+   - **Container** is ffprobe's first format name, as for book tracks.
+   - **Codec** is the default audio stream's, else the first one's.
+
+**A failure leaves no trace on disk.** On any failure the temporary
+file is removed, nothing is renamed, and the row stays undownloaded
+with every `file_*` column NULL. If the row can't be written after the
+rename, the file is removed again. So a failed or partial download
+never leaves a file an episode row points at.
+
+**How failures are reported.**
+
+- **On the job.** Each failure is listed under "*show* — *episode*",
+  for example `the enclosure answered HTTP 404` or `the download could
+  not be read: …`.
+- **Never the URL.** The enclosure URL is never written to the log or
+  the job, because paid feeds put a private token in it. Request
+  errors drop it (`without_url`).
+- **The job.** A download failure doesn't fail the job; only a
+  database error does.
+- **Retries.** A failed new episode is tried again by the next check
+  only while it is still new, which means something newer had already
+  been downloaded. Otherwise it waits to be downloaded by hand.
+
+**Download by hand.** A `refresh_podcasts` job queued as
+`{"episode_id": …}` downloads that one episode whatever its show's
+schedule or `auto_download` says. That is the hook POD4's "download"
+will queue, mirroring POD2's `{"podcast_id": …}` for "refresh now".
+
+- **No feed check.** It doesn't check the feed.
+- **Already downloaded.** An episode that already has a file is left
+  alone (`already_downloaded` in the result).
+- **No retention.** Retention doesn't run, as in Audiobookshelf, where
+  only automatic downloads trigger it.
+- **Bad ids.** A job whose `episode_id` isn't an id fails. One naming
+  an episode that doesn't exist does nothing.
+
+**Retention** (`podcast_download::apply_retention`):
+
+- **When it runs.** Once after the downloads of every successful check
+  of a show with `auto_download` on.
+- **What it does.** When the show holds more downloaded episodes with
+  a publish date than its `max_episodes_to_keep` (0 = keep all, the
+  default), it removes the oldest: by `published_at`, then guid.
+- **At most one per check.** Lowering the limit from 10 to 3 trims one
+  episode per check until three are left.
+- **What counts.** Episodes downloaded by hand count toward the limit.
+  Episodes without a date are neither counted nor removed.
+- **Removal:**
+  1. The file is deleted from disk (a file already gone is fine).
+  2. Then the row's `file_*` columns and `downloaded_at` are cleared.
+     The row, its progress and everything the feed describes stay.
+     The episode is "not downloaded" again and can be downloaded by
+     hand.
+- **If the file can't be deleted**, the row is left as it was and the
+  failure is listed on the job under "*show* — *episode*".
+
+**The job's result** adds these counts to POD2's: `downloaded`,
+`download_failed`, `already_downloaded`, `removed` and
+`remove_failed`. The Jobs page now calls the job "Podcast check and
+download" (it was "Podcast feed check"). Its failure notice changed to
+match.
+
+**Feed client.** The client feed checks use now carries no overall
+time limit, so long downloads can share it. The 60 s limit is set on
+each feed request instead, so feed checks behave as before.
+
+**Unchanged.**
+
+- **Bundle.** It stays at format v1, with no table change and nothing
+  new in `coverage.rs`. `podcasts`, `podcast_episodes` and episode
+  progress stay out of it.
+- **Downloaded files.** They stay in the old host's store. A show that
+  moves comes back with its episodes not downloaded.
+- **D36** is still open.
+
+#### Readings made in POD3 — for the owner's veto
+
+1. **Retention clears the file and keeps the episode (option b), with
+   its progress.**
+   - *ABS differs:* it deletes the file, the episode record and its
+     listening progress.
+   - *Why (b):*
+     - Here every feed episode has a row whether or not it is
+       downloaded (POD1 reading 3). ABS's feed list still shows a
+       removed episode, not downloaded and downloadable by hand,
+       which is exactly the row (b) leaves.
+     - Deleting the row (a) would make POD2's next check insert it
+       again as a new row. Stopping that needs a record of removed
+       guids, which is a migration, for no difference a listener
+       sees.
+     - The kept progress means a finished episode still reads as
+       played, and a re-download resumes.
+   - *If vetoed:* deleting the episode's `book_progress` rows as well
+     is one statement. Deleting the row needs that tombstone.
+2. **"New" is ABS's rule: published after the newest download, else
+   after the previous check, else after the show was added.**
+   - *Why:* it is what ABS's scheduled check does. It means a
+     retention-cleared episode, an older episode or a show's back
+     catalogue is never fetched on its own.
+   - *Cost:* if a show's first new episode fails to download, it isn't
+     retried by the next check, because the cutoff has moved on with
+     the check. It waits for a download by hand. An episode without a
+     publish date is never downloaded automatically.
+3. **Newest first.**
+   - ABS takes the new episodes in the feed's own order, which is
+     newest first in nearly every feed.
+   - Sorting by date gives the same result on those feeds and the
+     right one on the rest.
+4. **Retention runs once per successful check, whether or not the
+   check downloaded anything.**
+   - *ABS differs:* its code removes at most one episode after each
+     automatic download.
+   - *Why:* D32's text is "at most one per check", and this follows
+     it. It also means a lowered limit is reached one episode per
+     check even when nothing new arrives.
+   - *Not run:* after a failed check, or after a download by hand
+     (ABS doesn't run it there either).
+5. **What retention counts.**
+   - Downloaded episodes with a publish date, including ones
+     downloaded by hand. The oldest goes first, by date then guid.
+   - Undated episodes are neither counted nor removed, as in ABS.
+6. **The store is the podcasts library's folder.**
+   - The first by path if there are several. Parlour never creates it.
+   - A store overlapping any other library's folder is refused.
+   - On oryx it is a `parlour-podcasts` volume at `/podcasts`.
+   - Production's disk is still to be decided (D32).
+7. **Folder and file names.**
+   - The show's folder is named once, from its title, and kept when
+     the title changes.
+   - An episode's file is its title plus an extension.
+   - Clashes get ` (2)` for folders and the episode's short id for
+     files. ABS appends a random id.
+   - A folder already on disk that Parlour didn't name is never
+     shared.
+8. **Temp file, probe, then rename.**
+   - Only a file that probes as audio is kept.
+   - If the server stops between the rename and the row update, the
+     file can be left with no row pointing at it, never the reverse.
+     The next attempt picks a fresh name. Nothing tidies such a file
+     yet.
+9. **Download limits.**
+   - 60 s without data, 3 hours in all, 4 GB per file, 15 s to
+     connect, redirects followed, only a 200 accepted.
+   - D32 has no disk cap, and none is added. The 4 GB is a per-file
+     sanity limit.
+10. **Failures are on the job, not the episode.**
+    - No column records a failed download (no migration).
+    - The job lists each failure by show and episode title.
+    - POD4's episode list will show "not downloaded", and the error is
+      on the Jobs page.
+11. **Download by hand rides on `refresh_podcasts`.**
+    - The payload is `{"episode_id": …}`, the same worker as the
+      checks, so a download by hand never races a check of the same
+      show.
+    - It skips an episode that already has a file. ABS would download
+      a second copy.
+12. **Podcasts libraries are never scanned.** The scanner returns an
+    empty report for them. This also covers the file watcher and the
+    nightly scan.
 
 ---
 

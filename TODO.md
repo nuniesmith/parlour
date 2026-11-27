@@ -1223,8 +1223,8 @@ hourly check / keep N (0 = all) / 3 new per check. Details:
 `docs/AUDIOBOOKS-PODCASTS.md` → Phase 11. The lines below keep
 their original wording; read them through that.
 
-POD1 (the schema) and POD2 (feed checks) are built; POD3–POD8 are
-plan only. Spec:
+POD1 (the schema), POD2 (feed checks) and POD3 (downloads and
+retention) are built; POD4–POD8 are plan only. Spec:
 `docs/AUDIOBOOKS-PODCASTS.md`.
 
 - [x] POD1 (M) **Schema**: `podcasts` (feed URL, metadata,
@@ -1296,8 +1296,37 @@ plan only. Spec:
   D36 open). Flow: `podcast_refresh_flow.rs`. Spec:
   AUDIOBOOKS-PODCASTS.md "Feed fetch and parse (POD2)" (13 readings
   for veto).
-- [ ] POD3 (M) **Episode download + retention** per **D32**,
+- [x] POD3 (M) **Episode download + retention** per **D32**,
   into a writable podcast store (never a media mount).
+  *Done 2026-11-26:* no migration (every column is POD1's).
+  - **Store.** The podcasts library's folder is the store; Parlour
+    never creates it. A store overlapping another library's folder is
+    refused. A show's folder is named from its title the first time
+    something is downloaded into it, unique in the store. On oryx the
+    store is a `parlour-podcasts` volume at `/podcasts` in
+    `docker-compose.yml`. Sullivan's disk is still to be decided
+    (D32), before POD3 runs in production.
+  - **Download.** It rides on the `refresh_podcasts` run, after a
+    successful check of a show with `auto_download` on. New episodes
+    are as in ABS (published after the newest download, else the
+    previous check), newest first, at most
+    `max_new_episodes_per_check`. Each goes to a temporary file, is
+    probed with ffprobe (`probe_audio`) and is renamed into place;
+    only then are the `file_*` columns and `downloaded_at` filled.
+    A failure leaves the row undownloaded and no file, and is listed
+    on the job by show and episode title, never by URL.
+  - **By hand.** A job `{"episode_id": …}` downloads one episode
+    whatever the show's settings (POD4's hook).
+  - **Retention.** The oldest dated download over
+    `max_episodes_to_keep` loses its file, one per check. The row
+    stays, "not downloaded", with its progress (reading 1).
+  - **Scans.** Podcasts libraries are never scanned, so the store's
+    files aren't catalogued as videos.
+
+  No API, no UI. The job is now labelled "Podcast check and download".
+  The bundle is unchanged (format v1, D36 open). Flow:
+  `podcast_download_flow.rs`. Spec: AUDIOBOOKS-PODCASTS.md "Episode
+  download and retention (POD3)" (12 readings for veto).
 - [ ] POD4 (M) **Manage feeds in the UI**: add by URL, OPML
   import/export, refresh now, per-feed settings; who may add
   is **D31**.

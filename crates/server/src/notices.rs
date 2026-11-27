@@ -170,7 +170,7 @@ fn failed_job_summary(kind: &str, library: Option<&str>, trigger: Option<&str>) 
         ("purge_activity", _) => "Activity clean-up failed".to_string(),
         ("detect_segments", Some(name)) => format!("Segment detection for {name} failed"),
         ("detect_segments", None) => "Segment detection failed".to_string(),
-        ("refresh_podcasts", _) => "Podcast feed check failed".to_string(),
+        ("refresh_podcasts", _) => "Podcast check and download failed".to_string(),
         (other, _) => format!("A {} job failed", other.replace('_', " ")),
     }
 }
@@ -623,7 +623,7 @@ mod tests {
         );
         assert_eq!(
             failed_job_summary("refresh_podcasts", None, Some("schedule")),
-            "Podcast feed check failed"
+            "Podcast check and download failed"
         );
     }
 

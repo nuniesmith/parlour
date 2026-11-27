@@ -4,11 +4,14 @@
 //! refresh state (`last_checked_at`, `last_error`,
 //! `consecutive_failures`) and the 24-failures rule.
 //!
-//! Nothing is downloaded here: every episode the feed lists gets a
-//! row with its file columns empty (POD1 reading 3); POD3 downloads.
-//! Episodes no longer in the feed are left alone (POD3 owns
-//! retention). The rules are written in `docs/AUDIOBOOKS-PODCASTS.md`
-//! → "Feed fetch and parse (POD2)".
+//! The check itself downloads nothing: every episode the feed lists
+//! gets a row with its file columns empty (POD1 reading 3). Episodes
+//! no longer in the feed are left alone. After a successful check of a
+//! show with `auto_download` on, `refresh_podcasts` downloads the
+//! show's new episodes and applies its retention (`podcast_download`,
+//! POD3). The rules are written in `docs/AUDIOBOOKS-PODCASTS.md` →
+//! "Feed fetch and parse (POD2)" and "Episode download and retention
+//! (POD3)".
 //!
 //! A feed URL can carry a private token (paid feeds put one there), so
 //! it is never written to the log, a job's error list or a notice.
@@ -21,6 +24,9 @@ use parlour_jobs::cron::CronSchedule;
 use serde::Serialize;
 use uuid::Uuid;
 
+use crate::podcast_download::{
+    apply_retention, download_episode, new_episodes, DownloadOutcome, RetentionOutcome,
+};
 use crate::podcast_feed::{parse_episode_type, parse_feed_bytes, Feed, FeedEpisode};
 
 /// D32: a show's scheduled check turns itself off (its `auto_download`
@@ -35,12 +41,13 @@ pub const FETCH_TIMEOUT: Duration = Duration::from_secs(60);
 /// The longest `last_error` kept.
 const MAX_ERROR_CHARS: usize = 500;
 
-/// The HTTP client feed checks use: Parlour's User-Agent (no contact
-/// address), a 60 s limit per fetch, redirects followed.
+/// The HTTP client feed checks and episode downloads use: Parlour's
+/// User-Agent (no contact address), 15 s to connect, redirects
+/// followed. A feed fetch is limited to 60 s (`FETCH_TIMEOUT`, set on
+/// the request); a download has its own limits (`podcast_download`).
 pub fn http_client() -> reqwest::Client {
     reqwest::Client::builder()
         .user_agent(parlour_metadata::books::user_agent())
-        .timeout(FETCH_TIMEOUT)
         .connect_timeout(Duration::from_secs(15))
         .build()
         .unwrap_or_else(|_| reqwest::Client::new())
@@ -94,7 +101,7 @@ pub async fn fetch_feed(
     use reqwest::header::{
         ACCEPT, CONTENT_LENGTH, ETAG, IF_MODIFIED_SINCE, IF_NONE_MATCH, LAST_MODIFIED,
     };
-    let mut req = http.get(url).header(
+    let mut req = http.get(url).timeout(FETCH_TIMEOUT).header(
         ACCEPT,
         "application/rss+xml, application/xml;q=0.9, text/xml;q=0.9, */*;q=0.5",
     );
@@ -579,10 +586,134 @@ pub struct RefreshReport {
     pub new_episodes: usize,
     pub changed_episodes: usize,
     pub schedules_turned_off: usize,
+    /// Episodes downloaded (POD3).
+    pub downloaded: usize,
+    /// Episodes whose download failed (listed on the job).
+    pub download_failed: usize,
+    /// Episodes asked for by hand that already had a file.
+    pub already_downloaded: usize,
+    /// Episodes retention took back to "not downloaded".
+    pub removed: usize,
+    /// Episodes whose file retention couldn't delete (listed on the job).
+    pub remove_failed: usize,
+}
+
+/// A job error's label for an episode: the show's and the episode's
+/// titles, never a URL.
+fn episode_label(show: &str, episode: &str) -> String {
+    format!("{show} — {episode}")
+}
+
+/// Download one episode (by hand, or as one of a check's new ones),
+/// counting it on the report and listing a failure on the job.
+async fn download_counted(
+    pool: &parlour_db::PgPool,
+    http: &reqwest::Client,
+    episode_id: Uuid,
+    label: &str,
+    job_id: Option<Uuid>,
+    report: &mut RefreshReport,
+) -> Result<(), sqlx::Error> {
+    match download_episode(pool, http, episode_id).await? {
+        None => {}
+        Some(DownloadOutcome::Downloaded { .. }) => report.downloaded += 1,
+        Some(DownloadOutcome::AlreadyDownloaded) => report.already_downloaded += 1,
+        Some(DownloadOutcome::Failed { error }) => {
+            report.download_failed += 1;
+            tracing::warn!(episode_id = %episode_id, error = %error,
+                "podcast episode download failed");
+            if let Some(job) = job_id {
+                parlour_jobs::add_error(pool, job, Some(label), &error).await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// After a successful check of a show with `auto_download` on: download
+/// its new episodes (`podcast_download::new_episodes`, cut off at the
+/// check before this one when nothing is downloaded yet), then apply
+/// its retention once.
+async fn download_and_retain(
+    pool: &parlour_db::PgPool,
+    http: &reqwest::Client,
+    podcast_id: Uuid,
+    previous_check: Option<DateTime<Utc>>,
+    job_id: Option<Uuid>,
+    report: &mut RefreshReport,
+) -> Result<(), sqlx::Error> {
+    let show: Option<(String, bool)> =
+        sqlx::query_as("SELECT title, auto_download FROM podcasts WHERE id = $1")
+            .bind(podcast_id)
+            .fetch_optional(pool)
+            .await?;
+    let Some((show_title, true)) = show else {
+        return Ok(());
+    };
+    for (episode_id, title) in new_episodes(pool, podcast_id, previous_check).await? {
+        let label = episode_label(&show_title, &title);
+        download_counted(pool, http, episode_id, &label, job_id, report).await?;
+    }
+    match apply_retention(pool, podcast_id).await? {
+        None => {}
+        Some(RetentionOutcome::Removed { episode_id, .. }) => {
+            report.removed += 1;
+            tracing::info!(podcast_id = %podcast_id, episode_id = %episode_id,
+                "podcast retention removed the oldest download");
+        }
+        Some(RetentionOutcome::Failed {
+            episode_id,
+            title,
+            error,
+        }) => {
+            report.remove_failed += 1;
+            tracing::warn!(podcast_id = %podcast_id, episode_id = %episode_id,
+                error = %error, "podcast retention could not delete a file");
+            if let Some(job) = job_id {
+                let label = episode_label(&show_title, &title);
+                parlour_jobs::add_error(pool, job, Some(&label), &error).await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A job naming one episode (POD4's "download"): download it whatever
+/// its show's schedule or `auto_download` says. Retention doesn't run
+/// (as in Audiobookshelf, only automatic downloads trigger it).
+pub async fn download_one(
+    pool: &parlour_db::PgPool,
+    http: &reqwest::Client,
+    episode_id: Uuid,
+    job_id: Option<Uuid>,
+) -> Result<RefreshReport, sqlx::Error> {
+    let mut report = RefreshReport::default();
+    let row: Option<(String, String)> = sqlx::query_as(
+        "SELECT p.title, e.title FROM podcast_episodes e
+         JOIN podcasts p ON p.id = e.podcast_id WHERE e.id = $1",
+    )
+    .bind(episode_id)
+    .fetch_optional(pool)
+    .await?;
+    let total = i32::from(row.is_some());
+    if let Some(job) = job_id {
+        parlour_jobs::set_progress(pool, job, 0, total).await?;
+    }
+    if let Some((show, title)) = row {
+        let label = episode_label(&show, &title);
+        download_counted(pool, http, episode_id, &label, job_id, &mut report).await?;
+        if let Some(job) = job_id {
+            parlour_jobs::set_progress(pool, job, 1, 1).await?;
+        }
+    }
+    Ok(report)
 }
 
 /// Check each show in turn, recording progress and each failure (by
-/// the show's title) on the job when there is one.
+/// the show's title) on the job when there is one. After a successful
+/// check (200 or 304) of a show with `auto_download` on, its new
+/// episodes are downloaded and its retention applied once (POD3); each
+/// download failure is listed by show and episode title.
 pub async fn refresh_podcasts(
     pool: &parlour_db::PgPool,
     http: &reqwest::Client,
@@ -595,12 +726,24 @@ pub async fn refresh_podcasts(
         parlour_jobs::set_progress(pool, job, 0, total).await?;
     }
     for (i, (id, title)) in shows.iter().enumerate() {
+        // The check before this one: the new-episode cutoff when nothing
+        // is downloaded yet (POD3).
+        let previous: Option<(Option<DateTime<Utc>>,)> =
+            sqlx::query_as("SELECT last_checked_at FROM podcasts WHERE id = $1")
+                .bind(id)
+                .fetch_optional(pool)
+                .await?;
+        let previous_check = previous.and_then(|(at,)| at);
         match check_podcast(pool, http, *id).await? {
             None => {}
             Some(outcome) => {
                 report.checked += 1;
                 match outcome {
-                    CheckOutcome::NotModified => report.not_modified += 1,
+                    CheckOutcome::NotModified => {
+                        report.not_modified += 1;
+                        download_and_retain(pool, http, *id, previous_check, job_id, &mut report)
+                            .await?;
+                    }
                     CheckOutcome::Updated {
                         new_episodes,
                         changed_episodes,
@@ -608,6 +751,8 @@ pub async fn refresh_podcasts(
                         report.updated += 1;
                         report.new_episodes += new_episodes;
                         report.changed_episodes += changed_episodes;
+                        download_and_retain(pool, http, *id, previous_check, job_id, &mut report)
+                            .await?;
                     }
                     CheckOutcome::Failed {
                         error,

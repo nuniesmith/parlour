@@ -136,7 +136,11 @@ The owner uses subtitles on most playback.
   shares `book_progress` with books (D29). See
   `AUDIOBOOKS-PODCASTS.md`, "Schema (POD1)". The rows are filled
   from the feed by a `refresh_podcasts` job on the Postgres queue,
-  not by the scanner (POD2, "Feed fetch and parse (POD2)").
+  not by the scanner (POD2, "Feed fetch and parse (POD2)"). The same
+  job downloads episodes into the podcasts library's folder, a
+  writable store Parlour owns (never a media mount), and applies
+  each show's retention. A podcasts library is never scanned (POD3,
+  "Episode download and retention (POD3)").
 - Segments (Phase 9, D15): `media_segments` holds intro / credits /
   recap spans per item — one row per (item, kind, source), sources
   `chapters`, `fingerprint`, `manual`, `heuristic`, each with a 0–1
