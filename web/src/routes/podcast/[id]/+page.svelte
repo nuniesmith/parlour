@@ -17,10 +17,13 @@
   // A show the profile can't reach — no grant, or an explicit show with
   // D41's flag off — is the API's 404 and reads as "not found" here,
   // with nothing about the show shown.
+  // POD8 (D35): each row can add its episode to one of this profile's
+  // playlists (UI-AUDIO-REFERENCE §4.4's "add to playlist").
   import { onDestroy } from 'svelte';
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import { api } from '$lib/api';
+  import AddToPlaylist from '$lib/AddToPlaylist.svelte';
   import EpisodeMark from '$lib/EpisodeMark.svelte';
   import { feedHtml, feedText } from '$lib/feedHtml';
   import { session } from '$lib/session.svelte';
@@ -254,6 +257,7 @@
                   onclick={() => download(e)}>Download</button
                 >
               {/if}
+              <AddToPlaylist libraryId={e.library_id} episodeId={e.id} small />
             </div>
           </li>
         {/each}

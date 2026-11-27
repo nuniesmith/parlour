@@ -535,6 +535,13 @@ description, genres. Admins also see tracks and a Match action
 - **Bookmarks sheet** [no screenshot]: add at the current time with
   an optional title; list, jump, rename, delete. **Synced** per
   profile per book (D35).
+  *Built on the web in POD8 (2026-11-27):* a "Bookmarks (n)" button
+  under the book player's transport opens the sheet: add at the
+  current time with an optional title, the list by time (a click plays
+  from there), rename, delete. The book page also gains "Add to
+  playlist", and for admins "Add to collection". Details:
+  `AUDIOBOOKS-PODCASTS.md`, "Playlists, collections and bookmarks
+  (POD8)".
 - **Sleep timer sheet** [no screenshot]: durations plus "end of
   chapter"; on the device only (D35).
 - Time displays can scale with speed (device setting, from §1.8).
@@ -560,7 +567,10 @@ offline, remove after finished. All device-side.
    episodes**, **Downloaded** (on this device), **In progress** —
    then the profile's own playlists (synced, D35). Overcast's
    **Starred** has *no ABS equivalent — deferred until Jordan
-   asks*.
+   asks*. *POD8 (2026-11-27) built the profile's own playlists as
+   round buttons above the shows on a podcasts library's page, with
+   "New playlist"; the built-in views come with this Home (POD8
+   reading 13).*
 3. **Shows list** with a **Current / All** switch: artwork, title
    (two lines), author in small caps, chevron. "Current" is
    computed from the profile's own progress: shows with episodes it
@@ -599,6 +609,15 @@ download to device); a device setting plays on one tap instead
   player bar (§4.2) is still to come.
 
 Details: `AUDIOBOOKS-PODCASTS.md`, "Web pages and player (POD6)".
+
+*POD8 (2026-11-27):* the show page's rows and the episode page gain
+"Add to playlist", and an audiobooks library's page gains its
+**Collections** view (the library's shared collections, which admins
+make, beside the profile's own playlists), as the §4.2 table's
+Collections tab has it. A playlist and a collection each have a page
+(`/playlist/[id]`, `/collection/[id]`). Details:
+`AUDIOBOOKS-PODCASTS.md`, "Playlists, collections and bookmarks
+(POD8)".
 
 **Player** (from §2.3–§2.5):
 

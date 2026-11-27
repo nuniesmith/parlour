@@ -1226,8 +1226,9 @@ their original wording; read them through that.
 
 POD1 (the schema), POD2 (feed checks), POD3 (downloads and
 retention), POD4 (managing feeds), POD5 (the listener API), POD6
-(the web pages and player) and POD7 (directory search) are built;
-POD8 is plan only. Spec: `docs/AUDIOBOOKS-PODCASTS.md`.
+(the web pages and player), POD7 (directory search) and POD8
+(playlists, collections and bookmarks) are built. Spec:
+`docs/AUDIOBOOKS-PODCASTS.md`.
 
 - [x] POD1 (M) **Schema**: `podcasts` (feed URL, metadata,
   ETag/Last-Modified, refresh state), `podcast_episodes`
@@ -1489,9 +1490,51 @@ POD8 is plan only. Spec: `docs/AUDIOBOOKS-PODCASTS.md`.
   The bundle is unchanged (format v1, D36 open). Flow:
   `podcast_search_flow.rs`. Spec: AUDIOBOOKS-PODCASTS.md "Directory
   search (POD7)" (13 readings for veto).
-- [ ] POD8 (S) **Up Next queue / playlists synced** — only if
+- [x] POD8 (S) **Up Next queue / playlists synced** — only if
   **D35** says server-synced. *D35: playlists sync (per
   profile per library); the Up Next queue stays on the device.*
+  *Done 2026-11-27:* built to **D35**: playlists, collections and
+  bookmarks on the server and the web. There is no server-side
+  queue: the queue, speed, sleep timer and skip intervals stay on the
+  device. Migration
+  `20261205000000_pod8_playlists_collections_bookmarks.sql` (five
+  tables).
+  - **Playlists.** `/api/v1/playlists…` are a profile's own (404 to
+    anyone else, admins included), per audiobooks or podcasts
+    library. They hold that library's books or episodes, never
+    mixed.
+    - Create, rename, describe and delete. Add an entry, and remove
+      one: the last removed deletes the playlist, as in ABS.
+    - Reorder sends the full list of entry ids; a stale list is a 409.
+    - An entry the profile can't reach (no grant, D41's flag off) is
+      kept but unseen and uncounted, and returns in its place.
+  - **Collections.** A library's, books only, in an audiobooks
+    library. `/api/v1/collections…` serve every profile with the
+    grant, each book with that profile's progress. Only admins
+    change them, as ABS's update permission
+    (`/api/v1/admin/collections…`, 404 to anyone else).
+  - **Bookmarks.** `/api/v1/audiobooks/{id}/bookmarks…` are per
+    profile per book: a book-global time and a title, one per time
+    (as ABS), rename and delete. Books only (D35).
+  - **Web.**
+    - An audiobooks library's Collections view holds its collections
+      and the profile's playlists.
+    - A podcasts library's page gains a Playlists row.
+    - `/playlist/{id}` and `/collection/{id}`.
+    - "Add to playlist" on books, episodes and show rows; "Add to
+      collection" for admins.
+    - The book player's bookmarks sheet.
+    - The book page honours `?play=1`.
+  - **Checked.** In headless Chromium against a private instance of
+    this branch: 56 checks, all passed. The live test instance
+    predates POD1.
+
+  Not here: playing a playlist through (the persistent player bar),
+  the podcast Home's built-in filtered views, episode bookmarks
+  (D35), the CL2 sync. All five tables are left out of the bundle
+  (format v1 unchanged, D36 open). Flow: `playlists_flow.rs`. Spec:
+  AUDIOBOOKS-PODCASTS.md "Playlists, collections and bookmarks
+  (POD8)" (16 readings for veto).
 - **Done when:** a feed added in the web UI gets new episodes on
   its own, and an episode started on one client resumes on
   another.

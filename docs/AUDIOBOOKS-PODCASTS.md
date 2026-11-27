@@ -1339,7 +1339,7 @@ not yet scheduled in a PR:
 
 ---
 
-## Phase 11 — Podcasts (POD1's schema, POD2's feed checks, POD3's downloads and POD4's feed management built 2026-11-26; POD5's listener API, POD6's web pages and player and POD7's directory search built 2026-11-27; the rest is plan)
+## Phase 11 — Podcasts (POD1's schema, POD2's feed checks, POD3's downloads and POD4's feed management built 2026-11-26; POD5's listener API, POD6's web pages and player, POD7's directory search and POD8's playlists, collections and bookmarks built 2026-11-27)
 
 The server owns the feeds. Clients never fetch RSS themselves, which
 is what lets a Fire Stick, a tablet and the phone agree.
@@ -2772,6 +2772,7 @@ Hidden) and a note on what it does.
 - Show artwork (POD6 caches it; POD4 reading 11). *Built in POD6.*
 - Directory search (POD7). *Built in POD7.*
 - Bookmarks, playlists and collections (D35, CL2/POD phases).
+  *Built in POD8 ("Playlists, collections and bookmarks (POD8)").*
 - A bulk episode progress sync (CL2).
 - Removing a show.
 - Enforcing `library_access.max_rating` (reading 14).
@@ -3236,12 +3237,18 @@ count the library's `media_items`, which for podcasts is always 0.
 - **The persistent player bar** (UI-AUDIO-REFERENCE §4.2): a separate
   web task for books and episodes together (reading 8).
 - **The podcast Home screen** (§4.4 "Home"): the episode cards and the
-  Playlists row. Playlists are D35's, in CL2/POD phases.
+  Playlists row. Playlists are D35's, in CL2/POD phases. *POD8 put the
+  profile's own playlists in a row on the podcasts library's page; the
+  episode cards and the row's built-in views are still the podcast
+  Home's (POD8 reading 13).*
 - **Device settings:** speed, sleep timer and skip intervals (D35; the
   reference's C5/C6 defaults are used), and keyboard shortcuts.
 - **Deferred (D35):** transcripts.
 - **Later tasks:** the Up Next queue (POD8 / D35), directory search
-  (POD7), and bookmarks (books only, D35).
+  (POD7), and bookmarks (books only, D35). *POD7 built the search.
+  POD8 built bookmarks, and playlists in place of a server-side queue,
+  which D35 keeps on the device ("Playlists, collections and bookmarks
+  (POD8)").*
 - **Not stored:** episode artwork (POD1 reading 12 kept none).
 - **Search:** shows and episodes in the global search (reading 14).
 - **Still a gap:** `library_access.max_rating`, still enforced nowhere
@@ -3689,6 +3696,336 @@ picker has chosen.
       also kept, so a stub can serve Apple's images.
     - It is unset in production, where only Apple's CDN passes.
 
+### Playlists, collections and bookmarks (POD8, built 2026-11-27)
+
+POD8 builds the server side and the web pages of D35's "what syncs",
+apart from progress and sessions, which AB4/AB11/AB8 already built.
+That means playlists, collections and bookmarks. Per D35, the **Up
+Next queue stays on the device**, so there is no server-side queue,
+and playlists replace POD8's original "synced queue". Speed, the sleep
+timer and skip intervals stay on the device too. Episode bookmarks
+aren't built: ABS has none.
+
+The TODO line names playlists only, but D35 lists all three as what
+syncs, and POD6's "Later tasks" names bookmarks as a later task of
+this phase. So all three are here (reading 1). CL2 is what later
+carries them to the native clients in its sync feed.
+
+Audiobookshelf's behaviour cited here was checked on 2026-11-27 against
+its server source on `master` (its collection, playlist and "me"
+controllers, its user model and its API router). That reading was for
+behaviour only, and nothing was copied.
+
+One migration, `20261205000000_pod8_playlists_collections_bookmarks.sql`,
+adds five tables. The timestamp is an ordering key only; it was
+written on 2026-11-27. The flow
+`crates/server/tests/playlists_flow.rs` runs the API on a fresh
+database.
+
+**The code:**
+
+- `crates/server/src/playlists.rs`: a profile's playlists;
+- `collections.rs`: a library's collections;
+- `bookmarks.rs`: a profile's bookmarks in a book;
+- `podcast_api.rs`: POD5's episode query now also takes a list of ids,
+  so a playlist reads its episodes with exactly POD5's grant and D41
+  rules.
+
+**The tables.**
+
+| Table | What |
+|---|---|
+| `playlists` | One profile's playlist in one library: name, description, times. Deleted with the profile or the library. |
+| `playlist_items` | An entry: a book (`item_id`) or an episode (`episode_id`), exactly one, unique per playlist, with a `position`. Deleted with its book or episode. |
+| `collections` | A library's collection: name, description, times. Deleted with the library. |
+| `collection_items` | A book in a collection, unique, with a `position`. Deleted with the book. |
+| `bookmarks` | One profile's bookmark in one book: `position_ms` (book-global, as progress) and a `title`, unique per profile, book and time. Deleted with the profile or the book. |
+
+Positions may have gaps. Their unique key is deferrable, so a reorder
+rewrites every position in one statement.
+
+**Playlists (D35: per profile, per library, ordered).**
+
+| Route | What |
+|---|---|
+| `GET /api/v1/playlists?library_id=&item_id=\|episode_id=` | This profile's playlists in the libraries it can reach, by name. Each carries its entry count and length (counting only entries it can reach), up to four covers (Parlour's own addresses), and, when an item or an episode is named, `contains`. |
+| `POST /api/v1/playlists` `{library_id, name, description?}` | A new, empty playlist (201) in an audiobooks or podcasts library the profile can reach. Any other library kind is a 400; a library without a grant is a 404. |
+| `GET /api/v1/playlists/{id}?client=` | The playlist with its entries in order. Each entry has its own `id`, a `kind` (`book` / `episode`), and the book as the book list shows it or the episode as POD5 serves it (this profile's progress, a tokenised `stream_url`). |
+| `PATCH /api/v1/playlists/{id}` `{name?, description?}` | Rename or describe it. An empty description clears it. |
+| `DELETE /api/v1/playlists/{id}` | 204. |
+| `POST /api/v1/playlists/{id}/items` `{item_id}` or `{episode_id}` | Append (201). Neither or both is a 400. A book or episode the profile can't reach is a 404. One from another library is a 400, and a duplicate is a 409. |
+| `PUT /api/v1/playlists/{id}/items` `{items: [entry ids]}` | The new order (reading 6). |
+| `DELETE /api/v1/playlists/{id}/items/{entry}` | Remove an entry. The answer says `playlist_deleted` when it was the last (reading 5). |
+
+- **Whose.** A playlist is its profile's alone, as ABS keeps one per
+  user. Any other profile gets 404, including another profile of the
+  same login and an admin. It is reached only while the profile keeps
+  its grant on the playlist's library. Without the grant, the playlist
+  isn't listed and reads as 404; it comes back with the grant.
+- **What it shows (reading 4).** An entry is shown only while the
+  profile can reach what it points at:
+  - a book through the library grant;
+  - an episode through the grant and D41's flag, exactly as POD5.
+
+  An entry out of reach is kept but unseen:
+  - it isn't counted or timed;
+  - it can't be added, removed or named in a reorder;
+  - nothing in an answer mentions it.
+
+  It returns in its own place when it is reachable again. An entry
+  goes for good with its book or episode. POD3's retention keeps an
+  episode's row, so a retained-out episode stays in a playlist and
+  plays through the enclosure redirect (D32 as amended).
+
+**Collections (D35: per library, visible to everyone with access).**
+
+| Route | Who | What |
+|---|---|---|
+| `GET /api/v1/collections?library_id=&item_id=` | any profile | The collections of the libraries it can reach, by name, with book count, covers and `contains`. |
+| `GET /api/v1/collections/{id}` | any profile | One collection with its books in order, each as the book list shows it, with this profile's progress. |
+| `POST /api/v1/admin/collections` `{library_id, name, description?}` | admins | A new collection in an audiobooks library (another kind is a 400). |
+| `PATCH\|DELETE /api/v1/admin/collections/{id}` | admins | Rename / describe it, or delete it. |
+| `POST /api/v1/admin/collections/{id}/items` `{item_id}` | admins | Append a book of the collection's library. Another library's book is a 400, and a duplicate a 409. |
+| `PUT /api/v1/admin/collections/{id}/items` `{items: [book ids]}` | admins | The new order, naming every book once (else 409). |
+| `DELETE /api/v1/admin/collections/{id}/items/{item_id}` | admins | Remove a book (204). An empty collection stays. |
+
+The admin routes follow POD4's pattern: they live under
+`/api/v1/admin/` and are a 404 to anyone else. A profile without a
+grant on the library gets 404 for its collections and doesn't see
+them listed.
+
+**Bookmarks (D35: per book, a time and a title; books only).**
+
+| Route | What |
+|---|---|
+| `GET /api/v1/audiobooks/{id}/bookmarks` | This profile's bookmarks in the book, by time. |
+| `POST /api/v1/audiobooks/{id}/bookmarks` `{position_ms, title?}` | A bookmark at a book-global time, clamped onto the book (a negative time is a 400). A new one is 201. At a time that already has one, the answer is that bookmark (200), retitled only when a title is sent (reading 11). |
+| `PATCH /api/v1/audiobooks/{id}/bookmarks/{bookmark}` `{title}` | Rename. The time stays. |
+| `DELETE /api/v1/audiobooks/{id}/bookmarks/{bookmark}` | 204. |
+
+They are reached through the book's grant, like its progress (404
+otherwise). They are kept while the grant is away, and go with the
+book or the profile. An episode's id is not a book, so these routes
+answer 404 for it.
+
+**The web pages.**
+
+- **An audiobooks library** gains a **Collections** view beside Home,
+  Books, Series and Authors (UI-AUDIO-REFERENCE §4.2's Collections
+  tab). It holds:
+  - the library's collections, with "New collection" for admins;
+  - "Your playlists", with "New playlist".
+- **A podcasts library's page** gains the **Playlists row** above the
+  shows (§2.2 / §4.4): this profile's playlists of episodes as round
+  buttons, and "New playlist" (reading 13).
+- **`/playlist/{id}`.** The entries in order, each with:
+  - cover or show art, title, author or show, date, and the length or
+    time left;
+  - Play, ↑ / ↓ and Remove.
+
+  The page also has Rename and Delete. Removing the last entry warns
+  first, then returns to the library.
+- **`/collection/{id}`.** The books in order, as the book grid. Admins
+  also get Rename, Delete and "Arrange books" (↑ / ↓ / Remove).
+- **"Add to playlist"** is on the book page, the episode page and each
+  episode row of a show page. It lists this profile's playlists in that
+  library, marks the ones already holding the item, and can start a new
+  playlist with it. Admins also get **"Add to collection"** on the book
+  page.
+- **The bookmarks sheet** is in the book player (C7/C11), opened by
+  "Bookmarks (n)" under the transport. It has:
+  - **Add at** the current time, with an optional title;
+  - the list by time: a click on a time plays from there, and each
+    has Rename and Delete;
+  - "Bookmark at 1:23" shown for an untitled one.
+
+  The episode player has no bookmarks.
+- **`?play=1`.** The book page now honours it, as the episode page
+  already did, so a playlist's Play starts the book.
+
+**The bundle.** All five tables are *left out* of format v1
+(`coverage.rs`; `IMPORT-EXPORT.md` §8):
+
+- playlists and bookmarks are per-profile audio state like
+  `book_progress`, so they wait on **D36, still open**, and the
+  format-v2 step;
+- collections are an admin's work, and their place is the format-v2
+  step.
+
+**Checked in a browser (2026-11-27).** The live test instance still
+runs a build from before POD1 and wasn't touched. The checks ran
+against a private instance of this branch on oryx's loopback:
+
+- **The setup:**
+  - its own throwaway Postgres;
+  - three Opus books scanned from disk;
+  - two shows (one explicit) whose rows were written straight into
+    the database, with tokenised fake addresses;
+  - an admin with one profile, and a second, non-admin user.
+- **The run.** chrome-headless-shell 151 over CDP: **56 checks, 56
+  passed**. They cover:
+  - a playlist made, filled from three book pages, reordered,
+    renamed, an entry removed, each kept across reloads;
+  - Play from the playlist starting the book;
+  - bookmarks:
+    - added at the playing time;
+    - an untitled one shown by its time;
+    - the list by time;
+    - a jump that moved the player and played;
+    - a rename and a delete, kept after a reload;
+  - a collection made, filled with "Add to collection", arranged and
+    renamed;
+  - the podcasts Playlists row, episodes added from show rows, and
+    D41 turned off and on again hiding and restoring the explicit
+    episode and its count;
+  - no bookmarks on the episode player;
+  - a playlist deleted;
+  - the last entry's removal deleting its playlist;
+  - the other user seeing the collection in the admin's order, with
+    no admin controls, none of the admin's playlists (and "Not found"
+    on one), no "Add to collection" and no bookmarks of the admin's.
+- **What left Parlour.** The browser's one request off Parlour's
+  origin was the episode page's audio metadata following POD5's
+  redirect for an undownloaded episode (D32 as amended), which isn't
+  POD8's. The token never appeared in the server's log.
+
+**Not built here:**
+
+- a server-side Up Next queue, and playing a playlist through in
+  order in the web player (reading 14);
+- the podcast Home's built-in filtered views (reading 13);
+- episode bookmarks (D35);
+- "playlist from a collection" (ABS has one; nothing asked for it);
+- the CL2 sync of all three, with tombstones for deletions;
+- `library_access.max_rating`, still enforced nowhere (POD5 reading
+  14).
+
+#### Readings made in POD8 — for the owner's veto
+
+1. **Bookmarks are built here, not in CL2.**
+   - *Why:* D35 lists bookmarks among what the server keeps, and
+     POD6's "Later tasks" names them as a later task of this phase.
+     The book player is web work Parlour already has.
+   - *What CL2 keeps:* carrying them, with playlists and collections,
+     to native clients in its one sync call.
+2. **A playlist lives in one library, so it never mixes books and
+   episodes.**
+   - *Why:* D35 says "per profile per library". An audiobooks library
+     holds books and a podcasts library holds episodes, so the library
+     decides the kind.
+   - *ABS differs a little:* its create takes the kind from the items
+     sent, and its add doesn't check. In practice its libraries are
+     one media type too.
+   - *If vetoed:* a mixed playlist needs `library_id` to become
+     optional (a migration) and the add check dropped.
+3. **A playlist is its profile's alone: no admin view of anyone
+   else's.**
+   - As in ABS, where only the owner reaches a playlist, admins
+     included.
+   - Another profile under the same login is another listener (D29),
+     so it gets a 404 too.
+4. **An entry out of reach is kept and unseen, not deleted.**
+   - *Out of reach* means the grant is gone, or it is an explicit
+     show's episode with D41's flag off. It isn't counted, timed,
+     addable or removable, and a reorder mustn't name it.
+   - In a reorder, the visible entries take the places they held among
+     themselves, and hidden ones keep theirs. So turning the flag back
+     on puts an episode back where it was.
+   - *Why:* D41 already keeps a profile's progress on explicit episodes
+     while hidden. A playlist that lost entries whenever an admin
+     toggled a flag would be worse.
+   - *ABS differs:* it filters nothing (it has no such flag on
+     playlists).
+   - A deleted book or episode takes its entries with it.
+5. **Removing a playlist's last entry deletes the playlist, as in ABS.
+   An empty playlist can still be made.**
+   - *ABS:* its remove deletes a playlist left empty, and its create
+     accepts an empty list. Both are mirrored.
+   - *The web:* the page warns before removing the last entry.
+   - *Not checked:* whether ABS also deletes a playlist emptied by an
+     item's deletion (that model method wasn't read). Here a cascade
+     leaves the playlist in place, empty.
+   - *If vetoed:* dropping the delete is one statement.
+6. **A reorder sends the full list of entry ids; a stale list is a
+   409.**
+   - *ABS:* its update takes the full items array and refuses a
+     length mismatch.
+   - *Here:* the list must name every entry the profile can see,
+     exactly once. Anything else (a stale page, a repeat, a stranger)
+     is a 409, "reload it and try again", and nothing moves.
+   - Collections use the same shape with book ids.
+7. **Collections hold books only, in an audiobooks library. A podcasts
+   library has none.**
+   - *ABS:* its create and batch add keep books only.
+   - *The UI reference agrees:* the podcasts library's Collections tab
+     is "Playlists (D35)" only (UI-AUDIO-REFERENCE §4.2).
+   - *If vetoed:* a `podcast_id` / `episode_id` column on
+     `collection_items` (a migration).
+8. **Only admins create, change and delete collections.**
+   - *ABS:* changing one needs its "update" permission (root and admin
+     by default), and deleting one its "delete" permission (root only
+     by default).
+   - *Here:* Parlour has one admin role and no per-user permissions,
+     so admins do all three.
+   - *Routes:* the admin routes are POD4's pattern, a 404 to anyone
+     else. Like POD4's, they don't ask whether the admin's own profile
+     has a grant on the library.
+9. **Everyone with a grant on the library sees its collections, each
+   book with their own progress.**
+   - A grant reaches every book of the library, so a collection never
+     shows a book its viewer can't reach.
+   - `library_access.max_rating` is still enforced nowhere (a known
+     gap, not POD8's).
+10. **An empty collection stays; names needn't be unique.**
+    - ABS removes neither.
+    - Names are trimmed, 1–200 characters. Descriptions are up to
+      4 000, and empty clears them. The same holds for playlists.
+11. **One bookmark per book per time, as ABS. A second add at that
+    time answers the first.**
+    - *ABS:* its create returns the existing bookmark at that time,
+      retitling it if the title differs. Its rename finds a bookmark by
+      time, so time is its key and can't be changed.
+    - *Here:*
+      - The second add answers 200 with the existing bookmark,
+        retitled only when a non-empty title is sent.
+      - Rename is by the bookmark's id and changes only the title.
+      - Times are milliseconds, book-global, clamped onto the book.
+        ABS leaves the unit to its client.
+      - The title may be empty, and the player then shows "Bookmark
+        at *time*".
+12. **Bookmarks follow the book's row.** They are kept while the grant
+    is away, and deleted with the book. A re-scan that makes the book a
+    new item (a moved folder) loses them, as it loses its progress.
+13. **The podcast Home's Playlists row: built-in views first, then
+    the profile's own. Only the own ones are built here.**
+    - *The reference (§2.2 / §4.4):* the row is filtered views first
+      (All episodes, Downloaded, In progress), then the profile's
+      playlists.
+    - *Why not the filtered views:* they need a list of episodes
+      across shows, which is the podcast Home task, with its episode
+      cards (POD6's "not built"). "Downloaded" means on this device,
+      which the web doesn't have.
+    - *Where the row sits:* above the shows on the podcasts library's
+      page. When the podcast Home is built, the filtered views go
+      before these buttons.
+14. **The web player doesn't play a playlist through; each entry has
+    its own Play.**
+    - *Why:* playback still lives inside `/book/[id]` and
+      `/episode/[id]`, so "next in playlist" would mean a page change
+      per entry. The persistent player bar (UI-AUDIO-REFERENCE §4.2) is
+      where a queue-like "play this playlist" belongs, and it is a
+      separate web task.
+    - *The API is ready for it:* the entries carry everything a
+      player needs, `stream_url` included.
+15. **Nothing here writes an Activity line.** Playlists and bookmarks
+    are a listener's own state, as progress writes are. A collection
+    change is an admin's edit, like POD4's show settings, which write
+    none either.
+16. **No sync cursor or tombstones yet.** Every change stamps the
+    playlist's or collection's `updated_at`, and a bookmark has its
+    own, ready for CL2's cursor. A deleted row leaves nothing behind
+    until CL2 designs tombstones.
+
 ---
 
 ## Phase 12 — Audio clients: the sync contract (API design only)
@@ -3714,7 +4051,10 @@ client lands. Client code is out of scope here.
   **playlists** (per profile per library, ordered) and
   **collections** (per library, shared). The CL2 sync feed carries
   those, plus shows and new episodes from the libraries a profile
-  can reach, instead of "subscriptions". **On the device only:** the
+  can reach, instead of "subscriptions". *POD8 (2026-11-27) built
+  playlists, collections and bookmarks on the server and the web
+  ("Playlists, collections and bookmarks (POD8)"); carrying them in
+  the sync feed is CL2's.* **On the device only:** the
   Up Next queue (POD8's synced queue is replaced by playlists),
   playback speed (per book or per show), sleep timer, skip
   intervals.

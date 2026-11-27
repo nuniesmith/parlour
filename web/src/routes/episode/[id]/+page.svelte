@@ -28,6 +28,7 @@
   import { api } from '$lib/api';
   import EpisodeMark from '$lib/EpisodeMark.svelte';
   import { feedHtml } from '$lib/feedHtml';
+  import AddToPlaylist from '$lib/AddToPlaylist.svelte';
   import { session } from '$lib/session.svelte';
   import ShowArt from '$lib/ShowArt.svelte';
   import {
@@ -485,6 +486,8 @@
         <p><button class="btn small" type="button" onclick={download}>Download to Parlour</button></p>
       {/if}
       {#if notice}<p class="notice" role="status">{notice}</p>{/if}
+      <!-- POD8 (D35): into one of this profile's playlists of this library. -->
+      <AddToPlaylist libraryId={ep.library_id} episodeId={ep.id} small />
     </div>
   </div>
 

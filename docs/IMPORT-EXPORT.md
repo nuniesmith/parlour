@@ -367,10 +367,12 @@ must be accounted for, and the mirrored CHECK sets must match. A
 migration that adds a table, a column or a value fails that test
 until the format and this doc say where it goes.
 
-At 2026-11-26 the schema has 38 tables, counting sqlx's own
+At 2026-11-27 the schema has 43 tables, counting sqlx's own
 `_sqlx_migrations` (AB6 added `book_metadata` and `book_sidecars`,
 AB7 `series` and `book_series`, AB8 `listening_sessions`, POD1
-`podcasts` and `podcast_episodes`), 13 of them carried:
+`podcasts` and `podcast_episodes`, POD8 `playlists`,
+`playlist_items`, `collections`, `collection_items` and
+`bookmarks`), 13 of them carried:
 
 | table | lands in |
 |---|---|
@@ -426,6 +428,9 @@ the Activity feed. The rest of the schema stays on the old host:
 | `listening_sessions` | each profile's listening sessions, its listening history and stats (AB8): **open — §9**, with `book_progress`. A closed session's Activity line (`playback.listened`) is part of the Activity feed, which travels (D25) |
 | `podcasts` | a podcasts library's shows and their per-show settings (POD1, D31/D32). Not in format v1: their place in the bundle is later work (a format change). Until then an admin adds them again on the new host (POD4's OPML export can carry the list). A show's cached artwork (`image_path`, POD6) lives in this host's artwork cache; the new host's first check fetches its own copy |
 | `podcast_episodes` | a show's episodes as its feed lists them, and where this host downloaded them (POD1, D32). The new host's feed checks rebuild the list; the downloaded files live in this host's own podcast store |
+| `playlists`, `playlist_items` | each profile's own playlists, per library, with their books or episodes in order (POD8, D35). Per-profile audio state like `book_progress`, so their place in the bundle waits on **D36** and the format-v2 step; not in format v1. Episode entries would also need their episodes, which stay behind |
+| `collections`, `collection_items` | a library's shared book collections and their books in order, an admin's work (POD8, D35). Not in format v1; their place in the bundle is the format-v2 step. Until then an admin makes them again on the new host |
+| `bookmarks` | each profile's bookmarks in its books, a time and a title (POD8, D35). Per-profile audio state like `book_progress`, so they wait on **D36** and the format-v2 step; not in format v1 |
 
 ## 9. Proposed — needs the owner's yes: the audio tables
 
