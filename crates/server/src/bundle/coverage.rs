@@ -516,6 +516,32 @@ pub const SCHEMA: &[Table] = &[
               downloaded files live in this host's own podcast folder",
     },
     Table::LeftOut {
+        name: "playlists",
+        why: "a profile's own playlists, per library (POD8, D35); per-profile audio state \
+              like book_progress, so their place in the bundle waits on D36 and the \
+              format-v2 step; not in format v1",
+    },
+    Table::LeftOut {
+        name: "playlist_items",
+        why: "a playlist's books or podcast episodes in order (POD8); they go with \
+              playlists, and episodes stay behind with podcast_episodes",
+    },
+    Table::LeftOut {
+        name: "collections",
+        why: "a library's shared book collections, an admin's work (POD8, D35); not in \
+              format v1 — their place in the bundle is the format-v2 step",
+    },
+    Table::LeftOut {
+        name: "collection_items",
+        why: "a collection's books in order (POD8); they go with collections",
+    },
+    Table::LeftOut {
+        name: "bookmarks",
+        why: "a profile's bookmarks in its books (POD8, D35); per-profile audio state \
+              like book_progress, so their place in the bundle waits on D36 and the \
+              format-v2 step; not in format v1",
+    },
+    Table::LeftOut {
         name: "_sqlx_migrations",
         why: "the new host keeps its own migration ledger",
     },

@@ -23,9 +23,17 @@
   // copy is made its URL answers 503, so the player waits for it (moves
   // made meanwhile are kept), asks for the next such track's copy as each
   // track starts, and says what it is doing and why.
+  // POD8 (D35): the bookmarks sheet in the player (UI-AUDIO-REFERENCE
+  // C7/C11) — add one at the current time with an optional title, list
+  // them by time, jump to one, rename or delete it; they are this
+  // profile's and sync through the server. "Add to playlist", and for
+  // admins "Add to collection". `?play=1` (a playlist's Play) starts the
+  // book once it has loaded.
   import { onMount, tick } from 'svelte';
   import { page } from '$app/state';
   import { api } from '$lib/api';
+  import AddToCollection from '$lib/AddToCollection.svelte';
+  import AddToPlaylist from '$lib/AddToPlaylist.svelte';
   import BookMatch from '$lib/BookMatch.svelte';
   import { session } from '$lib/session.svelte';
   import {
@@ -36,6 +44,7 @@
     posterUrl,
     usesFallback,
     type BookDetail,
+    type Bookmark,
     type BookProgress,
     type BookTrack,
   } from '$lib/types';
@@ -56,6 +65,14 @@
   let saveError = $state<string | null>(null);
   /** Bumped after a match, so the cover image is fetched again. */
   let coverKey = $state(0);
+
+  // POD8: this profile's bookmarks in the book, and the sheet's state.
+  let bookmarks = $state<Bookmark[]>([]);
+  let bookmarksOpen = $state(false);
+  let bookmarkTitle = $state('');
+  let bookmarkError = $state<string | null>(null);
+  let renaming = $state<string | null>(null);
+  let renameTitle = $state('');
 
   let pendingOffsetMs: number | null = null;
   let lastSavedAt = 0;
@@ -99,8 +116,53 @@
     book = data;
     const start = data.progress.finished ? 0 : data.progress.position_ms;
     position = start;
+    void loadBookmarks(data.id);
     await tick(); // the <audio> exists once the book has rendered
-    if (data.tracks.length > 0) loadAt(start, false);
+    if (data.tracks.length > 0) loadAt(start, page.url.searchParams.get('play') === '1');
+  }
+
+  async function loadBookmarks(id: string) {
+    const r = await api<Bookmark[]>(`/api/v1/audiobooks/${id}/bookmarks`);
+    if (r.data) bookmarks = r.data;
+  }
+
+  async function addBookmark(e: SubmitEvent) {
+    e.preventDefault();
+    if (!book) return;
+    bookmarkError = null;
+    const r = await api<Bookmark>(`/api/v1/audiobooks/${book.id}/bookmarks`, {
+      method: 'POST',
+      body: JSON.stringify({ position_ms: Math.round(position), title: bookmarkTitle }),
+    });
+    if (r.data) {
+      bookmarkTitle = '';
+      await loadBookmarks(book.id);
+    } else bookmarkError = r.error ?? 'Could not add the bookmark.';
+  }
+
+  function jumpTo(b: Bookmark) {
+    loadAt(b.position_ms, true);
+    void save();
+  }
+
+  async function renameBookmark(e: SubmitEvent, b: Bookmark) {
+    e.preventDefault();
+    if (!book) return;
+    const r = await api<Bookmark>(`/api/v1/audiobooks/${book.id}/bookmarks/${b.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ title: renameTitle }),
+    });
+    if (r.data) {
+      renaming = null;
+      await loadBookmarks(book.id);
+    } else bookmarkError = r.error ?? 'Could not rename it.';
+  }
+
+  async function deleteBookmark(b: Bookmark) {
+    if (!book) return;
+    const r = await api(`/api/v1/audiobooks/${book.id}/bookmarks/${b.id}`, { method: 'DELETE' });
+    if (r.status === 204) await loadBookmarks(book.id);
+    else bookmarkError = r.error ?? 'Could not delete it.';
   }
 
   /** Point the player at a book-global position. */
@@ -500,6 +562,13 @@
     </div>
   </div>
 
+  <div class="lists">
+    <AddToPlaylist libraryId={book.library_id} itemId={book.id} />
+    {#if session.me?.user.is_admin}
+      <AddToCollection libraryId={book.library_id} itemId={book.id} />
+    {/if}
+  </div>
+
   {#if session.me?.user.is_admin}
     <BookMatch {book} onchanged={reloadMetadata} />
   {/if}
@@ -562,7 +631,78 @@
         {#if book.progress.updated_at}
           <button class="btn" onclick={startOver}>Start over</button>
         {/if}
+        <button
+          class="btn"
+          type="button"
+          aria-expanded={bookmarksOpen}
+          onclick={() => (bookmarksOpen = !bookmarksOpen)}
+          data-bookmarks-toggle
+          >Bookmarks{bookmarks.length ? ` (${bookmarks.length})` : ''}</button
+        >
       </div>
+      {#if bookmarksOpen}
+        <div class="bookmarks" role="group" aria-label="Bookmarks">
+          <form class="add-mark" onsubmit={addBookmark}>
+            <input
+              type="text"
+              maxlength="200"
+              placeholder="Title (optional)"
+              bind:value={bookmarkTitle}
+              aria-label="Bookmark title"
+            />
+            <button class="btn small primary" type="submit" data-add-bookmark
+              >Add at {formatDurationMs(position) || '0:00'}</button
+            >
+          </form>
+          {#if bookmarkError}<p class="error" role="alert">{bookmarkError}</p>{/if}
+          {#if bookmarks.length === 0}
+            <p class="dim small">No bookmarks in this book yet.</p>
+          {:else}
+            <ul class="marks">
+              {#each bookmarks as b (b.id)}
+                <li data-bookmark-id={b.id} data-position={b.position_ms}>
+                  <button
+                    class="jump"
+                    type="button"
+                    onclick={() => jumpTo(b)}
+                    aria-label={`Play from ${formatDurationMs(b.position_ms) || '0:00'}`}
+                    >{formatDurationMs(b.position_ms) || '0:00'}</button
+                  >
+                  {#if renaming === b.id}
+                    <form class="rename" onsubmit={(e) => renameBookmark(e, b)}>
+                      <input
+                        type="text"
+                        maxlength="200"
+                        bind:value={renameTitle}
+                        aria-label="New bookmark title"
+                      />
+                      <button class="btn small" type="submit">Save</button>
+                      <button class="btn small" type="button" onclick={() => (renaming = null)}
+                        >Cancel</button
+                      >
+                    </form>
+                  {:else}
+                    <span class="mark-title" class:dim={!b.title}
+                      >{b.title || `Bookmark at ${formatDurationMs(b.position_ms) || '0:00'}`}</span
+                    >
+                    <button
+                      class="btn small"
+                      type="button"
+                      onclick={() => {
+                        renaming = b.id;
+                        renameTitle = b.title;
+                      }}>Rename</button
+                    >
+                    <button class="btn small" type="button" onclick={() => deleteBookmark(b)}
+                      >Delete</button
+                    >
+                  {/if}
+                </li>
+              {/each}
+            </ul>
+          {/if}
+        </div>
+      {/if}
       {#if saveError}<p class="error" role="alert">{saveError}</p>{/if}
     </section>
 
@@ -700,6 +840,62 @@
   }
   h2 {
     font-size: 1.15rem;
+  }
+  .lists {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin: -0.6rem 0 1.2rem;
+  }
+  .bookmarks {
+    margin-top: 0.8rem;
+    border-top: 1px solid var(--line);
+    padding-top: 0.8rem;
+  }
+  .add-mark,
+  .rename {
+    display: flex;
+    gap: 0.4rem;
+    flex: 1;
+  }
+  .add-mark input,
+  .rename input {
+    flex: 1;
+    min-width: 0;
+    background: var(--bg-raise);
+    border: 1px solid var(--line);
+    border-radius: 0.5rem;
+    padding: 0.35rem 0.5rem;
+    color: var(--text);
+  }
+  .marks {
+    list-style: none;
+    padding: 0;
+    margin: 0.6rem 0 0;
+  }
+  .marks li {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.35rem 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .jump {
+    background: transparent;
+    border: 0;
+    color: var(--accent);
+    font: inherit;
+    font-variant-numeric: tabular-nums;
+    cursor: pointer;
+    padding: 0.2rem 0.3rem;
+    min-width: 4.5rem;
+    text-align: left;
+  }
+  .mark-title {
+    flex: 1;
+  }
+  .small {
+    font-size: 0.85rem;
   }
   .chapters {
     list-style: none;

@@ -1332,3 +1332,69 @@ export function chapterIndexAt(chapters: { start_ms: number }[], positionMs: num
   }
   return found;
 }
+
+// ---------------------------------------------------------------- POD8
+
+/** POD8 (D35): one of this profile's playlists, as `GET /api/v1/playlists` lists it. */
+export interface PlaylistSummary {
+  id: string;
+  library_id: string;
+  library_name: string;
+  /** `audiobooks` (a playlist of books) or `podcasts` (of episodes). */
+  library_kind: 'audiobooks' | 'podcasts';
+  name: string;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+  /** Entries this profile can reach (D41's hidden ones aren't counted). */
+  item_count: number;
+  duration_ms: number;
+  /** With `?item_id=` / `?episode_id=`: whether it already holds that. */
+  contains: boolean;
+  /** Up to four cover addresses (Parlour's own). */
+  covers: string[];
+}
+
+/** One entry of a playlist: a book or an episode, never both. */
+export interface PlaylistEntry {
+  /** The entry's own id: what reorder and remove name. */
+  id: string;
+  kind: 'book' | 'episode';
+  added_at: string;
+  book?: Book;
+  episode?: ListenerEpisode;
+}
+
+export interface PlaylistDetail extends PlaylistSummary {
+  items: PlaylistEntry[];
+}
+
+/** POD8 (D35): a library's shared collection of books. */
+export interface CollectionSummary {
+  id: string;
+  library_id: string;
+  library_name: string;
+  name: string;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+  book_count: number;
+  /** With `?item_id=`: whether the book is in it. */
+  contains: boolean;
+  covers: string[];
+}
+
+export interface CollectionDetail extends CollectionSummary {
+  books: Book[];
+}
+
+/** POD8 (D35): a bookmark in a book — a book-global time and a title. */
+export interface Bookmark {
+  id: string;
+  item_id: string;
+  position_ms: number;
+  /** May be empty: the player shows the time instead. */
+  title: string;
+  created_at: string;
+  updated_at: string;
+}

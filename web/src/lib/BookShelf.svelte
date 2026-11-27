@@ -7,10 +7,15 @@
   // AB8 adds the library's Home (the default view, as Audiobookshelf
   // opens a library): its book shelves (D29), in the order and with the
   // visibility the profile chose in Preferences → Home Screen.
+  // POD8 (D35) adds Collections (UI-AUDIO-REFERENCE §4.2): the library's
+  // shared collections, which admins make, beside this profile's own
+  // playlists.
   import { page } from '$app/state';
   import { api } from './api';
   import AudioShelf from './AudioShelf.svelte';
   import BookGrid from './BookGrid.svelte';
+  import ListTile from './ListTile.svelte';
+  import PlaylistsRow from './PlaylistsRow.svelte';
   import { session } from './session.svelte';
   import {
     AUDIO_RAILS,
@@ -20,17 +25,19 @@
     type AudioShelves,
     type Author,
     type Book,
+    type CollectionSummary,
     type Series,
   } from './types';
 
   let { libraryId }: { libraryId: string } = $props();
 
-  type View = 'home' | 'books' | 'series' | 'authors';
+  type View = 'home' | 'books' | 'series' | 'authors' | 'collections';
   const VIEWS: { id: View; label: string }[] = [
     { id: 'home', label: 'Home' },
     { id: 'books', label: 'Books' },
     { id: 'series', label: 'Series' },
     { id: 'authors', label: 'Authors' },
+    { id: 'collections', label: 'Collections' },
   ];
   const view = $derived<View>(
     (VIEWS.find((v) => v.id === page.url.searchParams.get('view'))?.id ?? 'home') as View,
@@ -62,6 +69,9 @@
   let books = $state<Book[]>([]);
   let series = $state<Series[]>([]);
   let authors = $state<Author[]>([]);
+  let collections = $state<CollectionSummary[] | null>(null);
+  let newCollection = $state('');
+  let collectionError = $state<string | null>(null);
   let error = $state<string | null>(null);
   let loading = $state(true);
   let q = $state('');
@@ -87,6 +97,8 @@
     let failed: string | null = null;
     if (view === 'home') {
       failed = await loadShelves();
+    } else if (view === 'collections') {
+      failed = await loadCollections();
     } else if (view === 'series') {
       const r = await api<Series[]>(`/api/v1/series?${params}`);
       if (r.data) series = r.data;
@@ -103,6 +115,29 @@
     }
     loading = false;
     error = failed;
+  }
+
+  async function loadCollections() {
+    const r = await api<CollectionSummary[]>(
+      `/api/v1/collections?library_id=${encodeURIComponent(libraryId)}`,
+    );
+    if (r.data) collections = r.data;
+    return r.data ? null : (r.error ?? 'Could not load the collections.');
+  }
+
+  async function createCollection(e: SubmitEvent) {
+    e.preventDefault();
+    const name = newCollection.trim();
+    if (!name) return;
+    const r = await api('/api/v1/admin/collections', {
+      method: 'POST',
+      body: JSON.stringify({ library_id: libraryId, name }),
+    });
+    if (r.status === 201) {
+      newCollection = '';
+      collectionError = null;
+      await loadCollections();
+    } else collectionError = r.error ?? 'Could not make the collection.';
   }
 
   function searchSoon() {
@@ -155,7 +190,7 @@
   {/each}
 </nav>
 
-{#if view !== 'home'}
+{#if view !== 'home' && view !== 'collections'}
 <div class="toolbar" role="group" aria-label="Find in this library">
   <label>
     Search
@@ -189,6 +224,49 @@
       <AudioShelf {id} {shelves} {libraryId} inLibrary onchanged={loadShelves} />
     {/each}
   {/if}
+{:else if view === 'collections'}
+  <section aria-label="Collections">
+    <h2>Collections</h2>
+    <p class="dim small">Shared with everyone who can open this library.</p>
+    {#if session.me?.user.is_admin}
+      <form class="new" onsubmit={createCollection}>
+        <input
+          type="text"
+          placeholder="New collection"
+          maxlength="200"
+          bind:value={newCollection}
+          aria-label="New collection name"
+        />
+        <button class="btn small primary" type="submit" disabled={!newCollection.trim()}
+          >Create</button
+        >
+      </form>
+      {#if collectionError}<p class="error" role="alert">{collectionError}</p>{/if}
+    {/if}
+    {#if collections === null}
+      <p class="dim">Loading…</p>
+    {:else if collections.length === 0}
+      <p class="dim">
+        No collections yet.{session.me?.user.is_admin
+          ? ' Make one here, or use “Add to collection” on a book.'
+          : ' An administrator makes them.'}
+      </p>
+    {:else}
+      <ul class="grid tiles">
+        {#each collections as c (c.id)}
+          <li>
+            <ListTile
+              href={`/collection/${c.id}`}
+              name={c.name}
+              sub={plural(c.book_count, 'book')}
+              covers={c.covers}
+            />
+          </li>
+        {/each}
+      </ul>
+    {/if}
+  </section>
+  <PlaylistsRow {libraryId} kind="audiobooks" />
 {:else if loading && shown === 0}
   <p class="dim">Loading…</p>
 {:else if shown === 0}
@@ -334,5 +412,23 @@
   }
   .small {
     font-size: 0.82rem;
+  }
+  h2 {
+    font-size: 1.15rem;
+    margin: 1rem 0 0.2rem;
+  }
+  .new {
+    display: flex;
+    gap: 0.4rem;
+    margin: 0.4rem 0 0.8rem;
+    max-width: 28rem;
+  }
+  .new input {
+    flex: 1;
+    background: var(--bg-raise);
+    border: 1px solid var(--line);
+    border-radius: 0.5rem;
+    padding: 0.35rem 0.5rem;
+    color: var(--text);
   }
 </style>

@@ -7,8 +7,11 @@
   // author, and this profile's finished / in-progress counts.
   // Current / All follows UI-AUDIO-REFERENCE §4.4: "current" shows are
   // those with an episode this profile hasn't finished.
+  // POD8 (D35): the Playlists row above the shows — this profile's own
+  // playlists of episodes, as round buttons (§2.2 / §4.4).
   import { api } from '$lib/api';
   import { session } from '$lib/session.svelte';
+  import PlaylistsRow from '$lib/PlaylistsRow.svelte';
   import ShowArt from '$lib/ShowArt.svelte';
   import type { ListenerShow } from '$lib/types';
 
@@ -74,6 +77,9 @@
   }
 </script>
 
+<PlaylistsRow {libraryId} kind="podcasts" round />
+
+<h2 class="shows-head">Shows</h2>
 <div class="toolbar">
   <label class="search">
     <span class="sr-only">Filter shows</span>
@@ -132,6 +138,10 @@
 {/if}
 
 <style>
+  .shows-head {
+    font-size: 1.15rem;
+    margin: 0.4rem 0;
+  }
   .toolbar {
     display: flex;
     flex-wrap: wrap;

@@ -163,7 +163,12 @@ The owner uses subtitles on most playback.
   that API; a show's artwork is fetched by the server into the
   artwork cache at each check and served from Parlour (never
   hot-linked), and an episode's chapters are read server-side from
-  its download or the feed's chapter list.
+  its download or the feed's chapter list. Playlists (a profile's
+  own, per library, books or episodes), collections (a library's,
+  books only, admins make them) and bookmarks (a profile's, in a book)
+  are their own tables keyed to `media_items` and `podcast_episodes`
+  (POD8, D35; "Playlists, collections and bookmarks (POD8)"); the Up
+  Next queue stays on the device.
 - Segments (Phase 9, D15): `media_segments` holds intro / credits /
   recap spans per item — one row per (item, kind, source), sources
   `chapters`, `fingerprint`, `manual`, `heuristic`, each with a 0–1

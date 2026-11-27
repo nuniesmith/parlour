@@ -274,7 +274,8 @@ impl EpisodeRow {
     }
 }
 
-/// `$1` profile, `$2` episode id or NULL, `$3` show id or NULL. Order:
+/// `$1` profile, `$2` episode id or NULL, `$3` show id or NULL, `$4` a
+/// list of episode ids or NULL (only those; POD8's playlists). Order:
 /// a serial show's episodes oldest first, every other show's newest
 /// first; undated ones last, then by guid (POD4 reading 13).
 const EPISODES_SQL: &str = "
@@ -296,6 +297,7 @@ const EPISODES_SQL: &str = "
     WHERE (NOT p.explicit OR pr.allow_explicit)
       AND ($2::uuid IS NULL OR e.id = $2)
       AND ($3::uuid IS NULL OR e.podcast_id = $3)
+      AND ($4::uuid[] IS NULL OR e.id = ANY($4))
     ORDER BY
       CASE WHEN p.podcast_type = 'serial' THEN e.published_at END ASC NULLS LAST,
       CASE WHEN p.podcast_type IS DISTINCT FROM 'serial' THEN e.published_at END DESC NULLS LAST,
@@ -310,10 +312,38 @@ async fn load_episode(
         .bind(profile_id)
         .bind(Some(episode_id))
         .bind(None::<Uuid>)
+        .bind(None::<Vec<Uuid>>)
         .fetch_optional(&app.pool)
         .await
         .map_err(AppError::from)?
         .ok_or_else(not_found_episode)
+}
+
+/// POD8: the episodes among `ids` that `profile_id` can reach (its grant
+/// and D41's flag), as a listener sees them, keyed by id. An unreachable
+/// id is simply absent. `client` decides each one's stream, as the show
+/// page does.
+pub(crate) async fn episodes_by_ids(
+    app: &AppState,
+    profile_id: Uuid,
+    ids: Vec<Uuid>,
+    client: Option<parlour_core::ClientKind>,
+) -> Result<std::collections::HashMap<Uuid, EpisodeDto>, AppError> {
+    if ids.is_empty() {
+        return Ok(Default::default());
+    }
+    let rows = sqlx::query_as::<_, EpisodeRow>(EPISODES_SQL)
+        .bind(profile_id)
+        .bind(None::<Uuid>)
+        .bind(None::<Uuid>)
+        .bind(Some(ids))
+        .fetch_all(&app.pool)
+        .await
+        .map_err(AppError::from)?;
+    Ok(rows
+        .iter()
+        .map(|r| (r.id, episode_dto(app, profile_id, r, client, None).0))
+        .collect())
 }
 
 /// AB10's decision for a downloaded episode, in the book track's words.
@@ -331,7 +361,7 @@ struct EpisodePlanDto {
 }
 
 #[derive(Debug, Serialize)]
-struct EpisodeDto {
+pub(crate) struct EpisodeDto {
     id: Uuid,
     podcast_id: Uuid,
     library_id: Uuid,
@@ -520,6 +550,7 @@ async fn get_show(
         .bind(profile_id)
         .bind(None::<Uuid>)
         .bind(Some(show_id))
+        .bind(None::<Vec<Uuid>>)
         .fetch_all(&app.pool)
         .await
         .map_err(AppError::from)?;
