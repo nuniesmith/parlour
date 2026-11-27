@@ -17,7 +17,8 @@
 
   function countLabel(lib: LibraryTile): string {
     const n = lib.item_count;
-    if (lib.kind === 'shows') return n === 1 ? '1 show' : `${n} shows`;
+    // POD6: a podcasts library counts the shows this profile can reach.
+    if (lib.kind === 'shows' || lib.kind === 'podcasts') return n === 1 ? '1 show' : `${n} shows`;
     if (lib.kind === 'movies') return n === 1 ? '1 film' : `${n} films`;
     return n === 1 ? '1 item' : `${n} items`;
   }

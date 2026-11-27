@@ -241,7 +241,7 @@ async fn run_job(pool: &PgPool, http: &reqwest::Client, payload: Value) -> parlo
         .unwrap()
         .expect("the queued job");
     assert_eq!(job.id, id);
-    parlour_server::podcasts::run_refresh_job_claimed(pool, http, job).await;
+    parlour_server::podcasts::run_refresh_job_claimed(pool, http, job, None).await;
     let job = parlour_jobs::get(pool, id).await.unwrap().unwrap();
     assert_eq!(
         job.status, "succeeded",
@@ -354,7 +354,7 @@ async fn podcast_download_flow() {
         .unwrap()
         .unwrap();
     assert_eq!(job.id, job_id);
-    parlour_server::podcasts::run_refresh_job_claimed(&pool, &http, job).await;
+    parlour_server::podcasts::run_refresh_job_claimed(&pool, &http, job, None).await;
     let job = parlour_jobs::get(&pool, job_id).await.unwrap().unwrap();
     assert_eq!(job.status, "succeeded");
     let result = job.result.clone().unwrap();
@@ -713,7 +713,7 @@ async fn podcast_download_flow() {
         .await
         .unwrap()
         .unwrap();
-    parlour_server::podcasts::run_refresh_job_claimed(&pool, &http, job).await;
+    parlour_server::podcasts::run_refresh_job_claimed(&pool, &http, job, None).await;
     assert_eq!(
         parlour_jobs::get(&pool, id).await.unwrap().unwrap().status,
         "failed"

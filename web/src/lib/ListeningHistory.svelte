@@ -70,7 +70,7 @@
 {#if sessions === null}
   {#if !error}<p class="dim">Loading…</p>{/if}
 {:else if sessions.length === 0}
-  <p class="dim quiet">Nobody has listened to an audiobook yet.</p>
+  <p class="dim quiet">Nobody has listened to an audiobook or a podcast yet.</p>
 {:else}
   <div class="wrap">
     <table>
@@ -78,7 +78,7 @@
         <tr>
           <th scope="col">Started</th>
           <th scope="col">Who</th>
-          <th scope="col">Book</th>
+          <th scope="col">Book or episode</th>
           <th scope="col">Listened</th>
           <th scope="col">Position</th>
           <th scope="col">Client</th>
@@ -95,9 +95,10 @@
                 >{/if}
             </td>
             <td>
-              {#if s.item_id}<a href={`/book/${s.item_id}`}>{s.title}</a>{:else}{s.show_title
-                  ? `${s.show_title} · `
-                  : ''}{s.title}{/if}
+              {#if s.item_id}<a href={`/book/${s.item_id}`}>{s.title}</a>{:else if s.episode_id}<a
+                  href={`/episode/${s.episode_id}`}
+                  >{s.show_title ? `${s.show_title} · ` : ''}{s.title}</a
+                >{:else}{s.title}{/if}
             </td>
             <td>{formatListened(s.listened_ms)}</td>
             <td>

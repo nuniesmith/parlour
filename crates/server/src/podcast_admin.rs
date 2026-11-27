@@ -142,6 +142,12 @@ async fn add_show(
     match outcome {
         AddOutcome::Added { id, .. } => {
             tracing::info!(podcast_id = %id, library_id = %library_id, "podcast added");
+            crate::podcasts::cache_artwork_soon(
+                state.pool.clone(),
+                state.podcast_http.clone(),
+                state.metadata.artwork_dir.clone(),
+                id,
+            );
             Ok((StatusCode::CREATED, Json(load_show(&state, id).await?)))
         }
         AddOutcome::Duplicate { title, .. } => Err(AppError::Conflict(format!(
@@ -248,13 +254,21 @@ async fn import_opml(
                 id,
                 title: stored,
                 new_episodes,
-            }) => ImportLine {
-                name: title.unwrap_or(stored),
-                outcome: "added",
-                podcast_id: Some(id),
-                error: None,
-                new_episodes: Some(new_episodes),
-            },
+            }) => {
+                crate::podcasts::cache_artwork_soon(
+                    state.pool.clone(),
+                    state.podcast_http.clone(),
+                    state.metadata.artwork_dir.clone(),
+                    id,
+                );
+                ImportLine {
+                    name: title.unwrap_or(stored),
+                    outcome: "added",
+                    podcast_id: Some(id),
+                    error: None,
+                    new_episodes: Some(new_episodes),
+                }
+            }
             Ok(AddOutcome::Duplicate { id, title: stored }) => ImportLine {
                 name: title.unwrap_or(stored),
                 outcome: "already_in_library",

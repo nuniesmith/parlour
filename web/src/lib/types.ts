@@ -322,6 +322,9 @@ export interface PlaybackSession {
   season_number: number | null;
   episode_number: number | null;
   poster_item_id: string | null;
+  /** POD6: a podcast episode's show, and its cached artwork. */
+  podcast_id: string | null;
+  artwork_url: string | null;
   started_at: string;
   last_seen: string;
   position_ms: number;
@@ -968,6 +971,8 @@ export interface ListeningSession {
   episode_id: string | null;
   podcast_id: string | null;
   show_title: string | null;
+  /** POD6: an episode's show artwork (Parlour's cache), else null. */
+  artwork_url: string | null;
   title: string;
   has_cover: boolean;
   authors: string[];
@@ -1008,6 +1013,16 @@ export interface ListeningStats {
     has_cover: boolean;
     listened_ms: number;
     sessions: number;
+    last_listened_at: string;
+  }[];
+  /** POD6: shows by listening time, most first. */
+  shows: {
+    podcast_id: string;
+    title: string;
+    artwork_url: string | null;
+    listened_ms: number;
+    sessions: number;
+    episodes: number;
     last_listened_at: string;
   }[];
 }
@@ -1158,4 +1173,136 @@ export function noticeLink(n: Notice): { href: string; label: string } | null {
     default:
       return null;
   }
+}
+
+// ------------------------------------------------------- podcast pages
+// POD6: the listener's side of podcasts (POD5's API, D31/D32/D41).
+
+/** A show as a listener reaches it (`GET /api/v1/podcasts`). */
+export interface ListenerShow {
+  id: string;
+  library_id: string;
+  title: string;
+  sort_title: string;
+  author: string | null;
+  /** The feed's own description: HTML, shown through `feedHtml`. */
+  description: string | null;
+  language: string | null;
+  explicit: boolean;
+  podcast_type: string | null;
+  genres: string[];
+  created_at: string;
+  last_checked_at: string | null;
+  episode_count: number;
+  downloaded_count: number;
+  latest_published_at: string | null;
+  finished_count: number;
+  in_progress_count: number;
+  /** Parlour's cached copy of the show's artwork; null → initial tile. */
+  artwork_url: string | null;
+}
+
+/** AB10's decision for a downloaded episode (`?client=web`). */
+export interface EpisodePlan {
+  action: 'DirectPlay' | 'Remux' | 'Transcode';
+  reason: 'Direct' | 'ContainerUnsupported' | 'CodecUnsupported';
+  mode: 'direct_play' | 'copy' | 'transcode';
+  delivery: 'file' | 'aac';
+  client: string;
+}
+
+/** One episode as a listener sees it. */
+export interface ListenerEpisode {
+  id: string;
+  podcast_id: string;
+  library_id: string;
+  show_title: string;
+  artwork_url: string | null;
+  title: string;
+  subtitle: string | null;
+  /** The feed's HTML, shown through `feedHtml`. */
+  description: string | null;
+  published_at: string | null;
+  season: number | null;
+  episode_number: number | null;
+  episode_type: string | null;
+  duration_ms: number | null;
+  /** The length progress uses: the download's, else the feed's. */
+  length_ms: number | null;
+  downloaded: boolean;
+  downloaded_at: string | null;
+  size_bytes: number | null;
+  file_duration_ms: number | null;
+  container: string | null;
+  codec: string | null;
+  stream_url: string;
+  /** `enclosure`: not downloaded; the stream redirects to the publisher. */
+  delivery: 'file' | 'aac' | 'enclosure';
+  content_type: string | null;
+  plan: EpisodePlan | null;
+  progress: BookProgress;
+}
+
+export interface ListenerShowDetail extends ListenerShow {
+  episodes: ListenerEpisode[];
+}
+
+/** `GET /api/v1/podcast-episodes/{id}/chapters` (read server-side). */
+export interface EpisodeChapters {
+  /** `file` (the download's marks), `feed` (the feed's list), or none. */
+  source: 'file' | 'feed' | null;
+  chapters: { start_ms: number; title: string }[];
+  error: string | null;
+}
+
+/** A listener's state for one episode: finished, part-played, or new
+ *  (never moved off the start, or put back there). */
+export type EpisodeState = 'finished' | 'in_progress' | 'new';
+
+export function episodeState(p: BookProgress): EpisodeState {
+  if (p.finished) return 'finished';
+  if (p.position_ms > 0) return 'in_progress';
+  return 'new';
+}
+
+/** How far through an episode this profile is, 0–1 (for the ring). */
+export function episodeFraction(e: ListenerEpisode): number {
+  if (e.progress.finished) return 1;
+  const len = e.length_ms ?? e.progress.duration_ms ?? 0;
+  if (len <= 0) return e.progress.position_ms > 0 ? 0.05 : 0;
+  return Math.max(0, Math.min(1, e.progress.position_ms / len));
+}
+
+/** "S2 · E5 · Bonus" — where an episode sits, when the feed says. */
+export function episodeMarks(e: {
+  season: number | null;
+  episode_number: number | null;
+  episode_type: string | null;
+}): string {
+  const parts: string[] = [];
+  if (e.season !== null) parts.push(`S${e.season}`);
+  if (e.episode_number !== null) parts.push(`E${e.episode_number}`);
+  if (e.episode_type === 'trailer') parts.push('Trailer');
+  if (e.episode_type === 'bonus') parts.push('Bonus');
+  return parts.join(' · ');
+}
+
+/** A published date as a short local date ("27 Nov 2026"). */
+export function formatDate(iso: string | null): string {
+  if (!iso) return '';
+  return new Date(iso).toLocaleDateString(undefined, {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+}
+
+/** The chapter playing at a position, or -1. */
+export function chapterIndexAt(chapters: { start_ms: number }[], positionMs: number): number {
+  let found = -1;
+  for (let i = 0; i < chapters.length; i++) {
+    if (chapters[i].start_ms <= positionMs) found = i;
+    else break;
+  }
+  return found;
 }

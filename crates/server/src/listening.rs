@@ -418,6 +418,12 @@ struct SessionDto {
     episode_id: Option<Uuid>,
     podcast_id: Option<Uuid>,
     show_title: Option<String>,
+    /// The show's cached artwork file (never sent).
+    #[serde(skip)]
+    show_image_path: Option<String>,
+    /// POD6: an episode's show artwork (Parlour's route), or `null`.
+    #[sqlx(skip)]
+    artwork_url: Option<String>,
     title: String,
     has_cover: bool,
     authors: Vec<String>,
@@ -451,6 +457,7 @@ struct SessionPage {
 const SESSIONS_SQL: &str = "
     SELECT s.id, s.profile_id, u.username, p.name AS profile_name, s.item_id,
            s.episode_id, e.podcast_id, pc.title AS show_title,
+           pc.image_path AS show_image_path,
            COALESCE(i.title, e.title) AS title,
            EXISTS (SELECT 1 FROM images im WHERE im.item_id = i.id AND im.kind = 'poster'
                    AND im.path <> '' AND im.path NOT LIKE 'pending:%') AS has_cover,
@@ -501,6 +508,11 @@ async fn page(
         .map_err(AppError::from)?;
     let more = sessions.len() as i64 > limit;
     sessions.truncate(limit as usize);
+    for s in &mut sessions {
+        s.artwork_url = s.podcast_id.and_then(|id| {
+            parlour_catalog::podcast_artwork::artwork_route(id, s.show_image_path.as_deref())
+        });
+    }
     let next_before = if more {
         sessions.last().map(|s| s.started_at)
     } else {
@@ -553,6 +565,23 @@ struct BookTotalDto {
     last_listened_at: DateTime<Utc>,
 }
 
+/// POD6: listening per show (UI-AUDIO-REFERENCE §4.4's "total time per
+/// show"), as `BookTotalDto` is per book.
+#[derive(Debug, Serialize, FromRow)]
+struct ShowTotalDto {
+    podcast_id: Uuid,
+    title: String,
+    #[serde(skip)]
+    image_path: Option<String>,
+    #[sqlx(skip)]
+    artwork_url: Option<String>,
+    listened_ms: i64,
+    sessions: i64,
+    /// Distinct episodes listened to.
+    episodes: i64,
+    last_listened_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Serialize)]
 struct StatsDto {
     time_zone: String,
@@ -565,6 +594,9 @@ struct StatsDto {
     /// Books by listening time, most first. Episodes count in the
     /// totals and days above, not here (POD5).
     books: Vec<BookTotalDto>,
+    /// POD6: shows by listening time, most first, as the profile can
+    /// reach them (its grant, and D41's flag).
+    shows: Vec<ShowTotalDto>,
 }
 
 /// This profile's listening stats, from its sessions. A session counts
@@ -650,6 +682,31 @@ async fn my_stats(
     .fetch_all(&app.pool)
     .await
     .map_err(AppError::from)?;
+    let mut shows = sqlx::query_as::<_, ShowTotalDto>(
+        "SELECT pc.id AS podcast_id, pc.title, pc.image_path,
+                SUM(s.listened_ms)::bigint AS listened_ms,
+                COUNT(*) AS sessions,
+                COUNT(DISTINCT s.episode_id) AS episodes,
+                MAX(s.last_seen_at) AS last_listened_at
+         FROM listening_sessions s
+         JOIN profiles pr ON pr.id = s.profile_id
+         JOIN podcast_episodes e ON e.id = s.episode_id
+         JOIN podcasts pc ON pc.id = e.podcast_id
+         JOIN library_access a ON a.library_id = pc.library_id AND a.profile_id = $1
+         WHERE s.profile_id = $1 AND (NOT pc.explicit OR pr.allow_explicit)
+         GROUP BY pc.id
+         ORDER BY 4 DESC, pc.sort_title, pc.id",
+    )
+    .bind(profile_id)
+    .fetch_all(&app.pool)
+    .await
+    .map_err(AppError::from)?;
+    for show in &mut shows {
+        show.artwork_url = parlour_catalog::podcast_artwork::artwork_route(
+            show.podcast_id,
+            show.image_path.as_deref(),
+        );
+    }
     Ok(Json(StatsDto {
         time_zone: tz,
         total_ms,
@@ -658,6 +715,7 @@ async fn my_stats(
         today_ms,
         days,
         books,
+        shows,
     }))
 }
 

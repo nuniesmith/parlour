@@ -21,6 +21,11 @@
 //! - `GET|PUT|DELETE /api/v1/podcast-episodes/{id}/progress` — this
 //!   profile's progress, under AB11's rules (`audiobooks::apply_write`)
 //!   and the podcasts library's finish rule
+//! - `GET /api/v1/podcasts/{id}/artwork` — the show's artwork from
+//!   Parlour's cache (POD6; never the publisher's address)
+//! - `GET /api/v1/podcast-episodes/{id}/chapters` — the episode's
+//!   chapters, read server-side from its download or the feed's
+//!   chapter list (POD6)
 //!
 //! **Who sees what.** A profile reaches a show only through its
 //! `library_access` grant on the show's podcasts library (D31: no
@@ -110,6 +115,21 @@ struct ShowDto {
     /// This profile's episodes finished, and started but not finished.
     finished_count: i64,
     in_progress_count: i64,
+    /// The cached artwork's file (never sent).
+    #[serde(skip)]
+    image_path: Option<String>,
+    /// POD6: where a page loads the show's artwork from — Parlour's own
+    /// cache, never the publisher. `null` when none is cached.
+    #[sqlx(skip)]
+    artwork_url: Option<String>,
+}
+
+impl ShowDto {
+    fn with_artwork(mut self) -> Self {
+        self.artwork_url =
+            parlour_catalog::podcast_artwork::artwork_route(self.id, self.image_path.as_deref());
+        self
+    }
 }
 
 /// The one show query: `$1` profile, `$2` show id or NULL, `$3`
@@ -129,7 +149,8 @@ const SHOWS_SQL: &str = "
            (SELECT count(*) FROM podcast_episodes e
             JOIN book_progress bp ON bp.episode_id = e.id AND bp.profile_id = $1
             WHERE e.podcast_id = p.id AND NOT bp.finished AND bp.position_ms > 0)
-               AS in_progress_count
+               AS in_progress_count,
+           p.image_path
     FROM podcasts p
     JOIN library_access a ON a.library_id = p.library_id AND a.profile_id = $1
     JOIN profiles pr ON pr.id = $1
@@ -177,7 +198,7 @@ async fn list_shows(
         .fetch_all(&app.pool)
         .await
         .map_err(AppError::from)?;
-    Ok(Json(shows))
+    Ok(Json(shows.into_iter().map(ShowDto::with_artwork).collect()))
 }
 
 async fn load_show(app: &AppState, profile_id: Uuid, show_id: Uuid) -> Result<ShowDto, AppError> {
@@ -189,6 +210,7 @@ async fn load_show(app: &AppState, profile_id: Uuid, show_id: Uuid) -> Result<Sh
         .fetch_optional(&app.pool)
         .await
         .map_err(AppError::from)?
+        .map(ShowDto::with_artwork)
         .ok_or_else(|| AppError::NotFound("no such podcast".into()))
 }
 
@@ -202,6 +224,7 @@ struct EpisodeRow {
     podcast_id: Uuid,
     library_id: Uuid,
     show_title: String,
+    show_image_path: Option<String>,
     title: String,
     subtitle: Option<String>,
     description: Option<String>,
@@ -255,7 +278,8 @@ impl EpisodeRow {
 /// a serial show's episodes oldest first, every other show's newest
 /// first; undated ones last, then by guid (POD4 reading 13).
 const EPISODES_SQL: &str = "
-    SELECT e.id, e.podcast_id, p.library_id, p.title AS show_title, e.title, e.subtitle,
+    SELECT e.id, e.podcast_id, p.library_id, p.title AS show_title,
+           p.image_path AS show_image_path, e.title, e.subtitle,
            e.description, e.published_at, e.duration_ms, e.season, e.episode_number,
            e.episode_type, e.enclosure_type, e.enclosure_length, e.file_path,
            e.file_size_bytes, e.file_duration_ms, e.file_container, e.file_codec,
@@ -312,6 +336,8 @@ struct EpisodeDto {
     podcast_id: Uuid,
     library_id: Uuid,
     show_title: String,
+    /// POD6: the show's cached artwork (Parlour's route), or `null`.
+    artwork_url: Option<String>,
     title: String,
     subtitle: Option<String>,
     /// As the feed gives it (it may be HTML).
@@ -439,6 +465,10 @@ fn episode_dto(
         podcast_id: row.podcast_id,
         library_id: row.library_id,
         show_title: row.show_title.clone(),
+        artwork_url: parlour_catalog::podcast_artwork::artwork_route(
+            row.podcast_id,
+            row.show_image_path.as_deref(),
+        ),
         title: row.title.clone(),
         subtitle: row.subtitle.clone(),
         description: row.description.clone(),
@@ -819,6 +849,136 @@ async fn delete_progress(
     Ok(StatusCode::NO_CONTENT)
 }
 
+// ---------------------------------------------------------------- artwork
+
+/// POD6: a show's artwork from Parlour's cache, to a profile that can
+/// reach the show (its grant, and D41's flag). The publisher's address
+/// is never sent or followed here: the copy was fetched by a feed check
+/// (`parlour_catalog::podcast_artwork`). 404 when nothing is cached, so
+/// a page falls back to its initial tile.
+async fn show_artwork(
+    State(app): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<String>,
+) -> Result<Response, AppError> {
+    let profile_id = active_profile(&user)?;
+    let show_id = parse_id(&id, "podcast")?;
+    let row: Option<(Option<String>,)> = sqlx::query_as(
+        "SELECT p.image_path FROM podcasts p
+         JOIN library_access a ON a.library_id = p.library_id AND a.profile_id = $1
+         JOIN profiles pr ON pr.id = $1
+         WHERE p.id = $2 AND (NOT p.explicit OR pr.allow_explicit)",
+    )
+    .bind(profile_id)
+    .bind(show_id)
+    .fetch_optional(&app.pool)
+    .await
+    .map_err(AppError::from)?;
+    let Some((image_path,)) = row else {
+        return Err(AppError::NotFound("no such podcast".into()));
+    };
+    let no_artwork = || AppError::NotFound("no artwork cached for that podcast".into());
+    let path = image_path.ok_or_else(no_artwork)?;
+    let content_type =
+        parlour_catalog::podcast_artwork::content_type_of(&path).ok_or_else(no_artwork)?;
+    let bytes = tokio::fs::read(&path).await.map_err(|_| no_artwork())?;
+    Ok((
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, HeaderValue::from_static(content_type)),
+            // The address carries the copy's key (`?v=`), so a browser
+            // may keep it; `private` because it sits behind a sign-in.
+            (
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("private, max-age=604800"),
+            ),
+            (
+                header::X_CONTENT_TYPE_OPTIONS,
+                HeaderValue::from_static("nosniff"),
+            ),
+        ],
+        bytes,
+    )
+        .into_response())
+}
+
+// --------------------------------------------------------------- chapters
+
+#[derive(Serialize)]
+struct ChaptersDto {
+    /// `file` (the download's own chapter marks), `feed` (the feed's
+    /// Podcasting 2.0 chapter list), or `null` (neither has any).
+    source: Option<&'static str>,
+    chapters: Vec<parlour_catalog::podcast_chapters::EpisodeChapter>,
+    /// Why the feed's chapter list couldn't be read (never its address).
+    error: Option<String>,
+}
+
+/// POD6: an episode's chapters for the player, read server-side (POD5
+/// reading 12): the download's own chapter marks when it has titled
+/// ones (no publisher is asked), else the feed's chapter list, fetched
+/// now. Only start times and titles are sent; a chapter's image and
+/// link are publisher addresses and are dropped. A chapter list that
+/// can't be fetched is an empty list with the reason, not an error, so
+/// the player plays on without chapters.
+async fn episode_chapters(
+    State(app): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<String>,
+) -> Result<Json<ChaptersDto>, AppError> {
+    use parlour_catalog::podcast_chapters::{fetch_json_chapters, from_file};
+    let profile_id = active_profile(&user)?;
+    let episode = load_episode(&app, profile_id, parse_id(&id, "episode")?).await?;
+    if let Some(path) = episode.file_path.clone() {
+        let probed = tokio::task::spawn_blocking(move || {
+            parlour_catalog::audiobooks::probe_audio(std::path::Path::new(&path))
+        })
+        .await
+        .ok()
+        .and_then(Result::ok);
+        let chapters = probed.map(|p| from_file(&p.chapters)).unwrap_or_default();
+        if !chapters.is_empty() {
+            return Ok(Json(ChaptersDto {
+                source: Some("file"),
+                chapters,
+                error: None,
+            }));
+        }
+    }
+    let (chapters_url,): (Option<String>,) =
+        sqlx::query_as("SELECT chapters_url FROM podcast_episodes WHERE id = $1")
+            .bind(episode.id)
+            .fetch_one(&app.pool)
+            .await
+            .map_err(AppError::from)?;
+    let Some(url) = chapters_url.filter(|u| !u.trim().is_empty()) else {
+        return Ok(Json(ChaptersDto {
+            source: None,
+            chapters: Vec::new(),
+            error: None,
+        }));
+    };
+    Ok(Json(
+        match fetch_json_chapters(&app.podcast_http, &url).await {
+            Ok(chapters) => ChaptersDto {
+                source: Some("feed"),
+                chapters,
+                error: None,
+            },
+            Err(why) => {
+                tracing::info!(episode_id = %episode.id, reason = %why, "podcast chapters not read");
+                ChaptersDto {
+                    source: Some("feed"),
+                    chapters: Vec::new(),
+                    error: Some(format!(
+                        "The publisher's chapter list couldn't be read: {why}."
+                    )),
+                }
+            }
+        },
+    ))
+}
+
 // ------------------------------------------------------------------- OPML
 
 #[derive(Deserialize)]
@@ -893,11 +1053,16 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/podcasts", get(list_shows))
         .route("/api/v1/podcasts/opml", get(export_opml))
         .route("/api/v1/podcasts/{id}", get(get_show))
+        .route("/api/v1/podcasts/{id}/artwork", get(show_artwork))
         .route("/api/v1/podcast-episodes/{id}", get(get_episode))
         .route("/api/v1/podcast-episodes/{id}/stream", get(stream_episode))
         .route(
             "/api/v1/podcast-episodes/{id}/aac.m4a",
             get(stream_episode_aac),
+        )
+        .route(
+            "/api/v1/podcast-episodes/{id}/chapters",
+            get(episode_chapters),
         )
         .route(
             "/api/v1/podcast-episodes/{id}/progress",

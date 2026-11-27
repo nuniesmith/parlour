@@ -156,7 +156,12 @@ The owner uses subtitles on most playback.
   downloaded episode streams from the store with Range, one that
   isn't redirects to its enclosure, and progress and listening
   sessions are the books' own (`book_progress`,
-  `listening_sessions`, each with an `episode_id`).
+  `listening_sessions`, each with an `episode_id`). The web's podcast
+  pages and episode player (POD6, "Web pages and player (POD6)") read
+  that API; a show's artwork is fetched by the server into the
+  artwork cache at each check and served from Parlour (never
+  hot-linked), and an episode's chapters are read server-side from
+  its download or the feed's chapter list.
 - Segments (Phase 9, D15): `media_segments` holds intro / credits /
   recap spans per item — one row per (item, kind, source), sources
   `chapters`, `fingerprint`, `manual`, `heuristic`, each with a 0–1
