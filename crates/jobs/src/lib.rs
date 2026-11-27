@@ -10,6 +10,8 @@
 //! progress and per-file errors so the admin UI can show a running
 //! scan truthfully instead of spinning.
 
+pub mod cron;
+
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::FromRow;
@@ -37,10 +39,13 @@ pub enum JobKind {
     ExportBundle,
     /// An admin's import of a `parlour-export` bundle (XFER3).
     ImportBundle,
+    /// Check podcast feeds: the shows whose schedule is due, or one
+    /// show asked for by name (POD2, D32).
+    RefreshPodcasts,
 }
 
 impl JobKind {
-    pub const ALL: [JobKind; 12] = [
+    pub const ALL: [JobKind; 13] = [
         JobKind::ScanLibrary,
         JobKind::FetchMetadata,
         JobKind::DownloadArtwork,
@@ -53,6 +58,7 @@ impl JobKind {
         JobKind::DetectSegments,
         JobKind::ExportBundle,
         JobKind::ImportBundle,
+        JobKind::RefreshPodcasts,
     ];
 
     /// The kind stored as `name`, if there is one.
@@ -74,6 +80,7 @@ impl JobKind {
             JobKind::DetectSegments => "detect_segments",
             JobKind::ExportBundle => "export_bundle",
             JobKind::ImportBundle => "import_bundle",
+            JobKind::RefreshPodcasts => "refresh_podcasts",
         }
     }
 }
@@ -287,6 +294,7 @@ mod tests {
         assert_eq!(JobKind::DetectSegments.as_str(), "detect_segments");
         assert_eq!(JobKind::ExportBundle.as_str(), "export_bundle");
         assert_eq!(JobKind::ImportBundle.as_str(), "import_bundle");
+        assert_eq!(JobKind::RefreshPodcasts.as_str(), "refresh_podcasts");
     }
 
     #[test]

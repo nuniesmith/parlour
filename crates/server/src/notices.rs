@@ -21,6 +21,11 @@
 //! be written (a read-only mount, say) gets a warning until the mount
 //! allows it or the opt-in is turned off.
 //!
+//! POD2 adds podcast feeds failing repeatedly: one notice per show
+//! from its 3rd failed check in a row (a warning, with the count), an
+//! error once the 24th has turned its schedule off (D32). A successful
+//! check resets the count, and the next pass clears the notice.
+//!
 //! - `GET /api/v1/admin/notices` — active notices this admin has
 //!   not dismissed, newest first
 //! - `POST /api/v1/admin/notices/{id}/dismiss` — per-admin dismiss
@@ -48,6 +53,9 @@ pub const DISK_WARNING_BYTES: u64 = 5 * GIB;
 pub const DISK_ERROR_BYTES: u64 = GIB;
 /// Failed jobs older than this no longer raise a notice.
 const JOB_FAILURE_WINDOW_DAYS: i32 = 7;
+/// A podcast feed gets a notice from this many failed checks in a row
+/// (POD2). One or two are usually a host's passing hiccup.
+pub const FEED_FAILING_NOTICE_AT: i32 = 3;
 /// Resolved notices, and old failed-job notices, are deleted after this.
 const NOTICE_KEEP_DAYS: i32 = 30;
 
@@ -162,7 +170,21 @@ fn failed_job_summary(kind: &str, library: Option<&str>, trigger: Option<&str>) 
         ("purge_activity", _) => "Activity clean-up failed".to_string(),
         ("detect_segments", Some(name)) => format!("Segment detection for {name} failed"),
         ("detect_segments", None) => "Segment detection failed".to_string(),
+        ("refresh_podcasts", _) => "Podcast feed check failed".to_string(),
         (other, _) => format!("A {} job failed", other.replace('_', " ")),
+    }
+}
+
+/// How a failing feed reads: the show, the count, and whether its
+/// schedule has turned itself off.
+fn feed_failing_summary(title: &str, failures: i32, schedule_off: bool) -> String {
+    if schedule_off {
+        format!(
+            "The feed for {title} has failed {failures} checks in a row; \
+             its scheduled check is off"
+        )
+    } else {
+        format!("The feed for {title} has failed {failures} checks in a row")
     }
 }
 
@@ -400,7 +422,55 @@ pub async fn reconcile_with(
     .execute(pool)
     .await?;
 
-    // 5. Housekeeping.
+    // 5. Podcast feeds failing repeatedly (POD2). One notice per show,
+    //    with the count; an error once the 24th failure in a row has
+    //    turned its schedule off (D32). The feed URL stays out of it
+    //    (a paid feed's URL carries a token).
+    type FailingFeed = (Uuid, String, String, i32, Option<String>, bool);
+    let failing: Vec<FailingFeed> = sqlx::query_as(
+        "SELECT p.id, p.title, l.name, p.consecutive_failures, p.last_error, p.auto_download
+         FROM podcasts p JOIN libraries l ON l.id = p.library_id
+         WHERE p.consecutive_failures >= $1
+         ORDER BY p.sort_title, p.id",
+    )
+    .bind(FEED_FAILING_NOTICE_AT)
+    .fetch_all(pool)
+    .await?;
+    let mut failing_keys: Vec<String> = Vec::new();
+    for (podcast_id, title, library, failures, error, auto_download) in failing {
+        let key = format!("podcast_feed_failing:{podcast_id}");
+        let stopped = failures >= parlour_catalog::podcasts::MAX_FAILED_CHECKS;
+        raise(
+            pool,
+            &key,
+            "podcast_feed_failing",
+            if stopped {
+                Severity::Error
+            } else {
+                Severity::Warning
+            },
+            &feed_failing_summary(&title, failures, stopped && !auto_download),
+            serde_json::json!({
+                "podcast_id": podcast_id,
+                "podcast": title,
+                "library": library,
+                "failures": failures,
+                "error": error,
+                "auto_download": auto_download,
+            }),
+        )
+        .await?;
+        failing_keys.push(key);
+    }
+    sqlx::query(
+        "UPDATE notices SET resolved_at = now()
+         WHERE kind = 'podcast_feed_failing' AND resolved_at IS NULL AND NOT (key = ANY($1))",
+    )
+    .bind(&failing_keys)
+    .execute(pool)
+    .await?;
+
+    // 6. Housekeeping.
     sqlx::query(
         "DELETE FROM notices
          WHERE resolved_at < now() - make_interval(days => $1)
@@ -537,6 +607,23 @@ mod tests {
         assert_eq!(
             failed_job_summary("import_bundle", None, None),
             "Server import failed"
+        );
+    }
+
+    #[test]
+    fn failing_feeds_read_as_sentences() {
+        assert_eq!(
+            feed_failing_summary("The Lantern Hour", 3, false),
+            "The feed for The Lantern Hour has failed 3 checks in a row"
+        );
+        assert_eq!(
+            feed_failing_summary("The Lantern Hour", 24, true),
+            "The feed for The Lantern Hour has failed 24 checks in a row; \
+             its scheduled check is off"
+        );
+        assert_eq!(
+            failed_job_summary("refresh_podcasts", None, Some("schedule")),
+            "Podcast feed check failed"
         );
     }
 

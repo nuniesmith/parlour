@@ -25,6 +25,7 @@ pub mod listening;
 pub mod metadata;
 pub mod notices;
 pub mod playback;
+pub mod podcasts;
 pub mod profiles;
 pub mod segments;
 pub mod series;

@@ -1223,7 +1223,8 @@ hourly check / keep N (0 = all) / 3 new per check. Details:
 `docs/AUDIOBOOKS-PODCASTS.md` → Phase 11. The lines below keep
 their original wording; read them through that.
 
-POD1 (the schema) is built; POD2–POD8 are plan only. Spec:
+POD1 (the schema) and POD2 (feed checks) are built; POD3–POD8 are
+plan only. Spec:
 `docs/AUDIOBOOKS-PODCASTS.md`.
 
 - [x] POD1 (M) **Schema**: `podcasts` (feed URL, metadata,
@@ -1268,11 +1269,33 @@ POD1 (the schema) is built; POD2–POD8 are plan only. Spec:
   `book_progress`'s open proposal (D36). Flow:
   `podcast_schema_flow.rs`. Spec: AUDIOBOOKS-PODCASTS.md "Schema
   (POD1)" (12 readings for veto).
-- [ ] POD2 (M) **Feed fetch + parse**: RSS 2.0 + iTunes
+- [x] POD2 (M) **Feed fetch + parse**: RSS 2.0 + iTunes
   namespace (+ Podcasting 2.0 chapter/transcript links), a pure
   fixture-tested parser, conditional GET, a `refresh_podcasts`
   job on the Postgres queue at **D32**'s cadence, and a
   Dashboard notice for feeds failing repeatedly.
+  *Done 2026-11-26:* no migration (every column is POD1's).
+  - **Parser.** `parlour_catalog::podcast_feed` is pure and
+    fixture-tested: an episodic feed, a serial feed, odd items and
+    an HTML page, in `crates/catalog/tests/fixtures/podcasts/`.
+  - **Check.** `parlour_catalog::podcasts` does the conditional GET
+    (ETag / Last-Modified; a 304 only stamps the check), stores the
+    show and a row per feed episode (matched by guid, then enclosure
+    URL; nothing downloaded), and counts failures. The 24th failure
+    in a row turns `auto_download` off; a success clears the count.
+  - **Schedule.** A once-a-minute tick queues one `refresh_podcasts`
+    job when a show with `auto_download` on is due at its five-field
+    cron schedule (`parlour_jobs::cron`, UTC). The job has its own
+    worker, and a job naming one show (`podcast_id`) checks it
+    whatever its schedule says.
+  - **Notice.** A Dashboard notice per show from the 3rd failure in
+    a row, with the count; an error from the 24th; cleared after a
+    success.
+
+  No API, no UI, no download. The bundle is unchanged (format v1,
+  D36 open). Flow: `podcast_refresh_flow.rs`. Spec:
+  AUDIOBOOKS-PODCASTS.md "Feed fetch and parse (POD2)" (13 readings
+  for veto).
 - [ ] POD3 (M) **Episode download + retention** per **D32**,
   into a writable podcast store (never a media mount).
 - [ ] POD4 (M) **Manage feeds in the UI**: add by URL, OPML

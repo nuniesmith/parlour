@@ -29,6 +29,12 @@
 //!   provider lookup and authoritative over it; rewritten by the
 //!   metadata job where a library opted in.
 //!
+//! - `podcast_feed` — podcast RSS (+ iTunes, Podcasting 2.0 links)
+//!   read into POD1's shapes (POD2). Pure, fixture-tested.
+//! - `podcasts` — a show's feed check: the conditional GET, the
+//!   episode rows, the refresh state and the 24-failure rule (POD2,
+//!   D32).
+//!
 //! Matching files to TMDB/TVDB metadata is `metadata_sync`
 //! (Milestone 1.4, providers in `parlour-metadata`); artwork
 //! caching is `artwork`. The Emby importer (watched state matched
@@ -42,6 +48,8 @@ pub mod emby;
 pub mod fingerprint;
 pub mod metadata_sync;
 pub mod parse;
+pub mod podcast_feed;
+pub mod podcasts;
 pub mod probe;
 pub mod scan;
 pub mod segments;

@@ -1339,7 +1339,7 @@ not yet scheduled in a PR:
 
 ---
 
-## Phase 11 — Podcasts (POD1's schema built 2026-11-26; the rest is plan)
+## Phase 11 — Podcasts (POD1's schema and POD2's feed checks built 2026-11-26; the rest is plan)
 
 The server owns the feeds. Clients never fetch RSS themselves, which
 is what lets a Fire Stick, a tablet and the phone agree.
@@ -1402,6 +1402,8 @@ function, fixture-tested like ffprobe parsing. The Podcasting 2.0
 `podcast:chapters` / `podcast:transcript` links are stored as URLs.
 Feed errors raise a Dashboard notice after N failures in a row.
 Cadence: **D32**.
+*Built in POD2 (2026-11-26): "Feed fetch and parse (POD2)" at the end
+of this section; N is 3 (POD2 reading 1).*
 
 **Episodes.** Whether the server downloads audio or clients stream
 from the publisher, how many it keeps, and **where** they go are
@@ -1543,7 +1545,8 @@ flow test makes exactly these writes.
 
 **What later tasks need to know.**
 
-- **POD2.**
+- **POD2.** *Done in POD2, as written here ("Feed fetch and parse
+  (POD2)").*
   - **New episodes.** A feed item is the same episode as a stored row
     when its guid matches, or (as ABS checks) when its enclosure URL
     matches.
@@ -1688,6 +1691,257 @@ flow test makes exactly these writes.
     - *Not kept:* episode artwork, the raw `pubDate` text, the feed's
       `<link>` and chapter bodies. A later task adds a column if its
       screen needs one.
+
+### Feed fetch and parse (POD2, built 2026-11-26)
+
+POD2 fills POD1's tables from the feeds. A show's feed is fetched
+with a conditional GET and read by a pure parser. The show's row and
+one row per feed episode are then brought in line with it. This runs
+as a `refresh_podcasts` job on the Postgres queue at the show's D32
+schedule, and feeds that keep failing raise a Dashboard notice.
+
+POD2 needs no migration: every column it writes is POD1's. Nothing
+is downloaded, no file is written, no mount changes, and there is no
+API and no UI. POD3 downloads, and POD4–POD6 manage and show. The
+flow `crates/server/tests/podcast_refresh_flow.rs` runs all of it
+against a local stub feed host on a fresh database.
+
+**The parser** (`parlour_catalog::podcast_feed`) is pure: bytes in,
+POD1's shapes out. It is fixture-tested against
+`crates/catalog/tests/fixtures/podcasts/`, which holds an episodic
+feed, a serial feed, a feed of odd items and an HTML page.
+
+- **What it reads.** RSS 2.0 with the iTunes namespace, plus the
+  Podcasting 2.0 `podcast:chapters` / `podcast:transcript` links,
+  stored as URLs. Elements are recognised by their usual prefixes
+  (`itunes:`, `podcast:`, `content:`), ignoring case. The root must
+  be `<rss>` with a `<channel>`. Anything else (Atom, an HTML page)
+  is a failed check.
+- **The show:**
+
+  | Field | Where it comes from |
+  |---|---|
+  | `title` | `<title>` |
+  | `author` | `itunes:author`, else `<author>` |
+  | `description` | `<description>`, else `itunes:summary` |
+  | `language` | `<language>` |
+  | `explicit` | `itunes:explicit`: `yes` / `true` / `explicit` mean explicit |
+  | `podcast_type` | `itunes:type`: `episodic` or `serial`, else none |
+  | `genres` | every `itunes:category` `text`, sub-categories included, each once |
+  | `image_url` | `itunes:image`'s `href`, else `<image><url>` |
+
+- **An episode** is an `<item>` with an enclosure URL. An item
+  without one is not stored (POD1 reading 4).
+
+  | Field | Where it comes from |
+  |---|---|
+  | `guid` | `<guid>`, or the enclosure URL when the guid is missing or blank |
+  | `title` | `<title>`, else `itunes:title`, else empty |
+  | `subtitle` | `itunes:subtitle` |
+  | `description` | `<description>`, else `content:encoded`, else `itunes:summary`, kept as the feed's HTML |
+  | `published_at` | `pubDate` (below) |
+  | `duration_ms` | `itunes:duration` (below) |
+  | `season`, `episode_number` | `itunes:season` / `itunes:episode`: whole numbers 0 or more only; `Two`, `4a`, `-2` are dropped (POD1 reading 12) |
+  | `episode_type` | `itunes:episodeType`: `full`, `trailer` or `bonus`, else none |
+  | `enclosure_*` | the first `<enclosure>`'s `url`, `type` and `length`. A length of 0, or one that can't be read, is none |
+  | `chapters_url` | `podcast:chapters`' `url` |
+  | `transcript_*` | the first `podcast:transcript` the item lists |
+
+  If a feed repeats a guid, the first item with it is kept.
+- **Durations.** `H:MM:SS`, `M:SS` or plain seconds, the seconds
+  possibly with a fraction. Minutes past 59 are read as written
+  (`75:30` is 75½ minutes). Empty, 0, `abc`, `1:2:x` or four parts
+  give no duration.
+- **Dates.** RFC 822 first, then ISO 8601. A wrong weekday is ignored.
+  A zone name RFC 822 doesn't know (`BST`) is read as UTC. A date that
+  can't be read is no date.
+- **Text.** Single-line fields have their white space folded. Feed
+  bytes that aren't UTF-8 are read as Latin-1. The common HTML
+  entities (`&nbsp;`, `&mdash;` …) are read, and unknown ones are
+  kept as written.
+
+**A check** (`parlour_catalog::podcasts::check_podcast`):
+
+1. **Fetch.** The feed is fetched with the stored validators sent
+   back as `If-None-Match` / `If-Modified-Since`. Only a 200 or a 304
+   is an answer. Any other status, a network error, a timeout (60 s)
+   or a body over 64 MB is a failed check. Redirects are followed,
+   and the stored `feed_url` is not rewritten.
+2. **304.** The show is left alone except for its refresh state:
+   `last_checked_at` is stamped, and `last_error` and
+   `consecutive_failures` are cleared.
+3. **200.** The body is parsed. If it can't be read, the check fails
+   and the response's validators are **not** kept (a later 304 must
+   never hide a broken feed). If it reads, one transaction does
+   this:
+   - The show's fields are set as the feed now describes them. A
+     feed without a title keeps the stored one, and a field the feed
+     no longer has is cleared. `itunes_id`, `image_path`,
+     `folder_path` and the D32 settings are never touched by a check.
+   - The new validators are stored (a 200 without them clears them).
+   - The check is stamped and the refresh state cleared.
+   - `updated_at` moves only when a show field really changed.
+4. **Episodes.** Each feed episode is matched to a stored row:
+   - first by guid, across the whole feed;
+   - then, as ABS checks, by enclosure URL, among rows no feed item
+     claimed by guid;
+   - a row is matched once.
+   
+   An unmatched feed episode gets a new row, with the file columns
+   empty (POD1 reading 3). A matched row whose feed-described values
+   changed (title, dates, enclosure, links …) is updated. It keeps
+   its stored guid, and its file columns are never touched. A stored
+   episode the feed no longer lists is left alone, because retention
+   is POD3's.
+5. **Failure.** `last_checked_at` is stamped, `last_error` is set
+   (at most 500 characters), and `consecutive_failures` goes up by
+   one. The failure that brings the count to **24** (D32) turns
+   `auto_download` off, and that moves `updated_at`. `check_schedule`
+   is kept.
+
+**The feed URL is kept out of sight.** A paid feed's URL carries a
+private token. So the URL is not written to the log, to a job's error
+list or to a notice, and fetch errors drop it (`without_url`).
+Failures are listed by the show's title.
+
+**The schedule and the job** (`crates/server/src/podcasts.rs`):
+
+- **Due.** A show is due when its `auto_download` is on (the schedule
+  switch, POD1 reading 5) and its `check_schedule` has fired since
+  `last_checked_at`. A show never checked is due at once. Firings
+  missed while the server was down add up to one check, not several.
+- **The cron expression** has five fields (minute, hour, day of
+  month, month, day of week) with lists, ranges, steps and English
+  names (`parlour_jobs::cron`). It is read in UTC, as the nightly
+  tick is. An expression Parlour can't read is treated as the hourly
+  default and logged; POD4 will refuse one at input.
+- **The tick.** Once a minute, if any show is due, a tick queues one
+  `refresh_podcasts` job `{"trigger": "schedule"}`. It doesn't when a
+  refresh job is already waiting, or when one started within the
+  hour is still running (a restart can leave a `running` row behind).
+- **The job.** It has a worker of its own, so a slow feed never holds
+  up a scan. When it runs, it checks the shows due at that moment,
+  one after another. The job's progress counts shows, and each feed
+  failure is listed on the job under the show's title. A feed's
+  failure doesn't fail the job; only a database error does. The
+  result is a summary: checked, not modified, updated, failed, new
+  and changed episodes, and schedules turned off.
+- **One show by name.** A job queued as `{"podcast_id": …}` checks
+  that one show whatever its schedule says. That is what POD4's
+  "refresh now" will queue. A check by hand counts toward the
+  failures like any other.
+
+**The Dashboard notice** (`notices.rs`, reconciled once a minute
+with the others):
+
+- **When.** A show raises one notice, `podcast_feed_failing:{id}`,
+  from its **3rd** failed check in a row.
+- **What it says.** The summary is "The feed for *show* has failed
+  *n* checks in a row". The detail holds the show's id, title and
+  library, the count, the last error and `auto_download`.
+- **Severity.** It is a warning, and becomes an error from the 24th
+  failure. Once the 24th failure has turned the schedule off, the
+  summary adds "its scheduled check is off". The severity change
+  brings back a notice an admin dismissed.
+- **Clearing.** A successful check (200 or 304) resets the count, and
+  the next pass resolves the notice.
+- **No link.** The Alerts rail has no link for it until POD4 gives
+  shows a page.
+
+**Unchanged.** The bundle stays at format v1, with no table change
+and nothing new in `coverage.rs`. `podcasts`, `podcast_episodes` and
+episode progress stay out of it. D36 is still open. The only web
+change is the job's name on the Jobs page ("Podcast feed check").
+
+#### Readings made in POD2 — for the owner's veto
+
+1. **The notice starts at the 3rd failure in a row.**
+   - *What:* a warning from the 3rd failure, an error from the 24th.
+   - *Why:* the plan said "after N failures", and no decision names
+     N. ABS has no such notice, so there is nothing to mirror. With
+     the hourly default, 3 is about three hours of failing, which a
+     host's one-off hiccup doesn't reach.
+   - *If vetoed:* `FEED_FAILING_NOTICE_AT` is one constant.
+2. **Schedules are read in UTC.**
+   - *ABS differs:* it reads them in the server's local time.
+   - *Why UTC:* the container has no `TZ` set, so its local time is
+     UTC anyway, and the nightly tick already uses UTC. The hourly
+     default is the same either way.
+   - *If vetoed:* a daily or weekly schedule would follow a
+     configured zone instead.
+3. **A show never checked is due at once, and missed firings make
+   one catch-up check.**
+   - *ABS differs:* ABS fetches the feed when a show is added, and
+     its cron doesn't catch up after downtime.
+   - *Here:* turning auto-download on for a show checked days ago
+     checks it on the next tick, once.
+4. **Only five-field cron is read.**
+   - An unreadable schedule is treated as hourly and logged, not
+     treated as a failed check. Nothing can store one until POD4,
+     which will refuse it at input.
+   - ABS's cron library also accepts a sixth, seconds field. Its UI
+     writes five fields.
+5. **One job per tick checks every show that is due, not one job per
+   show.**
+   - *Why:* the Jobs page gets one row per round instead of one per
+     show.
+   - *The job:* it lists failures by show, and a feed failure doesn't
+     fail it.
+   - *By hand:* a job naming one show (`podcast_id`) is the hook for
+     POD4's "refresh now".
+6. **Each 200 rewrites the show's described fields.** POD1's table
+   says "as its feed last described it". A missing title keeps the
+   stored one, and other missing fields are cleared. Whether ABS's
+   own scheduled check refreshes a show's details was not re-checked
+   in this run. If the owner wants checks to add episodes only, it is
+   one condition.
+7. **Matched episodes are refreshed from the feed.**
+   - *What:* when a publisher edits an episode (a title, a new
+     chapters link, a moved enclosure), the stored row follows.
+   - *Kept:* the row's guid stays as stored, so its identity holds
+     even when it was matched by enclosure URL. The `file_*` columns
+     are never touched.
+   - *ABS:* it shows undownloaded episodes from the feed as it is
+     now (POD1 reading 3), and this keeps the list the same.
+8. **Matching order: guid first across the whole feed, then
+   enclosure URL among the rows left.**
+   - That order means a re-issued guid never steals a row another
+     item holds by guid.
+   - Each row is matched once, and a feed's repeated guid keeps its
+     first item.
+9. **Validators come only from a 200 that parsed.** A broken 200
+   fails the check and leaves the old validators alone. A 304 counts
+   as a successful check (it clears the error and the count).
+10. **Fetch limits.**
+    - 60 s per fetch, 15 s to connect, 64 MB per feed.
+    - Up to 10 redirects are followed, and the stored URL is not
+      rewritten on a permanent one (POD4 can offer that).
+    - Parlour's own User-Agent, with no contact address.
+    - Any status but 200/304 is a failure.
+11. **The feed URL never leaves the database.**
+    - It isn't written to logs, job errors or notices, because paid
+      feeds put a private token in it.
+    - Errors read "the feed answered HTTP 503", "could not fetch the
+      feed: it took too long", "not an RSS feed (the document's root
+      is <html>)".
+12. **The parser is lenient where real feeds are untidy.**
+    - *Dates:* a wrong weekday is ignored. A zone RFC 822 doesn't
+      know (`BST`, `CEST`) is read as UTC, so it may be an hour or
+      two off rather than missing.
+    - *Lengths:* a duration or an enclosure length of 0 is none.
+      Minutes past 59 are read as written.
+    - *Text:* Latin-1 is read when the bytes aren't UTF-8, and common
+      HTML entities are read.
+    - *Descriptions:* kept as the feed's HTML. Showing them safely is
+      POD6's.
+    - *Transcripts:* the first one the item lists is stored. Showing
+      transcripts is deferred (D35).
+13. **After the 24th failure, the count keeps counting.**
+    - Checks by hand still count.
+    - Turning auto-download back on without a success gives the feed
+      one scheduled check: one more failure turns it off again, and a
+      success resets the count.
+    - A success never turns auto-download back on by itself.
 
 ---
 

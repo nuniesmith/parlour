@@ -178,6 +178,10 @@ should show the same anatomy with *its* reasons
   changes. The Dashboard shows errors and a pending restart
   in a banner and everything in the Alerts list — a right
   rail from 1280 px, under the server card below that.
+  *POD2 (2026-11-26):* a podcast feed failing 3 checks in a
+  row raises a notice per show with the count (an error from
+  the 24th, when its schedule turns itself off, D32); a
+  successful check clears it.
 - **Now Playing (UI3)**: session cards with §1.4's anatomy
   fed by the existing registry, extended server-side to
   carry the playback plan (container/codecs → mode +
