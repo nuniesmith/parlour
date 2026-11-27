@@ -150,7 +150,9 @@ The owner uses subtitles on most playback.
   each show's retention. A podcasts library is never scanned (POD3,
   "Episode download and retention (POD3)"). Admins add shows by
   feed address or OPML on Server → Podcasts, where the feed is read
-  before anything is stored (POD4, "Managing feeds (POD4)").
+  before anything is stored (POD4, "Managing feeds (POD4)"), or from
+  a search of Apple's podcast directory that only the server makes
+  (POD7, "Directory search (POD7)").
   Listeners reach shows through `/api/v1/podcasts` and
   `/api/v1/podcast-episodes` (POD5, "Native API (POD5)"): a
   downloaded episode streams from the store with Range, one that
@@ -466,6 +468,10 @@ The owner uses subtitles on most playback.
   Prowlarr → qBittorrent → library flow inside the requests UI.
 - Integration credentials are stored encrypted in the DB, set by an
   admin, never shown to normal users and never sent to clients.
+- Apple's podcast directory (the iTunes Search API, no key; D31) is
+  asked by the server for an admin's search on Server → Podcasts
+  (POD7). Pages never call it, and a feed address typed as a query
+  is refused before anything is sent.
 
 ## 9. Clients
 

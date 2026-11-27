@@ -888,6 +888,21 @@ async fn show_with_url(
         .await
 }
 
+async fn show_with_itunes_id(
+    pool: &parlour_db::PgPool,
+    library_id: Uuid,
+    itunes_id: i64,
+) -> Result<Option<(Uuid, String)>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT id, title FROM podcasts WHERE library_id = $1 AND itunes_id = $2
+         ORDER BY created_at, id LIMIT 1",
+    )
+    .bind(library_id)
+    .bind(itunes_id)
+    .fetch_optional(pool)
+    .await
+}
+
 /// Add a feed to a podcasts library (POD4, D31: the caller has checked
 /// that an admin asked and that the library is a podcasts library).
 ///
@@ -900,19 +915,35 @@ async fn show_with_url(
 /// back catalogue waits for a download by hand, as in POD3.
 /// `fallback_title` names a feed without a title (an OPML outline's
 /// text), else it is "Untitled podcast".
+///
+/// `itunes_id` is Apple's id for the show when it was added from a
+/// directory search (POD7). It is stored in `podcasts.itunes_id`, and a
+/// show already in the library under that id is a duplicate too, as
+/// the search marks it "already added".
 pub async fn add_podcast(
     pool: &parlour_db::PgPool,
     http: &reqwest::Client,
     library_id: Uuid,
     feed_url: &str,
     fallback_title: Option<&str>,
+    itunes_id: Option<i64>,
 ) -> Result<AddOutcome, sqlx::Error> {
     let url = match check_feed_url(feed_url) {
         Ok(url) => url,
         Err(error) => return Ok(AddOutcome::Refused { error }),
     };
+    if itunes_id.is_some_and(|n| n <= 0) {
+        return Ok(AddOutcome::Refused {
+            error: "that isn't an Apple podcast id".into(),
+        });
+    }
     if let Some((id, title)) = show_with_url(pool, library_id, &url).await? {
         return Ok(AddOutcome::Duplicate { id, title });
+    }
+    if let Some(itunes_id) = itunes_id {
+        if let Some((id, title)) = show_with_itunes_id(pool, library_id, itunes_id).await? {
+            return Ok(AddOutcome::Duplicate { id, title });
+        }
     }
     let (feed, etag, last_modified) = match read_new_feed(http, &url).await {
         Ok(read) => read,
@@ -930,8 +961,8 @@ pub async fn add_podcast(
         .unwrap_or_else(|| UNTITLED.to_string());
     let mut tx = pool.begin().await?;
     let row: Option<(Uuid,)> = sqlx::query_as(
-        "INSERT INTO podcasts (library_id, feed_url, title, sort_title)
-         VALUES ($1, $2, $3, $4)
+        "INSERT INTO podcasts (library_id, feed_url, title, sort_title, itunes_id)
+         VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT (library_id, feed_url) DO NOTHING
          RETURNING id",
     )
@@ -939,6 +970,7 @@ pub async fn add_podcast(
     .bind(&url)
     .bind(&title)
     .bind(crate::parse::sort_title(&title))
+    .bind(itunes_id)
     .fetch_optional(&mut *tx)
     .await?;
     let Some((id,)) = row else {

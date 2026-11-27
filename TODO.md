@@ -1225,9 +1225,9 @@ hourly check / keep N (0 = all) / 3 new per check. Details:
 their original wording; read them through that.
 
 POD1 (the schema), POD2 (feed checks), POD3 (downloads and
-retention), POD4 (managing feeds), POD5 (the listener API) and POD6
-(the web pages and player) are built; POD7–POD8 are plan only. Spec:
-`docs/AUDIOBOOKS-PODCASTS.md`.
+retention), POD4 (managing feeds), POD5 (the listener API), POD6
+(the web pages and player) and POD7 (directory search) are built;
+POD8 is plan only. Spec: `docs/AUDIOBOOKS-PODCASTS.md`.
 
 - [x] POD1 (M) **Schema**: `podcasts` (feed URL, metadata,
   ETag/Last-Modified, refresh state), `podcast_episodes`
@@ -1456,8 +1456,39 @@ retention), POD4 (managing feeds), POD5 (the listener API) and POD6
   of shows. The bundle is unchanged (format v1, D36 open). Flow:
   `podcast_pages_flow.rs`. Spec: AUDIOBOOKS-PODCASTS.md "Web pages and
   player (POD6)" (15 readings for veto).
-- [ ] POD7 (S) **Directory search** (Apple / Podcast Index) —
+- [x] POD7 (S) **Directory search** (Apple / Podcast Index) —
   only if **D31** wants it. *D31: yes, Apple's search API.*
+  *Done 2026-11-27:* built to **D31** (Apple's search API, no key,
+  admins only). No migration: `podcasts.itunes_id` is POD1's, written
+  here for the first time.
+  - **Search.** `POST /api/v1/admin/libraries/{id}/podcasts/search`
+    `{"query", "country"?}` asks Apple's iTunes Search API
+    (`parlour_catalog::podcast_directory`): 25 results, 15 s, 2 MB, store
+    country US by default. Only the server asks Apple. The query is in
+    the body, never in a URL or the log. A feed address typed as a query
+    is refused before anything is sent, because it may hold a token.
+  - **Results** carry title, author, the feed address (admins only),
+    Apple's artwork (only `*.mzstatic.com`, shown with no referrer),
+    genres, episode count, explicit and latest date. A result with no
+    feed address says it can't be added.
+  - **Already added.** A result is marked "already added" when its show
+    is in this library, by Apple's id first, else by its exact feed
+    address. It then links to the show's Server → Podcasts page.
+  - **Add** is POD4's add with `itunes_id`. The feed is read in the
+    request and stored with its first check, and the artwork is cached
+    afterwards (POD6). A duplicate address or Apple id is a 409, and a
+    refused feed is a 400 that stores nothing.
+  - **Apple failing** is a 502 (`AppError::Upstream`) that names the
+    reason, never the query.
+  - **The page.** The search sits on Server → Podcasts, under the shows
+    table and above "Add a show by its address". Errors show per result.
+  - **Checked.** In headless Chromium against a private instance of
+    this branch and a stub Apple host on the loopback: 49 checks, all
+    passed. The live test instance predates POD1.
+
+  The bundle is unchanged (format v1, D36 open). Flow:
+  `podcast_search_flow.rs`. Spec: AUDIOBOOKS-PODCASTS.md "Directory
+  search (POD7)" (13 readings for veto).
 - [ ] POD8 (S) **Up Next queue / playlists synced** — only if
   **D35** says server-synced. *D35: playlists sync (per
   profile per library); the Up Next queue stays on the device.*

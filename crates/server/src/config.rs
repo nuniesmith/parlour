@@ -48,6 +48,9 @@ pub struct Config {
     pub google_books_base: Option<String>,
     pub open_library_base: Option<String>,
     pub open_library_covers_base: Option<String>,
+    /// POD7: Apple's podcast directory base-URL override
+    /// (`PARLOUR_APPLE_SEARCH_BASE`; tests point it at a stub).
+    pub apple_search_base: Option<String>,
     /// Local artwork cache directory (`PARLOUR_ARTWORK_DIR`).
     pub artwork_dir: PathBuf,
     pub emby_url: Option<String>,
@@ -170,6 +173,7 @@ impl Config {
         let google_books_base = nonblank("PARLOUR_GOOGLE_BOOKS_BASE");
         let open_library_base = nonblank("PARLOUR_OPEN_LIBRARY_BASE");
         let open_library_covers_base = nonblank("PARLOUR_OPEN_LIBRARY_COVERS_BASE");
+        let apple_search_base = nonblank("PARLOUR_APPLE_SEARCH_BASE");
         let emby_url = vars
             .get("PARLOUR_EMBY_URL")
             .filter(|s| !s.trim().is_empty())
@@ -229,6 +233,7 @@ impl Config {
             google_books_base,
             open_library_base,
             open_library_covers_base,
+            apple_search_base,
             artwork_dir,
             emby_url,
             emby_api_key,

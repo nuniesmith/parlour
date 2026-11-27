@@ -237,7 +237,10 @@
       {#if show.genres.length}<dt>Genres</dt><dd>{show.genres.join(', ')}</dd>{/if}
       {#if show.explicit}<dt>Explicit</dt><dd>Yes</dd>{/if}
       <dt>Added</dt>
-      <dd>{formatDateTime(show.created_at)}</dd>
+      <dd>
+        {formatDateTime(show.created_at)}{#if show.itunes_id !== null}, from Apple's podcast directory
+          <span class="dim">(id {show.itunes_id})</span>{/if}
+      </dd>
     </dl>
     <p class="dim small">The feed address can hold a private token; it is shown only to admins.</p>
   </section>
