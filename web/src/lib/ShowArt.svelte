@@ -2,11 +2,20 @@
   // POD6: a show's artwork — Parlour's cached copy (never the
   // publisher's address, POD4 reading 11) — or, when there is none or
   // it can't be loaded, a plain initial tile, as the book pages do.
+  // POD7: `noReferrer` for an image off Parlour's origin (Apple's
+  // artwork in an admin's directory results), so Apple isn't told which
+  // Parlour page asked.
   let {
     url,
     title,
     size = 'md',
-  }: { url: string | null; title: string; size?: 'sm' | 'md' | 'lg' } = $props();
+    noReferrer = false,
+  }: {
+    url: string | null;
+    title: string;
+    size?: 'sm' | 'md' | 'lg';
+    noReferrer?: boolean;
+  } = $props();
 
   let broken = $state<string | null>(null);
   const initial = $derived(
@@ -16,7 +25,13 @@
 
 <span class="art {size}">
   {#if url && broken !== url}
-    <img src={url} alt="" loading="lazy" onerror={() => (broken = url)} />
+    <img
+      src={url}
+      alt=""
+      loading="lazy"
+      referrerpolicy={noReferrer ? 'no-referrer' : undefined}
+      onerror={() => (broken = url)}
+    />
   {:else}
     <span class="tile" aria-hidden="true">{initial}</span>
   {/if}

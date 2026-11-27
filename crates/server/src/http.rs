@@ -56,6 +56,10 @@ pub struct AppState {
     /// POD4: the client an admin's add-by-URL and OPML import fetch
     /// feeds with (the same settings as the feed checks).
     pub podcast_http: reqwest::Client,
+    /// POD7: Apple's podcast directory (the iTunes Search API) that an
+    /// admin's directory search asks; `main` sets an override from
+    /// `PARLOUR_APPLE_SEARCH_BASE`, and tests point it at a stub.
+    pub apple_search_base: String,
 }
 
 impl AppState {
@@ -73,6 +77,7 @@ impl AppState {
             import_dir: crate::import::import_dir(std::path::Path::new("cache")),
             backup: None,
             podcast_http: parlour_catalog::podcasts::http_client(),
+            apple_search_base: parlour_catalog::podcast_directory::APPLE_SEARCH_BASE.to_string(),
         }
     }
 }

@@ -20,6 +20,11 @@ pub enum AppError {
     Conflict(String),
     #[error("rate limited, retry in {0}s")]
     RateLimited(u64),
+    /// An outside service Parlour asked on the caller's behalf failed
+    /// (POD7: Apple's directory). The message is shown to the caller,
+    /// so it must not repeat a query or an address.
+    #[error("upstream error: {0}")]
+    Upstream(String),
     #[error("database error")]
     Db(#[from] parlour_db::DbError),
     #[error("internal error: {0}")]
@@ -38,6 +43,7 @@ impl AppError {
                 "rate_limited",
                 format!("too many failed attempts — retry in {secs} seconds"),
             ),
+            AppError::Upstream(why) => (StatusCode::BAD_GATEWAY, "upstream_error", why.clone()),
             AppError::Db(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "database_error",

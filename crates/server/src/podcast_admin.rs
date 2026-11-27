@@ -16,6 +16,13 @@
 //!   was added, skipped and refused, by name, never by address.
 //! - `GET  /api/v1/admin/libraries/{id}/podcasts/opml` — the library's
 //!   shows as an OPML file.
+//! - `POST /api/v1/admin/libraries/{id}/podcasts/search`
+//!   `{"query", "country"?}` — POD7: search Apple's podcast directory
+//!   (the iTunes Search API, no key). Each result says whether it is
+//!   already in this library (by Apple's id or by its feed address) and
+//!   is added with the add above, `{"feed_url", "itunes_id"}`. Only the
+//!   server talks to Apple; the query is never logged, and a feed
+//!   address typed as a query is refused before anything is sent.
 //! - `GET  /api/v1/admin/podcasts/{id}` — a show, its settings and its
 //!   episode list (downloaded or not).
 //! - `PUT  /api/v1/admin/podcasts/{id}/settings` — D32's four settings;
@@ -43,6 +50,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
+use parlour_catalog::podcast_directory::{self, DirectoryShow};
 use parlour_catalog::podcasts::{AddOutcome, ShowSettings};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -121,6 +129,10 @@ async fn list_shows(
 #[serde(deny_unknown_fields)]
 struct AddBody {
     feed_url: String,
+    /// POD7: Apple's id for the show, when it is added from a directory
+    /// search result.
+    #[serde(default)]
+    itunes_id: Option<i64>,
 }
 
 async fn add_show(
@@ -136,6 +148,7 @@ async fn add_show(
         library_id,
         &body.feed_url,
         None,
+        body.itunes_id,
     )
     .await
     .map_err(AppError::from)?;
@@ -151,12 +164,112 @@ async fn add_show(
             Ok((StatusCode::CREATED, Json(load_show(&state, id).await?)))
         }
         AddOutcome::Duplicate { title, .. } => Err(AppError::Conflict(format!(
-            "This library already has that feed (\u{201c}{title}\u{201d})."
+            "This library already has that show (\u{201c}{title}\u{201d})."
         ))),
         AddOutcome::Refused { error } => Err(AppError::BadRequest(format!(
             "That address can't be added: {error}."
         ))),
     }
+}
+
+// --------------------------------------------------------- directory
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SearchBody {
+    query: String,
+    #[serde(default)]
+    country: Option<String>,
+}
+
+/// The show a result is already in this library as.
+#[derive(Serialize, Clone)]
+struct AlreadyAdded {
+    podcast_id: Uuid,
+    title: String,
+}
+
+#[derive(Serialize)]
+struct SearchResult {
+    #[serde(flatten)]
+    show: DirectoryShow,
+    /// The show this result already is in this library, matched by
+    /// Apple's id first, else by the exact feed address; null when it
+    /// can be added.
+    added: Option<AlreadyAdded>,
+}
+
+#[derive(Serialize)]
+struct SearchAnswer {
+    /// The store country searched.
+    country: String,
+    results: Vec<SearchResult>,
+}
+
+/// Mark each result that is already in the library: by Apple's id
+/// (shows added from a search keep it), else by its feed address typed
+/// exactly as Apple lists it (shows added by address or OPML).
+fn mark_added(
+    shows: Vec<DirectoryShow>,
+    in_library: &[(Uuid, String, Option<i64>, String)],
+) -> Vec<SearchResult> {
+    shows
+        .into_iter()
+        .map(|show| {
+            let by_id = in_library
+                .iter()
+                .find(|(_, _, itunes_id, _)| *itunes_id == Some(show.itunes_id));
+            let by_url = || {
+                show.feed_url
+                    .as_deref()
+                    .and_then(|u| in_library.iter().find(|(_, _, _, url)| url == u))
+            };
+            let added = by_id.or_else(by_url).map(|(id, title, _, _)| AlreadyAdded {
+                podcast_id: *id,
+                title: title.clone(),
+            });
+            SearchResult { show, added }
+        })
+        .collect()
+}
+
+async fn search_directory(
+    State(state): State<AppState>,
+    _admin: AdminUser,
+    Path(id): Path<String>,
+    Json(body): Json<SearchBody>,
+) -> Result<Json<SearchAnswer>, AppError> {
+    let (library_id, _) = podcasts_library(&state, &id).await?;
+    let query = podcast_directory::check_query(&body.query).map_err(AppError::BadRequest)?;
+    let country =
+        podcast_directory::check_country(body.country.as_deref()).map_err(AppError::BadRequest)?;
+    // The query is not logged: it is the admin's, and may be anything.
+    let shows = podcast_directory::search(
+        &state.podcast_http,
+        &state.apple_search_base,
+        &query,
+        &country,
+    )
+    .await
+    .map_err(|e| AppError::Upstream(format!("{e}.")))?;
+    let ids: Vec<i64> = shows.iter().map(|s| s.itunes_id).collect();
+    let urls: Vec<String> = shows.iter().filter_map(|s| s.feed_url.clone()).collect();
+    let in_library: Vec<(Uuid, String, Option<i64>, String)> = sqlx::query_as(
+        "SELECT id, title, itunes_id, feed_url FROM podcasts
+         WHERE library_id = $1 AND (itunes_id = ANY($2) OR feed_url = ANY($3))
+         ORDER BY created_at, id",
+    )
+    .bind(library_id)
+    .bind(&ids)
+    .bind(&urls)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(AppError::from)?;
+    let results = mark_added(shows, &in_library);
+    tracing::info!(library_id = %library_id, country = %country, results = results.len(),
+        already_added = results.iter().filter(|r| r.added.is_some()).count(),
+        "podcast directory searched");
+    Ok(Json(SearchAnswer { country, results }))
 }
 
 // ------------------------------------------------------------------ OPML
@@ -235,6 +348,7 @@ async fn import_opml(
                 library_id,
                 &url,
                 title.as_deref(),
+                None,
             )
             .await;
             (i, title, outcome)
@@ -389,6 +503,8 @@ pub struct ShowDetail {
     explicit: bool,
     podcast_type: Option<String>,
     genres: Vec<String>,
+    /// POD7: Apple's id, when the show was added from a directory search.
+    itunes_id: Option<i64>,
     /// Admins only: it may hold a private token.
     feed_url: String,
     folder_path: Option<String>,
@@ -416,6 +532,7 @@ struct ShowRow {
     explicit: bool,
     podcast_type: Option<String>,
     genres: Vec<String>,
+    itunes_id: Option<i64>,
     feed_url: String,
     folder_path: Option<String>,
     last_checked_at: Option<DateTime<Utc>>,
@@ -432,7 +549,8 @@ struct ShowRow {
 async fn load_show(state: &AppState, id: Uuid) -> Result<ShowDetail, AppError> {
     let row: Option<ShowRow> = sqlx::query_as(
         "SELECT p.id, p.library_id, l.name AS library_name, p.title, p.sort_title, p.author,
-                p.language, p.explicit, p.podcast_type, p.genres, p.feed_url, p.folder_path,
+                p.language, p.explicit, p.podcast_type, p.genres, p.itunes_id, p.feed_url,
+                p.folder_path,
                 p.last_checked_at, p.last_error, p.consecutive_failures, p.auto_download,
                 p.check_schedule, p.max_episodes_to_keep, p.max_new_episodes_per_check,
                 EXISTS (SELECT 1 FROM jobs j
@@ -479,6 +597,7 @@ async fn load_show(state: &AppState, id: Uuid) -> Result<ShowDetail, AppError> {
         explicit: row.explicit,
         podcast_type: row.podcast_type,
         genres: row.genres,
+        itunes_id: row.itunes_id,
         feed_url: row.feed_url,
         folder_path: row.folder_path,
         last_checked_at: row.last_checked_at,
@@ -640,6 +759,10 @@ pub fn routes() -> Router<AppState> {
             get(list_shows).post(add_show),
         )
         .route(
+            "/api/v1/admin/libraries/{id}/podcasts/search",
+            post(search_directory),
+        )
+        .route(
             "/api/v1/admin/libraries/{id}/podcasts/opml",
             get(export_opml).post(import_opml),
         )
@@ -655,6 +778,58 @@ pub fn routes() -> Router<AppState> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn result(itunes_id: i64, feed_url: Option<&str>) -> DirectoryShow {
+        DirectoryShow {
+            itunes_id,
+            title: format!("Show {itunes_id}"),
+            author: None,
+            feed_url: feed_url.map(str::to_string),
+            artwork_url: None,
+            genres: vec![],
+            episode_count: None,
+            explicit: false,
+            latest_episode_at: None,
+        }
+    }
+
+    #[test]
+    fn results_already_in_the_library_are_marked() {
+        let by_id = Uuid::from_u128(1);
+        let by_url = Uuid::from_u128(2);
+        let library = vec![
+            // Added from a search: Apple's id matches though the feed
+            // has moved since.
+            (
+                by_id,
+                "Moved".to_string(),
+                Some(11),
+                "https://old.example/a".to_string(),
+            ),
+            // Added by address: no id, the address matches exactly.
+            (
+                by_url,
+                "Typed".to_string(),
+                None,
+                "https://feeds.example/b".to_string(),
+            ),
+        ];
+        let marked = mark_added(
+            vec![
+                result(11, Some("https://new.example/a")),
+                result(12, Some("https://feeds.example/b")),
+                result(13, Some("https://FEEDS.example/b")),
+                result(14, None),
+            ],
+            &library,
+        );
+        let added: Vec<Option<Uuid>> = marked
+            .iter()
+            .map(|r| r.added.as_ref().map(|a| a.podcast_id))
+            .collect();
+        assert_eq!(added, [Some(by_id), Some(by_url), None, None]);
+        assert_eq!(marked[0].added.as_ref().unwrap().title, "Moved");
+    }
 
     #[test]
     fn opml_file_names_are_plain_ascii() {

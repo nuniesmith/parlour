@@ -1339,7 +1339,7 @@ not yet scheduled in a PR:
 
 ---
 
-## Phase 11 — Podcasts (POD1's schema, POD2's feed checks, POD3's downloads and POD4's feed management built 2026-11-26; POD5's listener API and POD6's web pages and player built 2026-11-27; the rest is plan)
+## Phase 11 — Podcasts (POD1's schema, POD2's feed checks, POD3's downloads and POD4's feed management built 2026-11-26; POD5's listener API, POD6's web pages and player and POD7's directory search built 2026-11-27; the rest is plan)
 
 The server owns the feeds. Clients never fetch RSS themselves, which
 is what lets a Fire Stick, a tablet and the phone agree.
@@ -1358,6 +1358,7 @@ kept below it.
 - **Only admins add shows** — by searching Apple's (iTunes)
   directory (no key), by RSS URL, or by OPML import (admin-only);
   OPML export too. POD7 becomes Apple search, not Podcast Index.
+  *Built in POD7 ("Directory search (POD7)").*
 - **The server downloads episodes** (ABS is not a pass-through). An
   episode not downloaded shows in the feed list and can be
   downloaded by hand. *As decided on 2026-11-24, only downloaded
@@ -2455,7 +2456,8 @@ checked before anything is stored:
   reading 10).
 - **Editing a show's title.**
 - **Showing artwork or descriptions.**
-- **Directory search.** That is POD7.
+- **Directory search.** That is POD7. *Built in POD7 ("Directory
+  search (POD7)").*
 - **The library's finish rule for episodes.** That is POD5 (reading
   10).
 
@@ -2768,7 +2770,7 @@ Hidden) and a note on what it does.
 
 - The listener pages and player (POD6). *Built in POD6.*
 - Show artwork (POD6 caches it; POD4 reading 11). *Built in POD6.*
-- Directory search (POD7).
+- Directory search (POD7). *Built in POD7.*
 - Bookmarks, playlists and collections (D35, CL2/POD phases).
 - A bulk episode progress sync (CL2).
 - Removing a show.
@@ -3360,6 +3362,332 @@ count the library's `media_items`, which for podcasts is always 0.
 15. **A show's page lists 50 episodes at a time, with "Show more".**
     The API sends the whole list (POD5), and a long-running show can
     have more than a thousand episodes.
+
+### Directory search (POD7, built 2026-11-27)
+
+POD7 is the third way an admin adds a show, beside POD4's add by
+address and OPML import: an admin searches **Apple's podcast directory**
+(the iTunes Search API, which needs no key) and adds a show from the
+results. D31 decided it this way: Apple's search, not Podcast Index, and
+only admins add shows.
+
+There is **no migration**. `podcasts.itunes_id` is POD1's column (POD1
+reading 12 kept it for this), filled here for the first time. The bundle
+stays at format v1 (`podcasts` stays *left out*, and with it
+`itunes_id`). The flow `crates/server/tests/podcast_search_flow.rs` runs
+the server side on a fresh database. A local stub on the loopback stands
+in for both Apple's API and the feed host, so the test never reaches the
+real Apple API or the internet. The page was checked in headless
+Chromium against a private instance of this branch (below).
+
+Audiobookshelf's behaviour cited here is from general knowledge
+(behaviour only), as in POD4; it was not re-checked against ABS's
+source. Nothing was copied. Apple's answer shape (`collectionId`,
+`collectionName`, `artistName`, `feedUrl`, `artworkUrl600`, `genres`,
+`trackCount`, `collectionExplicitness`, `releaseDate`) was confirmed on
+2026-11-27 with one request made by hand, outside any test.
+
+**The code:**
+
+- `parlour_catalog::podcast_directory` holds the query checks, a pure
+  reader for Apple's answer (fixture-tested against
+  `crates/catalog/tests/fixtures/podcasts/directory-search.json`, which
+  is made-up data), and the client.
+- `podcast_admin.rs` gains the search route and the "already added"
+  marking. The add route takes an optional `itunes_id`, and the show
+  page's data carries it.
+- `web/src/routes/admin/podcasts/+page.svelte` holds the search.
+- `AppError::Upstream` is a 502 for an outside service that failed on
+  the caller's behalf.
+
+**Who (D31).** The search is an admin route under `/api/v1/admin/`, and
+it answers 404 to anyone who isn't an admin (401 when signed out), as
+POD4's routes do. The search box is on Server → Podcasts, which
+non-admins never see. Listeners never search the directory, and no
+listener page or answer carries anything of Apple's.
+
+**The API.**
+
+| Route | What |
+|---|---|
+| `POST /api/v1/admin/libraries/{id}/podcasts/search` `{"query", "country"?}` | Search Apple's directory. 200 with `{country, results}`. |
+| `POST /api/v1/admin/libraries/{id}/podcasts` `{"feed_url", "itunes_id"?}` | POD4's add. With `itunes_id`, the show keeps Apple's id (below). |
+
+A library that isn't a podcasts library is a 400, and an unknown one is
+a 404, as in POD4.
+
+**The search.**
+
+1. **The query** has its white space folded. These are refused with a
+   400, and **nothing is sent to Apple**:
+   - an empty query;
+   - one over 200 characters;
+   - one that looks like a web address (reading 7): "That looks like a
+     feed's address, so it wasn't sent to Apple. Add it under "Add a
+     show by its address" instead." A paid feed's address carries a
+     private token, and Apple must never be handed it.
+2. **The store country** is two letters, upper-cased, and `US` when it
+   is blank or absent (reading 9). Anything else is a 400.
+3. **The request.** Only the server asks Apple. It sends
+   `GET {base}/search` with `term`, `media=podcast`, `entity=podcast`,
+   `country` and `limit=25`, using Parlour's User-Agent (the feed
+   client's, with no contact address).
+   - **The base** is `https://itunes.apple.com`.
+     `PARLOUR_APPLE_SEARCH_BASE` overrides it for tests and stubs, and
+     is never set in production.
+   - **The limits:** 15 s all told, and an answer of at most 2 MB.
+     Anything but a 200 is a failure.
+4. **The answer.** Results are listed in Apple's order. Each has:
+   - `itunes_id` (Apple's `collectionId`, else `trackId`);
+   - `title` and `author`;
+   - `feed_url`;
+   - `artwork_url` (reading 5);
+   - `genres` (Apple's list without its catch-all "Podcasts", else the
+     primary genre);
+   - `episode_count` (`trackCount`);
+   - `explicit` (Apple's marking);
+   - `latest_episode_at` (`releaseDate`);
+   - `added` (below).
+
+   What is skipped or blanked:
+   - **Skipped:** a result Apple marks as something other than a
+     podcast, one without a positive id or a title, and an id seen
+     before.
+   - **No feed address:** a `feedUrl` that is missing or isn't an
+     `http`/`https` address (POD4's check) becomes `null`. Such a
+     result can't be added, and says so.
+5. **Failures** are a **502** that names Apple and the reason. The
+   errors drop the request's URL (`without_url`), which holds the query.
+   They never repeat the query or an address. For example:
+   - "Apple's podcast directory answered HTTP 503."
+   - "Apple's podcast directory couldn't be reached: it took too long."
+   - "Apple's podcast directory sent an answer Parlour can't read."
+   - "Apple's podcast directory sent an answer larger than 2 MB."
+6. **The log** records the library, the country and the counts, never
+   the query (reading 6).
+
+**Already added (reading 2).** A result is marked `added: {podcast_id,
+title}` when its show is already in **this** library:
+
+- **by Apple's id:** a show added from a search keeps it, even if its
+  feed has moved since;
+- **else by its feed address**, exactly as Apple lists it: a show added
+  by address or OPML has no Apple id.
+
+The page shows "Already added" and an **Open** link to the show's
+Server → Podcasts page instead of Add. A show in another podcasts
+library doesn't mark the result, because that library may hold it too
+(POD4's rule).
+
+**Adding from a result.** "Add" sends POD4's add with the result's feed
+address and Apple's id. It is POD4's add path, unchanged:
+
+- **The first check.** The feed is fetched and read in the request, and
+  the show is stored with its first check in one transaction (POD4
+  reading 1). It gets ABS's default settings, and nothing is
+  downloaded.
+- **The artwork** is the feed's own, cached in the background
+  afterwards (POD6). It is not Apple's.
+- **Duplicates.** The same address in the library is a **409** naming
+  the show. So is **the same Apple id** in the library (reading 3), so
+  what the search marks "already added" can't be added twice.
+- **Refusals.** A result whose feed fails the check is refused with a
+  400 and the reason ("That address can't be added: not an RSS feed
+  (the document's root is <html>)."), and nothing is stored. An
+  `itunes_id` that isn't a positive number is refused too.
+- **Where the id goes.** `podcasts.itunes_id` is written only here.
+  POD2's check never touches it, and an add by address or OPML leaves
+  it NULL. The show's page (Details → Added) says "from Apple's podcast
+  directory (id …)".
+
+POD4's duplicate message now reads "This library already has that show
+(…)" (it said "that feed"), because the duplicate may be found by
+Apple's id.
+
+**The page (reading 1).** The search is on Server → Podcasts
+(`/admin/podcasts`), under the shows table and above "Add a show by its
+address" (POD4's form, renamed from "Add a show"), for the library the
+picker has chosen.
+
+- **The box.** A search box and a two-letter "Store" box (default US).
+  The search runs when the admin presses Search, never while typing.
+- **The results.** One row per result, with:
+  - Apple's artwork, else an initial tile;
+  - the title, with an "Explicit" badge where Apple marks one;
+  - the author;
+  - the genres, the episode count and the latest episode's date;
+  - the feed address, small, for the admin.
+- **The action** on each row:
+  - **Add**, which reads "Checking the feed…" while it works. One add
+    runs at a time.
+  - **Already added** with **Open**.
+  - "Apple lists no feed address for this show, so it can't be added."
+- **Outcomes**, handled per result as the add form handles them:
+  - **A successful add** turns its row into "Already added", says
+    "Added "*Show*" with *n* episodes", and reloads the shows table.
+  - **A refused or duplicate add** shows its error on that result's
+    row, and the row keeps its Add.
+- **Errors.** A refused query or a failed search shows its error above
+  the results. Changing the library clears the results.
+- **On a phone** a row's actions sit under its text.
+
+**Checked in a browser (2026-11-27).**
+
+- **Why not the test instance.** The live test instance still runs a
+  build from before POD1 and has no podcast tables. It was not
+  redeployed or restarted.
+- **The setup.** The checks ran against a private instance of this
+  branch on oryx's loopback, with:
+  - its own throwaway Postgres;
+  - `PARLOUR_APPLE_SEARCH_BASE` pointed at a Python stub on the
+    loopback, which answered as Apple and also served feeds with
+    tokenised addresses, an HTML page and PNG artwork.
+- **The run.** chrome-headless-shell 151 over CDP: **49 checks, 49
+  passed**. They cover:
+  - the search box's place and default country;
+  - five results in Apple's order, with author, genres, count, date,
+    feed address and Apple's artwork (sent without a Referer);
+  - a publisher's artwork address dropped for an initial tile;
+  - the explicit badge;
+  - the show added by address marked "Already added", linking to its
+    page;
+  - the no-feed result saying it can't be added;
+  - Add from a result: the row turns, the notice, the table, the Apple
+    id stored, and the show's artwork fetched by the server;
+  - a refused feed's error on its row, with no token or address, and
+    nothing stored;
+  - the show page's "from Apple's podcast directory";
+  - a new search marking the added show;
+  - a feed address typed as a query: refused, never sent to Apple, the
+    token not repeated;
+  - Apple answering 503, reported without the query;
+  - no results;
+  - store country CA, sent and shown;
+  - switching library: results cleared, and nothing marked in the
+    second library;
+  - a phone-width layout with no sideways scroll;
+  - a non-admin: the search route a 404, the page "Page not found", and
+    Apple never reached.
+- **What left Parlour.** The browser's only requests off Parlour's
+  origin were the result artwork images (Apple's CDN, played by the
+  stub), sent with no Referer. Every search the stub saw came from the
+  server (Parlour's User-Agent). The server's log held no token and no
+  query.
+- **Not exercised:** Apple timing out (15 s) or refusing the
+  connection. The 2 MB limit, an unreadable answer and a 503 are in the
+  flow test.
+
+**Not built here:**
+
+- **Searching from the listener pages** (UI-AUDIO-REFERENCE §4.1's
+  Search button for shows and episodes): that is global search (POD6
+  reading 14), not the directory.
+- **Podcast Index.** D31 chose Apple.
+- **Remembering the store country** between visits.
+- **Removing a show**, still not built (POD4).
+- **Showing Apple's description or episode list** before adding: the
+  add reads the feed itself.
+
+#### Readings made in POD7 — for the owner's veto
+
+1. **The search is on Server → Podcasts' list page, not a view of its
+   own.**
+   - *Where:* under the shows table, above the add-by-address form, for
+     the library the picker has chosen.
+   - *Why:* the three ways to add a show are then on one page, and
+     "already added" is a property of the chosen library.
+   - *If vetoed:* moving the section to `/admin/podcasts/search` is a
+     page move, not an API change.
+2. **"Already added" means in this library, matched by Apple's id
+   first, else by the exact feed address.**
+   - *Why this library:* a feed is unique per library (POD1), and
+     another podcasts library may hold the same show (POD4). Marking a
+     show held only by another library would block a legitimate add.
+   - *Why exact:* addresses are stored as typed and compared exactly
+     (POD4 reading 5). A show added by address whose address differs
+     from Apple's listing (`http` vs `https`, a token) isn't marked.
+     Adding it then either works (another address of the same show) or
+     is refused if the feed is the same address.
+   - *If vetoed:* marking across libraries is one condition in the
+     query, plus a label naming the other library.
+3. **Apple's id is stored at add only, and an id already in the library
+   is a duplicate.**
+   - *What:* `itunes_id` is written by the add from a search, never by
+     a check, an add by address or OPML.
+   - *Why the duplicate:* it makes the add agree with the search's
+     mark. A show whose feed has moved is still "already added".
+   - *Cost:* there is no unique index (that would be a migration), so
+     two admins adding the same Apple show at the same moment under two
+     different addresses could both succeed. The search marks the
+     first.
+4. **The page sends the feed address and Apple's id back to the add;
+   the server doesn't ask Apple again to confirm the pair.**
+   - *Why:* the add route is admin-only, the id is used only for the
+     mark and the duplicate check, and a second Apple request per add
+     would add a failure point.
+   - *If vetoed:* the add looks the id up (`/lookup?id=`) and uses
+     Apple's address, ignoring the page's.
+5. **Result artwork is Apple's CDN address, shown in the admin-only
+   results.**
+   - *What:* only `https` addresses on `*.mzstatic.com` are kept. Any
+     other address, such as a publisher's, is dropped for an initial
+     tile.
+   - *Why:* AB6's admin match results show the providers' cover
+     addresses the same way. The address is Apple's, not a feed's
+     tokenised one, and only an admin's browser loads it, with
+     `referrerpolicy="no-referrer"`.
+   - *Cost:* Apple's CDN sees the admin's IP. No listener page ever
+     loads it.
+   - *After the add:* the show's artwork is the feed's, through POD6's
+     cache.
+   - *If vetoed:* initial tiles only, which is dropping `artwork_url`
+     from the answer.
+6. **The search is a POST with the query in its body, and the query is
+   never logged.**
+   - *Why:* a GET would put the query in URLs: the reverse proxy's
+     access log, the browser's history. A pasted feed address with its
+     token would land there before reading 7 could refuse it.
+   - *What Parlour logs:* the library, the country and the counts.
+7. **A query that looks like a web address is refused before anything
+   is sent to Apple.**
+   - *What counts:* one starting `http://`, `https://`, `feed:`,
+     `itpc://`, `pcast://` or `www.`, or a single word holding a dot
+     and a `/` or `?` (`feeds.example.com/show?token=…`).
+   - *What doesn't:* ordinary searches with dots or slashes and spaces
+     ("Mr. Robot recap", "AC/DC stories").
+   - *Why:* a paid feed's address carries a private token, and Apple
+     must not be handed it. The add-by-address form is the place for an
+     address.
+8. **The limits are 25 results, 15 s, 2 MB, and 200 characters for a
+   query.**
+   - *The term:* Apple's `term` search, without `attribute`, matches
+     titles, authors and more. That is the "title / author search" the
+     task asks for.
+   - *The pace:* the search runs only when the admin presses Search, so
+     Apple is never asked per keystroke.
+9. **The store country is a two-letter box, US by default, not
+   remembered.**
+   - Apple's directory differs by country, and ABS lets an admin choose
+     a region.
+   - Apple decides which two-letter codes it knows. An unknown one
+     gets Apple's own answer (usually no results).
+10. **An Apple failure is a 502 with the reason.**
+    - *How:* a new `AppError::Upstream` (code `upstream_error`), whose
+      message is shown to the admin. `Internal` hides its message, and
+      a 400 would blame the admin's input.
+    - *In the log:* the message is logged like any 5xx. It holds no
+      query and no address.
+11. **Results show each feed's address to the admin.** It is Apple's
+    public listing, and POD4 shows a show's address on its page by
+    design (POD4 reading 6). It appears nowhere else: not in an error,
+    the log, a job or a notice.
+12. **The "Explicit" badge in the results is Apple's marking.** Once a
+    show is added, D41 follows the feed's own `itunes:explicit`
+    (POD2). The two usually agree, and where they differ the feed wins.
+13. **`PARLOUR_APPLE_SEARCH_BASE` exists for tests and stubs.**
+    - When it is set, result artwork on the same origin as that base is
+      also kept, so a stub can serve Apple's images.
+    - It is unset in production, where only Apple's CDN passes.
 
 ---
 

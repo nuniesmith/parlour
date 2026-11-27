@@ -108,6 +108,9 @@ async fn main() {
     state.export_dir = export_dir;
     state.import_dir = import_dir;
     state.backup = backup;
+    if let Some(base) = config.apple_search_base.clone() {
+        state.apple_search_base = base;
+    }
     std::sync::Arc::get_mut(&mut state.playback)
         .expect("fresh playback state")
         .configure(config.cache_dir.clone(), config.stream_secret.clone());

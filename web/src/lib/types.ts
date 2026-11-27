@@ -1119,6 +1119,8 @@ export interface PodcastShow {
   explicit: boolean;
   podcast_type: string | null;
   genres: string[];
+  /** POD7: Apple's id, when the show was added from a directory search. */
+  itunes_id: number | null;
   /** May hold a private token: shown to admins only. */
   feed_url: string;
   folder_path: string | null;
@@ -1130,6 +1132,30 @@ export interface PodcastShow {
   refresh_queued: boolean;
   created_at: string;
   episodes: PodcastEpisodeRow[];
+}
+
+/** POD7: one show Apple's podcast directory found (admins only). */
+export interface DirectoryResult {
+  /** Apple's id for the show (`collectionId`). */
+  itunes_id: number;
+  title: string;
+  author: string | null;
+  /** null: Apple lists no feed address, so it can't be added. */
+  feed_url: string | null;
+  /** Apple's artwork, on Apple's CDN only; null for an initial tile. */
+  artwork_url: string | null;
+  genres: string[];
+  episode_count: number | null;
+  explicit: boolean;
+  latest_episode_at: string | null;
+  /** The show it already is in this library, or null. */
+  added: { podcast_id: string; title: string } | null;
+}
+
+/** `POST /api/v1/admin/libraries/{id}/podcasts/search`. */
+export interface DirectorySearch {
+  country: string;
+  results: DirectoryResult[];
 }
 
 export interface OpmlImportLine {

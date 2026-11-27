@@ -58,6 +58,7 @@ pub mod opml;
 pub mod parse;
 pub mod podcast_artwork;
 pub mod podcast_chapters;
+pub mod podcast_directory;
 pub mod podcast_download;
 pub mod podcast_feed;
 pub mod podcasts;

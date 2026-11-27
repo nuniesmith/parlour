@@ -1,0 +1,86 @@
+{
+  "resultCount": 9,
+  "results": [
+    {
+      "wrapperType": "track",
+      "kind": "podcast",
+      "collectionId": 1000000001,
+      "trackId": 1000000001,
+      "artistName": "Ada Example",
+      "collectionName": "The Lantern Hour",
+      "trackName": "The Lantern Hour",
+      "feedUrl": "https://feeds.example/lantern.xml",
+      "artworkUrl100": "https://is1-ssl.mzstatic.com/image/thumb/lantern/100x100bb.jpg",
+      "artworkUrl600": "https://is1-ssl.mzstatic.com/image/thumb/lantern/600x600bb.jpg",
+      "releaseDate": "2026-11-20T07:00:00Z",
+      "collectionExplicitness": "notExplicit",
+      "contentAdvisoryRating": "Clean",
+      "trackCount": 42,
+      "primaryGenreName": "History",
+      "genres": ["History", "Podcasts", "Education", "history"]
+    },
+    {
+      "wrapperType": "track",
+      "kind": "podcast",
+      "collectionId": 1000000002,
+      "artistName": "  Harbour   Office ",
+      "collectionName": "Tide Tables",
+      "feedUrl": " https://feeds.example/tide.xml ",
+      "artworkUrl100": "https://is3-ssl.mzstatic.com/image/thumb/tide/100x100bb.jpg",
+      "artworkUrl600": "https://cdn.publisher.example/tide.jpg",
+      "trackCount": 7,
+      "primaryGenreName": "Science",
+      "genres": ["Science", "Podcasts"]
+    },
+    {
+      "wrapperType": "track",
+      "kind": "podcast",
+      "collectionId": 1000000001,
+      "collectionName": "The Lantern Hour (again)"
+    },
+    {
+      "wrapperType": "podcastEpisode",
+      "kind": "podcast-episode",
+      "collectionId": 1000000003,
+      "trackName": "An episode, not a show"
+    },
+    {
+      "wrapperType": "track",
+      "kind": "podcast",
+      "collectionId": 1000000004,
+      "collectionName": "No Feed Here",
+      "artworkUrl600": "http://is1.mzstatic.com/image/thumb/nofeed/600x600bb.jpg",
+      "trackCount": 3,
+      "genres": ["Podcasts"]
+    },
+    {
+      "wrapperType": "track",
+      "kind": "podcast",
+      "collectionId": 1000000005,
+      "collectionName": "Loud Kitchen",
+      "artistName": "Two Cooks",
+      "feedUrl": "ftp://feeds.example/kitchen.xml",
+      "collectionExplicitness": "explicit",
+      "contentAdvisoryRating": "Explicit",
+      "primaryGenreName": "Comedy",
+      "releaseDate": "not a date"
+    },
+    {
+      "wrapperType": "track",
+      "kind": "podcast",
+      "collectionId": 1000000006,
+      "feedUrl": "https://feeds.example/untitled.xml"
+    },
+    {
+      "wrapperType": "track",
+      "kind": "podcast",
+      "collectionId": 0,
+      "collectionName": "Zero id"
+    },
+    {
+      "trackId": "1000000009",
+      "trackName": "Track Name Only",
+      "trackCount": -1
+    }
+  ]
+}
