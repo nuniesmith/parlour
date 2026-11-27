@@ -26,6 +26,7 @@ pub mod metadata;
 pub mod notices;
 pub mod playback;
 pub mod podcast_admin;
+pub mod podcast_api;
 pub mod podcasts;
 pub mod profiles;
 pub mod segments;

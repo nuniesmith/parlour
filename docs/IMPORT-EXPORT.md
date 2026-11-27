@@ -390,8 +390,12 @@ Columns of those tables that stay behind:
   library starts with D30's default order;
 - `libraries.parse_subtitles`, `libraries.finish_remaining_seconds`,
   `libraries.finish_percent` (an audiobooks library's own settings,
-  AB11): not in format v1, so an imported library starts with
-  Audiobookshelf's defaults (subtitles off, 10 s, no percentage);
+  AB11; POD5 edits the last two on a podcasts library too): not in
+  format v1, so an imported library starts with Audiobookshelf's
+  defaults (subtitles off, 10 s, no percentage);
+- `profiles.allow_explicit` (D41's per-profile explicit-podcast flag,
+  POD5): not in format v1, so an imported profile starts with the
+  default, on. Its bundle home is the format-v2 step (D40);
 - `images.path` (a path in the old host's cache; `file` replaces it
   when artwork is included);
 - `images.width` / `images.height` (nothing writes them).
@@ -478,6 +482,11 @@ says yes.**
   the answer is yes they need more than `books[]`: the episodes they
   point at stay behind (§8), so an episode would have to be named by
   its show's feed URL and its guid.
+- **POD5 (2026-11-27) gave `listening_sessions` an `episode_id`**,
+  as POD1 did `book_progress`: a session is a book's or an episode's.
+  The table stays *Proposed* with its new column. An episode's sessions
+  would be named the same way as its progress (feed URL + guid) if the
+  answer is yes.
 - **`book_chapters`: leave it out.** Every scan of the book rebuilds
   it from the files' tags and chapters, as it does the file rows.
 - **If the answer is yes:**

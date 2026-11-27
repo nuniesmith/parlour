@@ -55,6 +55,9 @@
   }
 
   function episodeLine(s: PlaybackSession): string | null {
+    // POD5: a podcast episode sits under its show, as an episode under
+    // its series.
+    if (s.item_kind === 'podcast_episode') return s.item_title;
     if (s.item_kind !== 'episode') return null;
     return episodeLabel(s.season_number, s.episode_number, s.item_title);
   }
@@ -188,8 +191,12 @@
         <div class="top">
           <a
             class="thumb"
-            class:square={s.item_kind === 'audiobook'}
-            href={s.item_kind === 'audiobook' ? `/book/${s.item_id}` : `/item/${s.item_id}`}
+            class:square={s.item_kind === 'audiobook' || s.item_kind === 'podcast_episode'}
+            href={s.item_kind === 'audiobook'
+              ? `/book/${s.item_id}`
+              : s.item_kind === 'podcast_episode'
+                ? '/admin/podcasts'
+                : `/item/${s.item_id}`}
             aria-label={`Open ${heading(s)}`}
           >
             {#if s.poster_item_id && !brokenPosters.includes(s.poster_item_id)}
@@ -207,6 +214,7 @@
             <h3>{heading(s)}</h3>
             {#if ep}<p class="ep">{ep}</p>{/if}
             {#if s.item_kind === 'audiobook'}<p class="ep">Listening · audiobook</p>{/if}
+            {#if s.item_kind === 'podcast_episode'}<p class="ep">Listening · podcast</p>{/if}
             <p class="time">
               {formatDurationMs(s.position_ms) || '0:00'}
               {#if s.duration_ms}<span class="dim"> / {formatDurationMs(s.duration_ms)}</span>{/if}
@@ -256,6 +264,11 @@
           <p class="why dim">{reasonText(s.plan)}</p>
         {:else if s.item_kind === 'audiobook'}
           <p class="why dim">The book's audio files are sent as they are, track by track.</p>
+        {:else if s.item_kind === 'podcast_episode'}
+          <p class="why dim">
+            The episode is sent as it was downloaded, or — not downloaded — straight from its
+            publisher.
+          </p>
         {:else}
           <p class="why dim">No stream decision was recorded for this session.</p>
         {/if}

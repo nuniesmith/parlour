@@ -488,8 +488,98 @@ async fn select_profile(
     Ok(Json(ProfileDto::from(row)))
 }
 
+// ------------------------------------------- admin: D41 (POD5)
+
+#[derive(Serialize, sqlx::FromRow)]
+struct AdminProfileDto {
+    id: Uuid,
+    user_id: Uuid,
+    username: String,
+    name: String,
+    /// D41: may this profile see podcast shows whose feed marks them
+    /// explicit? On by default.
+    allow_explicit: bool,
+}
+
+/// Admin: every account's profiles, with the permissions an admin sets
+/// on them (D41's explicit-content flag).
+async fn admin_list_profiles(
+    State(state): State<AppState>,
+    _admin: crate::auth::AdminUser,
+) -> Result<Json<Vec<AdminProfileDto>>, AppError> {
+    let rows = sqlx::query_as::<_, AdminProfileDto>(
+        "SELECT p.id, p.user_id, u.username, p.name, p.allow_explicit
+         FROM profiles p JOIN users u ON u.id = p.user_id
+         ORDER BY u.created_at, u.username, p.created_at, p.name",
+    )
+    .fetch_all(&state.pool)
+    .await
+    .map_err(AppError::from)?;
+    Ok(Json(rows))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExplicitBody {
+    allow_explicit: bool,
+}
+
+/// D41 (decided 2026-11-27): an admin allows or forbids a profile
+/// explicit podcast content, as Audiobookshelf's per-user permission.
+/// Off, the profile's explicit shows and their episodes, streams and
+/// progress read as not found; on (the default), nothing changes. Only
+/// an admin sets it — a profile's own settings can't. Takes effect on
+/// the profile's next request.
+async fn admin_set_explicit(
+    State(state): State<AppState>,
+    admin: crate::auth::AdminUser,
+    Path(id): Path<String>,
+    Json(body): Json<ExplicitBody>,
+) -> Result<Json<AdminProfileDto>, AppError> {
+    let id = parse_id(&id)?;
+    let row = sqlx::query_as::<_, AdminProfileDto>(
+        "UPDATE profiles p SET allow_explicit = $2
+         FROM users u WHERE u.id = p.user_id AND p.id = $1
+         RETURNING p.id, p.user_id, u.username, p.name, p.allow_explicit",
+    )
+    .bind(id)
+    .bind(body.allow_explicit)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(AppError::from)?
+    .ok_or_else(|| AppError::NotFound("no such profile".into()))?;
+    crate::activity::record(
+        &state.pool,
+        crate::activity::Entry::by_user(
+            "profile.explicit_changed",
+            admin.0.user_id,
+            &admin.0.username,
+            format!(
+                "{} {} explicit podcasts for {}'s profile {}",
+                admin.0.username,
+                if row.allow_explicit {
+                    "allowed"
+                } else {
+                    "turned off"
+                },
+                row.username,
+                row.name
+            ),
+        )
+        .profile(row.id)
+        .detail(serde_json::json!({ "allow_explicit": row.allow_explicit })),
+    )
+    .await;
+    Ok(Json(row))
+}
+
 pub fn routes() -> Router<AppState> {
     Router::new()
+        .route("/api/v1/admin/profiles", get(admin_list_profiles))
+        .route(
+            "/api/v1/admin/profiles/{id}/explicit",
+            axum::routing::put(admin_set_explicit),
+        )
         .route("/api/v1/profiles", get(list_profiles).post(create_profile))
         .route(
             "/api/v1/profiles/{id}",

@@ -840,6 +840,28 @@ export interface AudiobookSettingsValues {
   finish_percent: number | null;
 }
 
+/** POD5: a podcasts library's finish rule for episodes (AB11's twin). */
+export interface PodcastSettingsValues {
+  finish_remaining_seconds: number;
+  finish_percent: number | null;
+}
+
+export interface PodcastSettings extends PodcastSettingsValues {
+  library_id: string;
+  default: PodcastSettingsValues;
+}
+
+/** D41 (POD5): a profile as Server → Users lists it, with the
+ *  permissions only an admin sets. */
+export interface AdminProfile {
+  id: string;
+  user_id: string;
+  username: string;
+  name: string;
+  /** May this profile see shows whose feed marks them explicit? */
+  allow_explicit: boolean;
+}
+
 export interface AudiobookSettings extends AudiobookSettingsValues {
   library_id: string;
   default: AudiobookSettingsValues;
@@ -940,7 +962,12 @@ export interface ListeningSession {
   profile_id: string;
   username: string;
   profile_name: string;
-  item_id: string;
+  /** The book; null for a podcast episode's session (POD5). */
+  item_id: string | null;
+  /** POD5: the episode and its show, for an episode's session. */
+  episode_id: string | null;
+  podcast_id: string | null;
+  show_title: string | null;
   title: string;
   has_cover: boolean;
   authors: string[];

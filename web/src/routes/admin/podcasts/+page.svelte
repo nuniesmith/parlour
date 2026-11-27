@@ -4,7 +4,8 @@
   // address, import or export OPML, refresh a show now. Only admins add
   // shows (D31); everyone with access to the library sees every show
   // (the listener pages are POD6's). A feed's address may hold a private
-  // token, so errors never repeat it.
+  // token, so errors never repeat it. POD5 adds the library's finish
+  // rule for episodes (AB11's, for a podcasts library).
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
@@ -14,6 +15,7 @@
     OPML_OUTCOME_LABELS,
     type Library,
     type OpmlImportReport,
+    type PodcastSettings,
     type PodcastShow,
     type PodcastSummary,
   } from '$lib/types';
@@ -28,6 +30,10 @@
   let importing = $state(false);
   let report = $state<OpmlImportReport | null>(null);
   let opmlInput = $state<HTMLInputElement | null>(null);
+  /** POD5: the library's finish rule; a blank percentage is "off". */
+  let finish = $state<{ seconds: number; percent: number | null } | null>(null);
+  let finishDefault = $state<PodcastSettings['default'] | null>(null);
+  let savingFinish = $state(false);
 
   const libraryId = $derived(page.url.searchParams.get('library') ?? libraries[0]?.id ?? null);
   const library = $derived(libraries.find((l) => l.id === libraryId) ?? null);
@@ -55,11 +61,54 @@
     await loadLibraries();
   });
 
+  async function loadFinish() {
+    finish = null;
+    if (!libraryId) return;
+    const { data, error: err } = await api<PodcastSettings>(
+      `/api/v1/admin/libraries/${libraryId}/podcast-settings`,
+    );
+    if (err) error = err;
+    if (data) {
+      finish = { seconds: data.finish_remaining_seconds, percent: data.finish_percent };
+      finishDefault = data.default;
+    }
+  }
+
+  async function saveFinish(event: SubmitEvent) {
+    event.preventDefault();
+    if (!libraryId || !finish || savingFinish) return;
+    error = null;
+    notice = null;
+    // An emptied number input binds null (or ''): both mean "off".
+    const raw: unknown = finish.percent;
+    const percent =
+      raw === null || raw === undefined || raw === '' || Number.isNaN(Number(raw))
+        ? null
+        : Number(raw);
+    savingFinish = true;
+    const { data, error: err } = await api<PodcastSettings>(
+      `/api/v1/admin/libraries/${libraryId}/podcast-settings`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({
+          finish_remaining_seconds: Number(finish.seconds),
+          finish_percent: percent,
+        }),
+      },
+    );
+    savingFinish = false;
+    if (data) {
+      finish = { seconds: data.finish_remaining_seconds, percent: data.finish_percent };
+      notice = 'Finish rule saved. It applies from the next listen.';
+    } else error = err ?? 'Could not save the finish rule.';
+  }
+
   $effect(() => {
     // Reload whenever the chosen library changes.
     void libraryId;
     report = null;
     void loadShows();
+    void loadFinish();
   });
 
   function pickLibrary(id: string) {
@@ -284,6 +333,26 @@
           </div>
         {/if}
       </section>
+    {/if}
+
+    {#if finish}
+      <form class="form" onsubmit={saveFinish} aria-label="When an episode counts as finished">
+        <h3>When an episode counts as finished</h3>
+        <p class="dim small">
+          As for audiobooks: an episode counts as finished once less than the given time is left,
+          or — when a percentage is set — once listening passes it, which then replaces the time.
+          {#if finishDefault}Audiobookshelf's default is {finishDefault.finish_remaining_seconds} s.{/if}
+        </p>
+        <div class="field">
+          <label for="finish-s">Finished with less than this left (seconds, 0 = off)</label>
+          <input id="finish-s" type="number" min="0" max="86400" bind:value={finish.seconds} />
+        </div>
+        <div class="field">
+          <label for="finish-p">Or finished past this percentage (blank = off)</label>
+          <input id="finish-p" type="number" min="1" max="100" bind:value={finish.percent} />
+        </div>
+        <button class="btn primary" type="submit" disabled={savingFinish}>Save finish rule</button>
+      </form>
     {/if}
   {/if}
 {/if}
